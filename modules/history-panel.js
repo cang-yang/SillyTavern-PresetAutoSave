@@ -2,10 +2,12 @@
  * SillyTavern Preset Auto Save - History Panel
  * 历史面板控制器
  *
- * 功能:
- *   - 历史记录列表（搜索/筛选/分组/分页）
- *   - 快照操作（恢复/查看/删除）
- *   - 设置 Tab（实时编辑配置）
+ * 三个 Tab:
+ *   - 列表 Tab：按"预设"分组展示快照，每个预设可折叠/展开
+ *   - 日志 Tab：实时显示插件日志（级别筛选/搜索/清空/导出）
+ *   - 设置 Tab：实时编辑配置
+ *
+ * 其他能力:
  *   - 备份导出/导入
  *   - 批量清理
  */
@@ -17,7 +19,8 @@ import {
 import {
     getAllSnapshots, deleteSnapshot, getSnapshotById,
     getStats, clearAll, trimOldSnapshots,
-    groupByTime, exportAll, importAll,
+    clearPresetHistory,
+    exportAll, importAll,
     TRIGGER_LABEL_KEYS, formatBytes,
 } from './history-store.js';
 import {
@@ -32,18 +35,37 @@ import {
 let _popup = null;
 let _root = null;
 let _viewPopup = null;
+let _logUnsubscribe = null;
+let _logRefreshTimer = null;
 
 const INITIAL_STATE = Object.freeze({
     tab: 'list',
     filter: 'all',
     search: '',
     snapshots: [],
+    expandedPresets: null,    // Set<string> - 展开的预设 key（"<apiId>::<presetName>"）
+    log: {
+        level: 'all',         // all | debug | info | success | warn | error
+        search: '',
+        autoScroll: true,
+    },
 });
 
-let _state = { ...INITIAL_STATE };
+let _state = newState();
+
+function newState() {
+    return {
+        tab: 'list',
+        filter: 'all',
+        search: '',
+        snapshots: [],
+        expandedPresets: new Set(),
+        log: { level: 'all', search: '', autoScroll: true },
+    };
+}
 
 function resetState() {
-    _state = { ...INITIAL_STATE, snapshots: [] };
+    _state = newState();
 }
 
 // =====================================================
@@ -90,6 +112,15 @@ export async function showHistoryPanel() {
         logger.error('Failed to show panel:', e);
         toast.error(t('Restore Failed', { message: e?.message || String(e) }));
     } finally {
+        // 取消日志订阅
+        if (_logUnsubscribe) {
+            try { _logUnsubscribe(); } catch (_) {}
+            _logUnsubscribe = null;
+        }
+        if (_logRefreshTimer) {
+            clearTimeout(_logRefreshTimer);
+            _logRefreshTimer = null;
+        }
         _popup = null;
         _root = null;
         // 关闭子弹窗（如查看 JSON）
@@ -121,6 +152,12 @@ function waitForDOM() {
 // =====================================================
 async function loadData() {
     _state.snapshots = await getAllSnapshots();
+    // 默认展开当前预设
+    const curName = getSelectedPresetName();
+    const curApi = getCurrentApiId();
+    if (curName && curApi) {
+        _state.expandedPresets.add(presetKey(curApi, curName));
+    }
 }
 
 async function refreshData() {
@@ -150,6 +187,11 @@ function buildPanelHTML() {
             <span>${escapeHtml(t('Records'))}</span>
             <span class="pas-tab-badge" id="pas-list-badge">0</span>
         </button>
+        <button class="pas-tab" data-tab="logs" type="button">
+            <i class="fa-solid fa-bug"></i>
+            <span>${escapeHtml(t('Logs'))}</span>
+            <span class="pas-tab-badge" id="pas-log-badge">0</span>
+        </button>
         <button class="pas-tab" data-tab="settings" type="button">
             <i class="fa-solid fa-gear"></i>
             <span>${escapeHtml(t('Settings'))}</span>
@@ -177,8 +219,60 @@ function buildPanelHTML() {
                         <i class="fa-solid fa-calendar-week"></i><span>${escapeHtml(t('This Week'))}</span>
                     </button>
                 </div>
+                <div class="pas-list-actions">
+                    <button class="pas-mini-btn pas-btn-expand-all" type="button" title="${escapeAttr(t('Expand All'))}">
+                        <i class="fa-solid fa-angles-down"></i>
+                        <span>${escapeHtml(t('Expand All'))}</span>
+                    </button>
+                    <button class="pas-mini-btn pas-btn-collapse-all" type="button" title="${escapeAttr(t('Collapse All'))}">
+                        <i class="fa-solid fa-angles-up"></i>
+                        <span>${escapeHtml(t('Collapse All'))}</span>
+                    </button>
+                </div>
             </div>
             <div class="pas-snapshot-list"></div>
+        </div>
+
+        <div class="pas-tab-content" data-content="logs">
+            <div class="pas-log-toolbar">
+                <div class="pas-search-wrap">
+                    <i class="fa-solid fa-magnifying-glass pas-search-icon"></i>
+                    <input type="text" class="pas-log-search text_pole" placeholder="${escapeAttr(t('Search logs...'))}" />
+                </div>
+                <div class="pas-filters">
+                    <button class="pas-log-filter pas-filter-active" data-level="all" type="button">
+                        <span>${escapeHtml(t('All'))}</span>
+                    </button>
+                    <button class="pas-log-filter pas-log-filter-debug" data-level="debug" type="button">
+                        <span>DEBUG</span>
+                    </button>
+                    <button class="pas-log-filter pas-log-filter-info" data-level="info" type="button">
+                        <span>INFO</span>
+                    </button>
+                    <button class="pas-log-filter pas-log-filter-warn" data-level="warn" type="button">
+                        <span>WARN</span>
+                    </button>
+                    <button class="pas-log-filter pas-log-filter-error" data-level="error" type="button">
+                        <span>ERROR</span>
+                    </button>
+                </div>
+                <div class="pas-log-actions">
+                    <label class="pas-log-autoscroll" title="${escapeAttr(t('Auto Scroll Desc'))}">
+                        <input type="checkbox" class="pas-log-autoscroll-input" checked>
+                        <span>${escapeHtml(t('Auto Scroll'))}</span>
+                    </label>
+                    <button class="pas-mini-btn pas-btn-log-clear" type="button" title="${escapeAttr(t('Clear Logs'))}">
+                        <i class="fa-solid fa-broom"></i><span>${escapeHtml(t('Clear Logs'))}</span>
+                    </button>
+                    <button class="pas-mini-btn pas-btn-log-copy" type="button" title="${escapeAttr(t('Copy Logs'))}">
+                        <i class="fa-solid fa-copy"></i><span>${escapeHtml(t('Copy'))}</span>
+                    </button>
+                    <button class="pas-mini-btn pas-btn-log-export" type="button" title="${escapeAttr(t('Export Logs'))}">
+                        <i class="fa-solid fa-download"></i><span>${escapeHtml(t('Export'))}</span>
+                    </button>
+                </div>
+            </div>
+            <div class="pas-log-view" id="pas-log-view"></div>
         </div>
 
         <div class="pas-tab-content" data-content="settings"></div>
@@ -214,7 +308,7 @@ function bindEvents() {
         tab.addEventListener('click', () => switchTab(tab.getAttribute('data-tab')));
     });
 
-    // 搜索
+    // 搜索（列表）
     const search = $('.pas-search');
     if (search) {
         let timer = null;
@@ -227,7 +321,7 @@ function bindEvents() {
         });
     }
 
-    // 筛选按钮
+    // 筛选按钮（列表）
     $$('.pas-filter').forEach(btn => {
         btn.addEventListener('click', () => {
             $$('.pas-filter').forEach(b => b.classList.remove('pas-filter-active'));
@@ -237,14 +331,65 @@ function bindEvents() {
         });
     });
 
+    // 展开/收起全部
+    $('.pas-btn-expand-all')?.addEventListener('click', () => {
+        const presets = groupSnapshotsByPreset(applyFiltersAndSearch(_state.snapshots));
+        for (const k of Object.keys(presets)) _state.expandedPresets.add(k);
+        renderListTab();
+    });
+    $('.pas-btn-collapse-all')?.addEventListener('click', () => {
+        _state.expandedPresets.clear();
+        renderListTab();
+    });
+
     // 列表事件委托
     const list = $('.pas-snapshot-list');
     if (list) list.addEventListener('click', handleListClick);
+
+    // ----- 日志 Tab 事件 -----
+    const logSearch = $('.pas-log-search');
+    if (logSearch) {
+        let timer = null;
+        logSearch.addEventListener('input', (e) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                _state.log.search = e.target.value.trim();
+                renderLogTab();
+            }, 200);
+        });
+    }
+    $$('.pas-log-filter').forEach(btn => {
+        btn.addEventListener('click', () => {
+            $$('.pas-log-filter').forEach(b => b.classList.remove('pas-filter-active'));
+            btn.classList.add('pas-filter-active');
+            _state.log.level = btn.getAttribute('data-level');
+            renderLogTab();
+        });
+    });
+    $('.pas-log-autoscroll-input')?.addEventListener('change', (e) => {
+        _state.log.autoScroll = !!e.target.checked;
+    });
+    $('.pas-btn-log-clear')?.addEventListener('click', onLogClear);
+    $('.pas-btn-log-copy')?.addEventListener('click', onLogCopy);
+    $('.pas-btn-log-export')?.addEventListener('click', onLogExport);
 
     // 底部按钮
     $('.pas-btn-cleanup')?.addEventListener('click', onCleanup);
     $('.pas-btn-export')?.addEventListener('click', onExport);
     $('.pas-btn-import')?.addEventListener('click', onImport);
+
+    // 订阅日志（增量更新，节流）
+    _logUnsubscribe = logger.subscribe(() => {
+        if (_state.tab !== 'logs') {
+            updateLogBadge();
+            return;
+        }
+        if (_logRefreshTimer) return;
+        _logRefreshTimer = setTimeout(() => {
+            _logRefreshTimer = null;
+            renderLogTab();
+        }, 200);
+    });
 }
 
 // =====================================================
@@ -269,12 +414,14 @@ function switchTab(tabName) {
 function renderActiveTab() {
     if (!_root) return;
     if (_state.tab === 'list') renderListTab();
+    else if (_state.tab === 'logs') renderLogTab();
     else if (_state.tab === 'settings') renderSettingsTab();
     updateStats();
+    updateLogBadge();
 }
 
 // =====================================================
-// 列表 Tab 渲染
+// 列表 Tab 渲染（按预设分组）
 // =====================================================
 function renderListTab() {
     const list = _root?.querySelector('.pas-snapshot-list');
@@ -288,15 +435,84 @@ function renderListTab() {
         return;
     }
 
-    const groups = groupByTime(filtered);
+    // 按预设分组
+    const grouped = groupSnapshotsByPreset(filtered);
+    const presetKeys = Object.keys(grouped).sort((a, b) => {
+        // 按各预设最新时间倒序排
+        const at = grouped[a][0]?.timestamp || 0;
+        const bt = grouped[b][0]?.timestamp || 0;
+        return bt - at;
+    });
+
     let html = '';
-    if (groups.today.length) html += renderGroup(t('Today'), groups.today);
-    if (groups.yesterday.length) html += renderGroup(t('Yesterday'), groups.yesterday);
-    if (groups.thisWeek.length) html += renderGroup(t('This Week'), groups.thisWeek);
-    if (groups.earlier.length) html += renderGroup(t('Earlier'), groups.earlier);
+    for (const key of presetKeys) {
+        html += renderPresetGroup(key, grouped[key]);
+    }
 
     list.innerHTML = html;
     updateBadge(filtered.length);
+}
+
+function presetKey(apiId, presetName) {
+    return `${apiId}::${presetName}`;
+}
+
+function parsePresetKey(key) {
+    const idx = key.indexOf('::');
+    if (idx < 0) return { apiId: '', presetName: key };
+    return { apiId: key.slice(0, idx), presetName: key.slice(idx + 2) };
+}
+
+function groupSnapshotsByPreset(snapshots) {
+    const map = {};
+    for (const s of snapshots) {
+        const k = presetKey(s.apiId, s.presetName);
+        if (!map[k]) map[k] = [];
+        map[k].push(s);
+    }
+    // 每组内部按时间倒序
+    for (const k of Object.keys(map)) {
+        map[k].sort((a, b) => b.timestamp - a.timestamp);
+    }
+    return map;
+}
+
+function renderPresetGroup(key, snapshots) {
+    const { apiId, presetName } = parsePresetKey(key);
+    const isExpanded = _state.expandedPresets.has(key);
+    const currentName = getSelectedPresetName();
+    const currentApi = getCurrentApiId();
+    const isCurrent = (presetName === currentName && apiId === currentApi);
+    const totalSize = snapshots.reduce((sum, s) => sum + (s.size || 0), 0);
+    const latestTime = snapshots[0]?.timestamp || 0;
+    const safeKey = escapeAttr(key);
+
+    return `
+<div class="pas-preset-group ${isCurrent ? 'pas-preset-current' : ''}" data-preset-key="${safeKey}">
+    <div class="pas-preset-header" data-action="toggle-group">
+        <div class="pas-preset-header-main">
+            <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-preset-chevron"></i>
+            <i class="fa-solid fa-layer-group pas-preset-icon"></i>
+            <span class="pas-preset-name" title="${escapeAttr(presetName)}">${escapeHtml(presetName)}</span>
+            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
+            <span class="pas-preset-api">${escapeHtml(apiId)}</span>
+        </div>
+        <div class="pas-preset-header-meta">
+            <span class="pas-preset-count">${snapshots.length}</span>
+            <span class="pas-divider">·</span>
+            <span class="pas-preset-size">${formatBytes(totalSize)}</span>
+            <span class="pas-divider">·</span>
+            <span class="pas-preset-latest">${formatTime(latestTime)}</span>
+            <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </div>
+    </div>
+    ${isExpanded ? `
+    <div class="pas-preset-body">
+        ${snapshots.map(renderCard).join('')}
+    </div>` : ''}
+</div>`;
 }
 
 function applyFiltersAndSearch(snapshots) {
@@ -333,23 +549,7 @@ function startOfWeek() {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - (dow - 1) * 86400000;
 }
 
-function renderGroup(title, snapshots) {
-    return `
-        <div class="pas-group">
-            <div class="pas-group-title">
-                <span>${escapeHtml(title)}</span>
-                <span class="pas-group-count">${snapshots.length}</span>
-            </div>
-            <div class="pas-group-cards">
-                ${snapshots.map(renderCard).join('')}
-            </div>
-        </div>`;
-}
-
 function renderCard(s) {
-    const currentName = getSelectedPresetName();
-    const currentApi = getCurrentApiId();
-    const isCurrent = s.presetName === currentName && s.apiId === currentApi;
     const triggerLabel = t(TRIGGER_LABEL_KEYS[s.trigger] || 'Trigger Auto');
     const id = escapeAttr(s.id);
 
@@ -358,15 +558,13 @@ function renderCard(s) {
     <div class="pas-card-main">
         <div class="pas-card-title-row">
             <i class="fa-solid fa-circle pas-card-dot"></i>
-            <span class="pas-card-name" title="${escapeAttr(s.presetName)}">${escapeHtml(s.presetName)}</span>
-            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
+            <span class="pas-card-time">${formatTime(s.timestamp)}</span>
+            <span class="pas-tag pas-tag-${escapeAttr(s.trigger)}">${escapeHtml(triggerLabel)}</span>
         </div>
         <div class="pas-card-meta">
-            <span class="pas-card-time">${formatTime(s.timestamp)}</span>
-            <span class="pas-divider">·</span>
-            <span class="pas-tag pas-tag-${escapeAttr(s.trigger)}">${escapeHtml(triggerLabel)}</span>
-            <span class="pas-divider">·</span>
             <span class="pas-card-size">${formatBytes(s.size || 0)}</span>
+            <span class="pas-divider">·</span>
+            <span class="pas-card-hash" title="hash">${escapeHtml(s.hash || '')}</span>
         </div>
     </div>
     <div class="pas-card-actions">
@@ -407,9 +605,32 @@ function renderEmptyState() {
 }
 
 // =====================================================
-// 卡片操作
+// 卡片操作 / 分组操作
 // =====================================================
 async function handleListClick(e) {
+    // 1) 折叠头点击 -> 切换展开
+    const header = e.target.closest('.pas-preset-header');
+    const clearBtn = e.target.closest('.pas-btn-clear-preset');
+
+    if (clearBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = clearBtn.getAttribute('data-preset-key');
+        await onClearPreset(key);
+        return;
+    }
+
+    if (header) {
+        const group = header.closest('.pas-preset-group');
+        const key = group?.getAttribute('data-preset-key');
+        if (!key) return;
+        if (_state.expandedPresets.has(key)) _state.expandedPresets.delete(key);
+        else _state.expandedPresets.add(key);
+        renderListTab();
+        return;
+    }
+
+    // 2) 卡片操作按钮
     const btn = e.target.closest('.pas-btn-action');
     if (!btn) return;
     e.preventDefault();
@@ -508,6 +729,113 @@ async function onDelete(snapshotId) {
     await deleteSnapshot(snapshotId);
     toast.success(t('Deleted'));
     await refreshData();
+}
+
+async function onClearPreset(key) {
+    const { apiId, presetName } = parsePresetKey(key);
+    if (!apiId || !presetName) return;
+    const ok = await confirmSafe(
+        t('Clear Preset Confirm'),
+        t('Clear Preset Hint', { name: escapeHtml(presetName) })
+    );
+    if (!ok) return;
+    await clearPresetHistory(apiId, presetName);
+    toast.success(t('Cleared'));
+    await refreshData();
+}
+
+// =====================================================
+// 日志 Tab 渲染
+// =====================================================
+function renderLogTab() {
+    const view = _root?.querySelector('#pas-log-view');
+    if (!view) return;
+
+    const filter = {};
+    if (_state.log.level && _state.log.level !== 'all') {
+        filter.level = _state.log.level;
+    }
+    if (_state.log.search) filter.search = _state.log.search;
+
+    const entries = logger.getLogs(filter);
+    updateLogBadge(entries.length);
+
+    if (entries.length === 0) {
+        view.innerHTML = `
+            <div class="pas-empty">
+                <i class="fa-solid fa-bug-slash pas-empty-icon"></i>
+                <p class="pas-empty-text">${escapeHtml(t('No logs'))}</p>
+            </div>`;
+        return;
+    }
+
+    const html = entries.map(renderLogEntry).join('');
+    view.innerHTML = html;
+
+    if (_state.log.autoScroll) {
+        view.scrollTop = view.scrollHeight;
+    }
+}
+
+function renderLogEntry(entry) {
+    const time = formatLogTime(entry.ts);
+    const level = (entry.level || 'info').toLowerCase();
+    return `
+<div class="pas-log-row pas-log-row-${escapeAttr(level)}">
+    <span class="pas-log-time">${escapeHtml(time)}</span>
+    <span class="pas-log-level pas-log-level-${escapeAttr(level)}">${escapeHtml(level.toUpperCase())}</span>
+    <span class="pas-log-msg">${escapeHtml(entry.message || '')}</span>
+</div>`;
+}
+
+function updateLogBadge(count = null) {
+    const badge = _root?.querySelector('#pas-log-badge');
+    if (!badge) return;
+    const c = count !== null ? count : logger.getLogCount();
+    badge.textContent = String(c);
+}
+
+async function onLogClear() {
+    const ok = await confirmSafe(t('Clear Logs Confirm'), t('Clear Logs Hint'));
+    if (!ok) return;
+    logger.clearLogs();
+    renderLogTab();
+}
+
+async function onLogCopy() {
+    const filter = {};
+    if (_state.log.level && _state.log.level !== 'all') filter.level = _state.log.level;
+    if (_state.log.search) filter.search = _state.log.search;
+    const text = logger.exportText(filter);
+    try {
+        await navigator.clipboard.writeText(text);
+        toast.success(t('Copied'));
+    } catch (_) {
+        toast.error(t('Copy Failed'));
+    }
+}
+
+function onLogExport() {
+    try {
+        const filter = {};
+        if (_state.log.level && _state.log.level !== 'all') filter.level = _state.log.level;
+        if (_state.log.search) filter.search = _state.log.search;
+        const text = logger.exportText(filter);
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        a.download = `pas-logs-${ts}.log`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast.success(t('Logs Exported'));
+    } catch (e) {
+        logger.error('Export logs failed:', e);
+        toast.error(t('Export Failed'));
+    }
 }
 
 // =====================================================
@@ -767,6 +1095,12 @@ function formatTime(ts) {
     const d = new Date(ts);
     const pad = n => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatLogTime(ts) {
+    const d = new Date(ts);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 function escapeHtml(s) {
