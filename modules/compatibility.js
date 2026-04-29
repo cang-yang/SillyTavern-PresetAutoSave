@@ -27,6 +27,7 @@ export const ENV = {
     hasRenderTemplate: false,
     hasToastr: false,
     hasLocalforage: false,
+    hasTranslate: false,        // ctx.translate / ctx.t
 
     // 关键事件类型
     hasOaiPresetChangedBefore: false,
@@ -83,6 +84,7 @@ export function initCompatibility() {
         ENV.hasRenderTemplate = typeof ctx.renderExtensionTemplateAsync === 'function';
         ENV.hasToastr = typeof window.toastr !== 'undefined';
         ENV.hasLocalforage = !!window.SillyTavern?.libs?.localforage;
+        ENV.hasTranslate = typeof ctx.translate === 'function' || typeof ctx.t === 'function';
 
         // 4. 事件类型存在性探测
         if (ENV.hasEventTypes) {
@@ -449,6 +451,43 @@ export async function renderTemplate(folder, template, data = {}) {
         '',
         `renderTemplate:${template}`
     );
+}
+
+// =====================================================
+// 国际化辅助
+// =====================================================
+/**
+ * 翻译辅助函数
+ * 优先使用 SillyTavern 的 ctx.translate / ctx.t；不可用时返回 key 本身
+ * 支持 {{var}} 占位符替换
+ *
+ * @param {string} key 翻译键
+ * @param {object} [vars] 占位符替换变量
+ * @returns {string} 翻译后的字符串
+ */
+export function t(key, vars = null) {
+    let result = key;
+    if (ENV.hasTranslate) {
+        try {
+            const ctx = SillyTavern.getContext();
+            if (typeof ctx.translate === 'function') {
+                result = ctx.translate(key);
+            } else if (typeof ctx.t === 'function') {
+                // 部分版本暴露的是模板字符串风格的 t``，回退到字符串风格
+                result = ctx.t(key);
+            }
+        } catch (_) {
+            result = key;
+        }
+    }
+
+    // 占位符替换 {{var}}
+    if (vars && typeof result === 'string') {
+        for (const [k, v] of Object.entries(vars)) {
+            result = result.replace(new RegExp(`{{\\s*${k}\\s*}}`, 'g'), String(v));
+        }
+    }
+    return result;
 }
 
 // =====================================================

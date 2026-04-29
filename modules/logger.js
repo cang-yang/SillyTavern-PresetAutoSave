@@ -22,6 +22,17 @@ const STYLES = {
 
 let _debugEnabled = false;
 
+// 检查 localStorage 中的快速调试开关 (在模块加载时立即生效)
+// 使用方法: 浏览器控制台运行 localStorage.setItem('pas-debug', '1') 后刷新
+try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('pas-debug') === '1') {
+        _debugEnabled = true;
+        console.log('%c[PAS]', 'color: #b794f6; font-weight: bold;', 'Debug mode enabled via localStorage');
+    }
+} catch (_) {
+    // 忽略 localStorage 不可用的情况
+}
+
 export const logger = {
     /**
      * 启用/禁用 debug 输出

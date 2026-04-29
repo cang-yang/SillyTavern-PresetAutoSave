@@ -1,24 +1,24 @@
 {
     "display_name": "Preset Auto Save",
     "loading_order": 100,
-    "requires": [],
-    "optional": [],
     "dependencies": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "Your Name",
+    "author": "SillyTavern Community",
     "version": "1.0.0",
-    "homePage": "https://github.com/yourname/SillyTavern-PresetAutoSave",
+    "homePage": "https://github.com/SillyTavern-Extras/SillyTavern-PresetAutoSave",
     "auto_update": true,
     "minimum_client_version": "1.10.0",
     "i18n": {
-        "zh-cn": "i18n/zh-cn.json",
-        "en-us": "i18n/en-us.json"
+        "en-us": "i18n/en-us.json",
+        "zh-cn": "i18n/zh-cn.json"
     },
     "hooks": {
         "install": "onInstall",
         "update": "onUpdate",
         "delete": "onDelete",
-        "activate": "onActivate"
+        "activate": "onActivate",
+        "enable": "onEnable",
+        "disable": "onDisable"
     }
 }

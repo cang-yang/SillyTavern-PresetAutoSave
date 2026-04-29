@@ -153,12 +153,14 @@ export async function initSettings() {
 // 读取
 // =====================================================
 /**
- * 获取整个配置对象（只读视角，请勿直接修改）
+ * 获取整个配置对象
+ * 注意：未初始化时返回的是 DEFAULT_SETTINGS 的浅拷贝，避免被外部冻结。
  */
 export function getSettings() {
     if (!_initialized) {
         logger.warn('getSettings called before init');
-        return DEFAULT_SETTINGS;
+        // 返回浅拷贝，防止调用方意外修改 frozen 对象抛错
+        return { ...DEFAULT_SETTINGS };
     }
     return _settings;
 }
