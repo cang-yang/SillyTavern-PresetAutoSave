@@ -22,7 +22,7 @@ import {
     getEventType,
     getCurrentApiId,
     getSelectedPresetName,
-    getPresetSettingsSafe,
+    getPresetSnapshot,
     savePresetSafe,
     toast,
     t,
@@ -121,12 +121,19 @@ export async function initAutoSave() {
     _currentPresetName = getSelectedPresetName();
 
     // 计算初始哈希（避免初次加载就触发保存）
-    const initialPreset = getPresetSettingsSafe();
+    const initialPreset = getPresetSnapshot();
     if (initialPreset) {
         _lastSavedHash = hashPreset(initialPreset);
+        const keys = Object.keys(initialPreset).length;
         logger.debug(
-            `Initial baseline: [${_currentApiId}] ${_currentPresetName} hash=${_lastSavedHash}`
+            `Initial baseline: [${_currentApiId}] ${_currentPresetName} hash=${_lastSavedHash} fields=${keys}`
         );
+        if (keys < 5) {
+            logger.warn(
+                `Initial preset has only ${keys} fields - this may indicate a snapshot fallback issue. ` +
+                `Sample keys: ${Object.keys(initialPreset).slice(0, 10).join(',')}`
+            );
+        }
     } else {
         logger.warn('No initial preset available; baseline hash not set');
     }
@@ -185,7 +192,7 @@ function startPolling() {
         if (Date.now() < _suspendUntil) return;
         if (_debounceTimer) return; // 已有挂起的保存，避免重复
         try {
-            const preset = getPresetSettingsSafe();
+            const preset = getPresetSnapshot();
             if (!preset) return;
             const h = hashPreset(preset);
             if (_lastSavedHash && h !== _lastSavedHash) {
@@ -556,7 +563,7 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '') {
             return null;
         }
 
-        const preset = getPresetSettingsSafe(presetName);
+        const preset = getPresetSnapshot(presetName);
         if (!preset) {
             logger.warn('Cannot read current preset:', presetName);
             _setStatus('error');
@@ -570,13 +577,25 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '') {
         const promptOrderCount = Array.isArray(preset.prompt_order)
             ? (preset.prompt_order[0]?.order?.length || 0)
             : 0;
+        const fieldCount = Object.keys(preset).length;
         // 关键字段指纹（便于排查"toggle 改了但 hash 没变"这类幻觉）
         const fingerprint = computeFingerprint(preset);
+
+        // 异常预设检测：字段过少强烈暗示快照获取失败
+        if (fieldCount < 5) {
+            logger.warn(
+                `[doSave] Suspicious preset: only ${fieldCount} fields, reason=${reason}. ` +
+                `Snapshot may be incomplete. Aborting to avoid corruption.`
+            );
+            _stats.aborted++;
+            _setStatus('error');
+            return null;
+        }
 
         if (_lastSavedHash && newHash === _lastSavedHash) {
             // 与上次比较没变化（可能是 SETTINGS_UPDATED 重复触发）
             logger.debug(
-                `[doSave] No change reason=${reason} hash=${newHash} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
+                `[doSave] No change reason=${reason} hash=${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
             );
             _stats.skippedUnchanged++;
             _dirty = false;
@@ -585,7 +604,7 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '') {
         }
 
         logger.debug(
-            `[doSave] Snapshotting reason=${reason} hash=${_lastSavedHash}->${newHash} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
+            `[doSave] Snapshotting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
         );
 
         // 创建历史快照（store 会自己再判断一次去重 + 合并窗口）
@@ -779,7 +798,7 @@ function updateTrackingAfterSwitch() {
     _currentApiId = getCurrentApiId();
     _currentPresetName = getSelectedPresetName();
 
-    const newPreset = getPresetSettingsSafe();
+    const newPreset = getPresetSnapshot();
     _lastSavedHash = newPreset ? hashPreset(newPreset) : null;
     _dirty = false;
     _setStatus('idle');

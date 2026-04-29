@@ -255,16 +255,94 @@ export function getSelectedPresetName() {
 
 /**
  * 安全获取预设设置（不含被过滤字段的"干净"数据）
+ *
+ * ⚠️ 重要：ST 内部 PresetManager.getPresetSettings() 在 apiId='openai' 时
+ * **永远返回空对象 `{}`**（switch 语句没有 'openai' case，走 default）。
+ * 这会导致我们获取到的 hash 永远是空对象的 hash，自动保存彻底失效！
+ *
+ * 因此本函数对 openai 走特殊路径：从 pm.getPresetList('openai').settings
+ * 拿到完整的 oai_settings（实时对象，包含 prompts、prompt_order、所有用户设置）。
+ *
  * @param {string} [presetName] 不指定则用当前
+ * @returns {object|null} 完整的预设设置对象（深拷贝），或 null
  */
 export function getPresetSettingsSafe(presetName) {
-    const pm = getPresetManager();
-    if (!pm || typeof pm.getPresetSettings !== 'function') return null;
+    return getPresetSnapshot(presetName);
+}
+
+/**
+ * 获取当前生效的预设快照（深拷贝，避免引用变更影响哈希）
+ *
+ * 处理流程:
+ *   1. 优先尝试 pm.getPresetSettings(name)
+ *   2. 若返回空对象（openai 等情况），回退到 pm.getPresetList(api).settings
+ *      —— 这是真正"当前生效"的对象（oai_settings / textgen_settings 等）
+ *   3. 若两条路径都失败，记录详细诊断日志后返回 null
+ *
+ * @param {string} [presetName] 预设名（可选）
+ * @returns {object|null}
+ */
+export function getPresetSnapshot(presetName) {
+    const apiId = getCurrentApiId();
+    const pm = getPresetManager(apiId);
+    if (!pm) {
+        logger.warn('[getPresetSnapshot] no preset manager');
+        return null;
+    }
 
     const name = presetName || getSelectedPresetName();
-    if (!name) return null;
+    if (!name) {
+        logger.warn('[getPresetSnapshot] no preset name');
+        return null;
+    }
 
-    return safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
+    // 路径 1：官方 API
+    let raw = null;
+    if (typeof pm.getPresetSettings === 'function') {
+        raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
+    }
+
+    const isUsable = (obj) => obj && typeof obj === 'object' && Object.keys(obj).length > 0;
+
+    if (isUsable(raw)) {
+        return cloneDeepSafe(raw);
+    }
+
+    // 路径 2（关键回退）：从 getPresetList(api).settings 拿实时设置对象
+    // ST 内部对 openai：settings === oai_settings（真实运行中的对象，包含所有用户改动）
+    if (typeof pm.getPresetList === 'function') {
+        const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList');
+        const live = list && list.settings;
+        if (isUsable(live)) {
+            logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (fallback)`);
+            return cloneDeepSafe(live);
+        }
+    }
+
+    // 路径 3（再兜底）：直接从 window.oai_settings 读（仅 openai）
+    if (apiId === 'openai' && window.oai_settings && typeof window.oai_settings === 'object') {
+        logger.debug('[getPresetSnapshot] using window.oai_settings (last fallback)');
+        return cloneDeepSafe(window.oai_settings);
+    }
+
+    logger.warn(`[getPresetSnapshot] failed: apiId=${apiId} name=${name} raw=${raw && typeof raw} keys=${raw ? Object.keys(raw).length : 'null'}`);
+    return null;
+}
+
+/**
+ * 深拷贝（优先 structuredClone，失败回退 JSON）
+ */
+function cloneDeepSafe(obj) {
+    try {
+        if (typeof structuredClone === 'function') {
+            return structuredClone(obj);
+        }
+    } catch (_) { /* 不支持时回退 */ }
+    try {
+        return JSON.parse(JSON.stringify(obj));
+    } catch (_) {
+        return obj; // 最后回退：返回引用（外部不应修改）
+    }
 }
 
 /**

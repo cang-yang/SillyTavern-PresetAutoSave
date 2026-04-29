@@ -125,5 +125,12 @@
     "History Button Title": "Preset history records",
     "Trigger Auto": "Auto saved",
     "Trigger Switch Guard": "Switch backup",
-    "Trigger Manual": "Manual snapshot"
+    "Trigger Manual": "Manual snapshot",
+    "Purge Corrupt": "Purge bad",
+    "Purge Corrupt Title": "Scan and remove broken snapshots (preset is empty / has too few fields)",
+    "Purge Corrupt Confirm": "Purge corrupt snapshots",
+    "Purge Corrupt Hint": "This will scan all snapshots and remove any that are clearly corrupted (preset is empty or has fewer than 5 fields).",
+    "Purge Corrupt Detail": "These bad snapshots are usually leftovers from earlier broken versions. Restoring them would clear your preset.",
+    "Purge Corrupt Done": "Purged {{cleaned}} corrupt snapshot(s) out of {{scanned}} scanned",
+    "Purge Corrupt Failed": "Purge failed: {{message}}"
 }

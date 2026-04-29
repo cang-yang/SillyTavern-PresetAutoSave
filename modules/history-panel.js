@@ -18,7 +18,7 @@ import {
 } from './settings.js';
 import {
     getAllSnapshots, deleteSnapshot, getSnapshotById,
-    getStats, clearAll, trimOldSnapshots,
+    getStats, clearAll, trimOldSnapshots, cleanCorruptSnapshots,
     clearPresetHistory,
     exportAll, importAll,
     TRIGGER_LABEL_KEYS, formatBytes,
@@ -285,6 +285,9 @@ function buildPanelHTML() {
             <button class="pas-btn-snap menu_button" type="button" title="${escapeAttr(t('Snapshot Now Title'))}">
                 <i class="fa-solid fa-camera"></i><span>${escapeHtml(t('Snapshot Now'))}</span>
             </button>
+            <button class="pas-btn-purge menu_button" type="button" title="${escapeAttr(t('Purge Corrupt Title'))}">
+                <i class="fa-solid fa-shield-halved"></i><span>${escapeHtml(t('Purge Corrupt'))}</span>
+            </button>
             <button class="pas-btn-export menu_button" type="button" title="${escapeAttr(t('Export Backup'))}">
                 <i class="fa-solid fa-download"></i><span>${escapeHtml(t('Export'))}</span>
             </button>
@@ -382,6 +385,7 @@ function bindEvents() {
     $('.pas-btn-export')?.addEventListener('click', onExport);
     $('.pas-btn-import')?.addEventListener('click', onImport);
     $('.pas-btn-snap')?.addEventListener('click', onSnapshotNow);
+    $('.pas-btn-purge')?.addEventListener('click', onPurgeCorrupt);
 
     // 订阅日志（增量更新，节流）
     _logUnsubscribe = logger.subscribe(() => {
@@ -652,6 +656,19 @@ async function handleListClick(e) {
 async function onRestore(snapshotId) {
     const snapshot = await getSnapshotById(snapshotId);
     if (!snapshot) return toast.error(t('Snapshot Not Found'));
+
+    // 防御：拒绝恢复明显损坏的快照（避免清空预设）
+    const preset = snapshot.preset;
+    if (!preset || typeof preset !== 'object' || Object.keys(preset).length < 5) {
+        const fieldCount = preset && typeof preset === 'object' ? Object.keys(preset).length : 0;
+        logger.error(
+            `Refusing to restore corrupt snapshot id=${snapshotId} fields=${fieldCount}`
+        );
+        toast.error(t('Restore Failed', {
+            message: `Snapshot is corrupted (only ${fieldCount} fields). Refusing to restore to avoid clearing your preset.`,
+        }));
+        return;
+    }
 
     const time = formatTime(snapshot.timestamp);
     const ok = await confirmSafe(
@@ -1061,6 +1078,32 @@ async function onImport() {
 
     document.body.appendChild(input);
     input.click();
+}
+
+/**
+ * 清理所有损坏的快照（preset 为空对象或字段过少）
+ * 这是修复 v0.x 版本"openai 永远返回空对象" bug 留下的脏数据的工具
+ */
+async function onPurgeCorrupt() {
+    const ok = await confirmSafe(
+        t('Purge Corrupt Confirm'),
+        `<div>${escapeHtml(t('Purge Corrupt Hint'))}</div>
+         <div style="margin-top: 8px; color: var(--white50a, #999);">${escapeHtml(t('Purge Corrupt Detail'))}</div>`
+    );
+    if (!ok) return;
+
+    try {
+        const result = await cleanCorruptSnapshots();
+        toast.success(t('Purge Corrupt Done', {
+            cleaned: result.cleaned,
+            scanned: result.scanned,
+        }));
+        logger.info(`[Purge] cleaned ${result.cleaned} of ${result.scanned} snapshots`);
+        await refreshData();
+    } catch (e) {
+        logger.error('Purge corrupt failed:', e);
+        toast.error(t('Purge Corrupt Failed', { message: e?.message || String(e) }));
+    }
 }
 
 /**

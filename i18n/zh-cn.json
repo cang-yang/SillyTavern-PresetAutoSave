@@ -125,5 +125,12 @@
     "History Button Title": "预设历史记录",
     "Trigger Auto": "自动保存",
     "Trigger Switch Guard": "切换前备份",
-    "Trigger Manual": "手动快照"
+    "Trigger Manual": "手动快照",
+    "Purge Corrupt": "清理坏快照",
+    "Purge Corrupt Title": "扫描并移除明显损坏的快照（预设为空 / 字段过少）",
+    "Purge Corrupt Confirm": "清理坏快照",
+    "Purge Corrupt Hint": "将扫描所有快照，移除明显损坏的（预设为空对象或字段少于 5 个）。",
+    "Purge Corrupt Detail": "这些坏快照通常是早期 bug 留下的脏数据。如果直接恢复它们，会清空你的真实预设。",
+    "Purge Corrupt Done": "已清理 {{cleaned}} / {{scanned}} 条坏快照",
+    "Purge Corrupt Failed": "清理失败: {{message}}"
 }

@@ -189,6 +189,20 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
         return null;
     }
 
+    // 空预设保护：避免存入 {} 这类无效快照
+    if (typeof preset !== 'object' || Array.isArray(preset)) {
+        logger.warn(`addSnapshot: preset is not a plain object, type=${typeof preset}`);
+        return null;
+    }
+    const presetKeys = Object.keys(preset);
+    if (presetKeys.length < 5) {
+        logger.warn(
+            `addSnapshot: rejecting preset with only ${presetKeys.length} fields ` +
+            `(${presetKeys.slice(0, 5).join(',')}). This is likely a bad snapshot from a broken read.`
+        );
+        return null;
+    }
+
     const key = makeKey(apiId, presetName);
     const list = (await _store.getItem(key)) || [];
     const settings = getSettings();
@@ -494,6 +508,41 @@ export async function clearAll() {
     }
     invalidateKeysCache();
     logger.info('All history cleared');
+}
+
+/**
+ * 清理所有"损坏"的快照（preset 为空或字段过少）
+ * 这些通常是早期 bug 留下的污染数据
+ * @returns {Promise<{cleaned: number, scanned: number}>}
+ */
+export async function cleanCorruptSnapshots() {
+    await ensureStore();
+    const keys = await getKeys(true);
+    let cleaned = 0;
+    let scanned = 0;
+
+    for (const key of keys) {
+        const list = (await _store.getItem(key)) || [];
+        scanned += list.length;
+        const filtered = list.filter(s => {
+            if (!s || !s.preset || typeof s.preset !== 'object') return false;
+            const fieldCount = Object.keys(s.preset).length;
+            return fieldCount >= 5;
+        });
+        const removed = list.length - filtered.length;
+        if (removed > 0) {
+            cleaned += removed;
+            if (filtered.length === 0) {
+                await _store.removeItem(key);
+            } else {
+                await _store.setItem(key, filtered);
+            }
+        }
+    }
+
+    invalidateKeysCache();
+    logger.info(`Cleanup: removed ${cleaned} corrupt snapshots out of ${scanned} scanned`);
+    return { cleaned, scanned };
 }
 
 /**
