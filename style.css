@@ -1,0 +1,280 @@
+/* ===================================================
+ * SillyTavern Preset Auto Save - Styles
+ * =================================================== */
+
+/* ----- 状态指示器 ----- */
+.pas-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: middle;
+    transition: background-color 0.3s;
+}
+.pas-status-idle    { background: #888; }
+.pas-status-pending { background: #facc15; animation: pas-pulse 1s infinite; }
+.pas-status-saving  { background: #3b82f6; animation: pas-pulse 0.8s infinite; }
+.pas-status-saved   { background: #22c55e; }
+.pas-status-error   { background: #ef4444; }
+
+@keyframes pas-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ----- 历史按钮 ----- */
+#pas_history_btn {
+    /* 复用 menu_button_icon 的样式 */
+}
+
+/* ===================================================
+ * 历史面板
+ * =================================================== */
+.pas-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 60vh;
+}
+
+.pas-panel-header h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    color: var(--SmartThemeQuoteColor, #b794f6);
+}
+
+/* ----- Tab 切换 ----- */
+.pas-panel-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    padding-bottom: 4px;
+}
+.pas-tab {
+    background: transparent;
+    border: none;
+    padding: 8px 16px;
+    color: var(--SmartThemeBodyColor);
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+}
+.pas-tab:hover { background: var(--white20a); }
+.pas-tab-active {
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeQuoteColor);
+}
+.pas-tab-badge {
+    background: var(--SmartThemeQuoteColor);
+    color: white;
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 0.75em;
+}
+
+/* ----- 工具栏 ----- */
+.pas-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.pas-search { width: 100%; }
+.pas-filters {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.pas-filter {
+    background: transparent;
+    border: 1px solid var(--SmartThemeBorderColor);
+    color: var(--SmartThemeBodyColor);
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 0.85em;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.pas-filter:hover { background: var(--white20a); }
+.pas-filter-active {
+    background: var(--SmartThemeQuoteColor);
+    color: white;
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+/* ----- 快照列表 ----- */
+.pas-snapshot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+/* ----- 快照卡片 ----- */
+.pas-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    transition: all 0.2s;
+}
+.pas-card:hover {
+    border-color: var(--SmartThemeQuoteColor);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.pas-card-main { flex: 1; min-width: 0; }
+.pas-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.pas-card-icon {
+    font-size: 0.5em;
+    color: var(--SmartThemeQuoteColor);
+}
+.pas-card-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pas-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+    color: var(--white50a);
+}
+.pas-divider { opacity: 0.5; }
+
+/* ----- 标签 ----- */
+.pas-tag {
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75em;
+}
+.pas-tag-current {
+    background: linear-gradient(135deg, #fbbf24, #f59e0b);
+    color: white;
+}
+.pas-tag-auto {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+}
+.pas-tag-switch_guard {
+    background: rgba(34, 197, 94, 0.2);
+    color: #4ade80;
+}
+
+/* ----- 卡片操作按钮 ----- */
+.pas-card-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+.pas-card-actions button {
+    background: transparent;
+    border: 1px solid var(--SmartThemeBorderColor);
+    color: var(--SmartThemeBodyColor);
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.pas-card-actions button:hover {
+    background: var(--white20a);
+    border-color: var(--SmartThemeQuoteColor);
+}
+.pas-btn-delete:hover {
+    background: var(--fullred, #ef4444) !important;
+    color: white;
+}
+
+/* ----- 设置 Tab ----- */
+.pas-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 8px;
+}
+.pas-setting-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: var(--SmartThemeBlurTintColor);
+    border-radius: 8px;
+    gap: 12px;
+}
+.pas-setting-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+.pas-setting-label small {
+    color: var(--white50a);
+    font-size: 0.8em;
+}
+.pas-setting-item input[type="number"] {
+    width: 100px;
+    text-align: right;
+}
+.pas-settings-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    justify-content: flex-end;
+}
+
+/* ----- 空状态 ----- */
+.pas-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    color: var(--white50a);
+    gap: 12px;
+}
+.pas-empty-icon {
+    font-size: 3em;
+    opacity: 0.5;
+}
+
+/* ----- 面板底部 ----- */
+.pas-panel-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 12px;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+}
+.pas-stats {
+    color: var(--white50a);
+    font-size: 0.85em;
+}
+
+/* ===================================================
+ * 移动端适配
+ * =================================================== */
+@media (max-width: 768px) {
+    .pas-card { flex-direction: column; align-items: stretch; }
+    .pas-card-actions { margin-top: 8px; justify-content: flex-end; }
+    .pas-tab span { display: none; }
+    .pas-setting-item { flex-direction: column; align-items: stretch; }
+    .pas-setting-item input[type="number"] { width: 100%; }
+}

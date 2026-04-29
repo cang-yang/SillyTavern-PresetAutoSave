@@ -1,0 +1,61 @@
+<div class="pas-panel">
+    <div class="pas-panel-header">
+        <h3 data-i18n="History"><i class="fa-solid fa-clock-rotate-left"></i> 历史记录</h3>
+    </div>
+
+    <div class="pas-panel-tabs">
+        <button class="pas-tab pas-tab-active" data-tab="list">
+            <i class="fa-solid fa-list"></i>
+            <span data-i18n="Records">记录</span>
+            <span class="pas-tab-badge">{{totalCount}}</span>
+        </button>
+        <button class="pas-tab" data-tab="settings">
+            <i class="fa-solid fa-gear"></i>
+            <span data-i18n="Settings">设置</span>
+        </button>
+    </div>
+
+    <div class="pas-panel-body">
+        <!-- Tab 1: 列表 -->
+        <div class="pas-tab-content pas-tab-content-active" data-content="list">
+            <div class="pas-toolbar">
+                <input type="text" class="pas-search text_pole"
+                       placeholder="搜索预设名..." data-i18n="[placeholder]Search preset..." />
+                <div class="pas-filters">
+                    <button class="pas-filter pas-filter-active" data-filter="all">全部</button>
+                    <button class="pas-filter" data-filter="current">当前预设</button>
+                    <button class="pas-filter" data-filter="today">今天</button>
+                    <button class="pas-filter" data-filter="week">本周</button>
+                </div>
+            </div>
+
+            <div class="pas-snapshot-list">
+                {{#if snapshots.length}}
+                    {{#each snapshots}}
+                        <!-- 快照卡片由 snapshot-card.html 渲染 -->
+                    {{/each}}
+                {{else}}
+                    <div class="pas-empty">
+                        <i class="fa-solid fa-folder-open"></i>
+                        <p>暂无历史记录</p>
+                    </div>
+                {{/if}}
+            </div>
+        </div>
+
+        <!-- Tab 2: 设置 -->
+        <div class="pas-tab-content" data-content="settings">
+            <!-- 内容由 settings-tab.html 渲染并填入 -->
+        </div>
+    </div>
+
+    <div class="pas-panel-footer">
+        <span class="pas-stats">
+            共 <b>{{totalCount}}</b> 条 · 占用 <b>{{totalSize}}</b>
+        </span>
+        <button class="pas-btn-cleanup menu_button">
+            <i class="fa-solid fa-broom"></i>
+            <span>清理</span>
+        </button>
+    </div>
+</div>
