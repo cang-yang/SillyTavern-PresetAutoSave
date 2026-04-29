@@ -28,6 +28,7 @@ import {
     getCurrentApiId, getSelectedPresetName,
     savePresetSafe, selectPresetSafe,
 } from './compatibility.js';
+import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 
 // =====================================================
 // 状态
@@ -281,6 +282,9 @@ function buildPanelHTML() {
     <div class="pas-panel-footer">
         <span class="pas-stats" id="pas-footer-stats">…</span>
         <div class="pas-footer-actions">
+            <button class="pas-btn-snap menu_button" type="button" title="${escapeAttr(t('Snapshot Now Title'))}">
+                <i class="fa-solid fa-camera"></i><span>${escapeHtml(t('Snapshot Now'))}</span>
+            </button>
             <button class="pas-btn-export menu_button" type="button" title="${escapeAttr(t('Export Backup'))}">
                 <i class="fa-solid fa-download"></i><span>${escapeHtml(t('Export'))}</span>
             </button>
@@ -377,6 +381,7 @@ function bindEvents() {
     $('.pas-btn-cleanup')?.addEventListener('click', onCleanup);
     $('.pas-btn-export')?.addEventListener('click', onExport);
     $('.pas-btn-import')?.addEventListener('click', onImport);
+    $('.pas-btn-snap')?.addEventListener('click', onSnapshotNow);
 
     // 订阅日志（增量更新，节流）
     _logUnsubscribe = logger.subscribe(() => {
@@ -1056,6 +1061,30 @@ async function onImport() {
 
     document.body.appendChild(input);
     input.click();
+}
+
+/**
+ * 立即手动快照当前预设（也作为"卡住状态"的紧急逃生口）
+ */
+async function onSnapshotNow() {
+    try {
+        // 重置 lastSavedHash，保证强制写入一份新快照（即使内容看起来"没变"）
+        resetLastSavedHash();
+        const snap = await saveNow();
+        const tracking = getCurrentTracking();
+        if (snap) {
+            toast.success(t('Snapshot Saved', { name: snap.presetName }));
+            logger.info(`[Manual snapshot] [${snap.apiId}] ${snap.presetName} hash=${snap.hash}`);
+        } else {
+            // saveNow 内部已 _setStatus，且会在合并窗口/未变化时返回 null
+            toast.info(t('Snapshot Skipped'));
+            logger.info(`[Manual snapshot] skipped tracking=${JSON.stringify(tracking)}`);
+        }
+        await refreshData();
+    } catch (e) {
+        logger.error('Manual snapshot failed:', e);
+        toast.error(t('Snapshot Failed', { message: e?.message || String(e) }));
+    }
 }
 
 // =====================================================

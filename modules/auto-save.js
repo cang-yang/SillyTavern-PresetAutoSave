@@ -1,17 +1,18 @@
 /**
  * SillyTavern Preset Auto Save - Auto Save Engine
- * 自动保存引擎
+ * 自动保存引擎（事件驱动 + DOM 兜底 + Prompt Manager 专项监听）
  *
- * 核心流程:
- *   DOM input/change 事件 → 防抖 → 调用 history-store.addSnapshot
- *                                  → 调用 ST PresetManager.savePreset
- *                                  → 更新状态指示器
+ * 触发来源（按优先级降序）:
+ *   1. SETTINGS_UPDATED 事件 - ST 任何内部 state 更新后都会广播，最可靠
+ *   2. OAI_PRESET_CHANGED_AFTER 事件 - 切换预设后，跟踪状态更新
+ *   3. DOM input/change 事件 - 兜底（适配未发出 SETTINGS_UPDATED 的 ST 版本）
+ *   4. Prompt Manager 区域的 click + MutationObserver - 监听 prompt 弹窗保存
  *
  * 关键保护:
- *   - 切换预设时进入"忽略输入模式"，避免虚假保存
- *   - 内部保存时设置标志，避免事件循环
+ *   - 切换预设期间忽略输入（_ignoreInput）+ 自动超时重置
+ *   - 内部保存中标志（_isInternalSave）防递归
  *   - 排除敏感字段（API Key 等）
- *   - 哈希去重（依赖 history-store 的内置去重）
+ *   - 哈希去重 + 详细诊断日志
  */
 
 import { logger } from './logger.js';
@@ -41,6 +42,12 @@ const WATCH_SELECTORS = [
     '#range_block_kobold',
     '#novel_api-settings',
     '#range_block_novel',
+];
+
+// Prompt Manager 区域 - 需要单独监听（弹窗保存按钮 click 等）
+const PROMPT_MANAGER_SELECTORS = [
+    '#completion_prompt_manager',
+    '#completion_prompt_manager_popup',
 ];
 
 // 应排除的字段前缀（敏感信息或非预设字段）
@@ -73,10 +80,11 @@ let _enabled = false;
 let _debounceTimer = null;
 
 let _ignoreInput = false;          // 切换期间忽略输入事件
-let _ignoreInputTimer = null;     // 自动重置定时器，防止永久卡死
+let _ignoreInputTimer = null;      // 自动重置定时器，防止永久卡死
 let _isInternalSave = false;       // 内部保存中（防递归）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
+let _suspendUntil = 0;             // SETTINGS_UPDATED 风暴期间临时挂起，用 Date.now()
 
 let _currentApiId = null;          // 当前跟踪的 API
 let _currentPresetName = null;     // 当前跟踪的预设名
@@ -84,6 +92,18 @@ let _currentPresetName = null;     // 当前跟踪的预设名
 let _domHandlers = [];             // DOM 事件处理器记录
 let _settingUnsubscribe = null;    // 设置变更订阅
 let _eventUnsubscribers = [];      // ST 事件订阅取消函数集合
+let _promptObserver = null;        // Prompt Manager 区域 MutationObserver
+let _pollingTimer = null;          // 兜底轮询计时器
+
+// 诊断/统计
+const _stats = {
+    triggeredBySettingsUpdated: 0,
+    triggeredByDOM: 0,
+    triggeredByPrompt: 0,
+    saved: 0,
+    skippedUnchanged: 0,
+    aborted: 0,
+};
 
 // =====================================================
 // 初始化
@@ -96,8 +116,6 @@ export async function initAutoSave() {
 
     _initialized = true;
 
-    const settings = getSettings();
-
     // 记录当前预设
     _currentApiId = getCurrentApiId();
     _currentPresetName = getSelectedPresetName();
@@ -106,9 +124,14 @@ export async function initAutoSave() {
     const initialPreset = getPresetSettingsSafe();
     if (initialPreset) {
         _lastSavedHash = hashPreset(initialPreset);
+        logger.debug(
+            `Initial baseline: [${_currentApiId}] ${_currentPresetName} hash=${_lastSavedHash}`
+        );
+    } else {
+        logger.warn('No initial preset available; baseline hash not set');
     }
 
-    // 绑定预设切换/保护
+    // 绑定 ST 事件（包含 SETTINGS_UPDATED + 切换/预设变更）
     bindPresetEvents();
 
     // 监听设置变更（动态启用/禁用）
@@ -127,7 +150,7 @@ export async function initAutoSave() {
 }
 
 /**
- * 根据 settings.enabled 启用或禁用 DOM 监听
+ * 根据 settings.enabled 启用或禁用 监听
  */
 function applyEnabledState() {
     const shouldEnable = !!getSettings().enabled;
@@ -136,12 +159,51 @@ function applyEnabledState() {
     _enabled = shouldEnable;
     if (_enabled) {
         bindDOMListeners();
+        bindPromptManagerListeners();
+        startPolling();
         logger.info('Auto-save ENABLED');
     } else {
         cancelPendingSave();
         unbindDOMListeners();
+        unbindPromptManagerListeners();
+        stopPolling();
         _setStatus('idle');
         logger.info('Auto-save DISABLED');
+    }
+}
+
+// =====================================================
+// 兜底轮询：每 N 秒检查一次预设内容的 hash 是否变化
+// 用于防止某些事件被跳过 / 未发出 SETTINGS_UPDATED 的 ST 版本
+// =====================================================
+const POLLING_INTERVAL_MS = 5000;
+
+function startPolling() {
+    if (_pollingTimer) return;
+    _pollingTimer = setInterval(() => {
+        if (!_enabled || _ignoreInput || _isInternalSave) return;
+        if (Date.now() < _suspendUntil) return;
+        if (_debounceTimer) return; // 已有挂起的保存，避免重复
+        try {
+            const preset = getPresetSettingsSafe();
+            if (!preset) return;
+            const h = hashPreset(preset);
+            if (_lastSavedHash && h !== _lastSavedHash) {
+                logger.debug(`[Polling] hash mismatch ${_lastSavedHash} -> ${h}, scheduling save`);
+                scheduleAutoSave(getSettings().debounceMs, 'polling');
+            }
+        } catch (e) {
+            logger.warn('Polling check failed:', e);
+        }
+    }, POLLING_INTERVAL_MS);
+    logger.debug(`Polling started (interval=${POLLING_INTERVAL_MS}ms)`);
+}
+
+function stopPolling() {
+    if (_pollingTimer) {
+        clearInterval(_pollingTimer);
+        _pollingTimer = null;
+        logger.debug('Polling stopped');
     }
 }
 
@@ -222,6 +284,15 @@ function isElementWatchable(element) {
     return true;
 }
 
+function describeElement(el) {
+    if (!el) return '(null)';
+    const tag = (el.tagName || '').toLowerCase();
+    const id = el.id ? `#${el.id}` : '';
+    const name = el.name ? `[name=${el.name}]` : '';
+    const type = el.type ? `:${el.type}` : '';
+    return `${tag}${type}${id}${name}`;
+}
+
 function onElementInput(event) {
     if (!_enabled || _ignoreInput || _isInternalSave) return;
     if (!isElementWatchable(event.target)) return;
@@ -229,10 +300,12 @@ function onElementInput(event) {
     const el = event.target;
     const settings = getSettings();
 
+    _stats.triggeredByDOM++;
+    logger.debug(`[DOM input] ${describeElement(el)}`);
+
     // 滑块: 始终在 input 阶段不触发实际保存（拖动时频繁触发会卡）
     // 等 change 事件（即"松开"）再保存
     if (el.type === 'range') {
-        // 进入 pending 状态，但不调度保存
         _dirty = true;
         _setStatus('pending');
         return;
@@ -261,6 +334,9 @@ function onElementChange(event) {
     const el = event.target;
     const settings = getSettings();
 
+    _stats.triggeredByDOM++;
+    logger.debug(`[DOM change] ${describeElement(el)}`);
+
     // 滑块: change 触发保存（用户松开了），sliderReleaseSave 关闭时使用更短的延迟
     if (el.type === 'range') {
         const delay = settings.sliderReleaseSave ? settings.debounceMs : 0;
@@ -279,17 +355,135 @@ function onElementChange(event) {
 }
 
 // =====================================================
+// Prompt Manager 专项监听
+// =====================================================
+/**
+ * Prompt Manager 的弹窗保存按钮、增删条目、拖拽排序都不会触发标准 input/change，
+ * 我们用 click 委托 + MutationObserver 来捕获它们，再调度保存。
+ */
+let _pmClickHandler = null;
+function bindPromptManagerListeners() {
+    if (_pmClickHandler || _promptObserver) return; // 幂等
+    // 文档级 click 委托（覆盖 popup 内 Save 按钮）
+    const handler = (event) => {
+        if (!_enabled || _ignoreInput || _isInternalSave) return;
+
+        const target = event.target;
+        if (!target || !target.closest) return;
+
+        // 弹窗的"Save"按钮
+        if (target.closest('#completion_prompt_manager_popup_entry_form_save')) {
+            _stats.triggeredByPrompt++;
+            logger.debug('[PromptManager] entry form save clicked');
+            // 点击后，PromptManager 会在内部 mutate oai_settings 然后保存。
+            // 给它足够的延迟以同步到内存
+            scheduleAutoSave(getSettings().debounceMs, 'prompt-edit-save');
+            return;
+        }
+
+        // Prompt 行上的"启用/禁用"切换、"删除"按钮等
+        const promptRow = target.closest('#completion_prompt_manager .completion_prompt_manager_prompt');
+        if (promptRow) {
+            // 仅在动作类元素上触发（避免点空白也保存）
+            if (target.closest('.prompt-manager-toggle-action, .prompt-manager-detach-action, .prompt-manager-edit-action, [data-pm-action]')) {
+                _stats.triggeredByPrompt++;
+                logger.debug('[PromptManager] action button clicked');
+                scheduleAutoSave(getSettings().debounceMs, 'prompt-action');
+            }
+        }
+
+        // 添加按钮
+        if (target.closest('#completion_prompt_manager_footer_append_prompt') || target.closest('#completion_prompt_manager_new_prompt')) {
+            _stats.triggeredByPrompt++;
+            logger.debug('[PromptManager] add prompt clicked');
+            scheduleAutoSave(getSettings().debounceMs, 'prompt-add');
+        }
+    };
+
+    document.addEventListener('click', handler, true);
+    _pmClickHandler = handler;
+
+    // MutationObserver：监听 prompt 列表的 DOM 变化（拖拽排序、删除条目）
+    try {
+        _promptObserver = new MutationObserver((mutations) => {
+            if (!_enabled || _ignoreInput || _isInternalSave) return;
+            // 只关心 childList 变化（条目顺序变了/被增删）或属性变化（启用状态切换 class）
+            for (const m of mutations) {
+                if (m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length)) {
+                    _stats.triggeredByPrompt++;
+                    logger.debug('[PromptManager] DOM mutation: childList');
+                    scheduleAutoSave(getSettings().debounceMs, 'prompt-mutation');
+                    return;
+                }
+                if (m.type === 'attributes' && m.attributeName === 'class') {
+                    const target = m.target;
+                    if (target && target.classList && (
+                        target.classList.contains('completion_prompt_manager_prompt') ||
+                        target.classList.contains('completion_prompt_manager_prompt_disabled') ||
+                        target.classList.contains('completion_prompt_manager_prompt_visible') ||
+                        target.classList.contains('completion_prompt_manager_prompt_invisible')
+                    )) {
+                        _stats.triggeredByPrompt++;
+                        logger.debug('[PromptManager] DOM mutation: class change');
+                        scheduleAutoSave(getSettings().debounceMs, 'prompt-class');
+                        return;
+                    }
+                }
+            }
+        });
+
+        const tryAttach = () => {
+            for (const sel of PROMPT_MANAGER_SELECTORS) {
+                const node = document.querySelector(sel);
+                if (node) {
+                    _promptObserver.observe(node, {
+                        childList: true,
+                        subtree: true,
+                        attributes: true,
+                        attributeFilter: ['class', 'data-pm-prompt'],
+                    });
+                    logger.debug(`[PromptManager] observer attached to ${sel}`);
+                }
+            }
+        };
+        tryAttach();
+        // PromptManager 可能后加载，再延迟尝试一次
+        setTimeout(tryAttach, 1500);
+    } catch (e) {
+        logger.warn('Failed to attach prompt manager observer:', e);
+    }
+}
+
+function unbindPromptManagerListeners() {
+    if (_pmClickHandler) {
+        try { document.removeEventListener('click', _pmClickHandler, true); } catch (_) {}
+        _pmClickHandler = null;
+    }
+    if (_promptObserver) {
+        try { _promptObserver.disconnect(); } catch (_) {}
+        _promptObserver = null;
+    }
+}
+
+// =====================================================
 // 防抖调度
 // =====================================================
 /**
  * 调度自动保存
  * @param {number} [delay] 自定义延迟，默认使用 settings.debounceMs
+ * @param {string} [reason] 触发原因（用于日志诊断）
  */
-export function scheduleAutoSave(delay = null) {
+export function scheduleAutoSave(delay = null, reason = 'unspecified') {
     if (!_enabled || _ignoreInput || _isInternalSave) return;
 
     const settings = getSettings();
     if (!settings.enabled) return;
+
+    // SETTINGS_UPDATED 风暴期间挂起
+    if (Date.now() < _suspendUntil) {
+        logger.debug(`scheduleAutoSave suspended (reason=${reason})`);
+        return;
+    }
 
     const ms = delay ?? settings.debounceMs;
 
@@ -299,7 +493,7 @@ export function scheduleAutoSave(delay = null) {
 
     _debounceTimer = setTimeout(() => {
         _debounceTimer = null;
-        doSave().catch(e => logger.error('Scheduled save failed:', e));
+        doSave(TRIGGER.AUTO, reason).catch(e => logger.error('Scheduled save failed:', e));
     }, ms);
 }
 
@@ -318,15 +512,16 @@ export async function flushSave() {
         clearTimeout(_debounceTimer);
         _debounceTimer = null;
     }
-    return await doSave();
+    return await doSave(TRIGGER.AUTO, 'flush');
 }
 
 // =====================================================
 // 核心保存
 // =====================================================
-async function doSave(trigger = TRIGGER.AUTO) {
+async function doSave(trigger = TRIGGER.AUTO, reason = '') {
     if (_isInternalSave) {
         logger.debug('Save skipped (internal save in progress)');
+        _stats.aborted++;
         return null;
     }
 
@@ -334,12 +529,16 @@ async function doSave(trigger = TRIGGER.AUTO) {
     _setStatus('saving');
 
     try {
+        // 让出一个微任务，确保上层（PromptManager / oai_settings 同步）已完成
+        await new Promise(resolve => setTimeout(resolve, 0));
+
         const apiId = getCurrentApiId();
         const presetName = getSelectedPresetName();
 
         if (!apiId || !presetName) {
             logger.warn('Cannot save: API or preset not available');
             _setStatus('error');
+            _stats.aborted++;
             return null;
         }
 
@@ -348,12 +547,12 @@ async function doSave(trigger = TRIGGER.AUTO) {
             logger.debug(
                 `Preset changed during save: "${_currentPresetName}" -> "${presetName}", aborting old save`
             );
-            // 更新跟踪
             _currentPresetName = presetName;
             _currentApiId = apiId;
             _lastSavedHash = null;
             _dirty = false;
             _setStatus('idle');
+            _stats.aborted++;
             return null;
         }
 
@@ -361,16 +560,42 @@ async function doSave(trigger = TRIGGER.AUTO) {
         if (!preset) {
             logger.warn('Cannot read current preset:', presetName);
             _setStatus('error');
+            _stats.aborted++;
             return null;
         }
 
-        // 创建历史快照（store 会自己判断是否需要写入）
+        // 计算 hash 并诊断
+        const newHash = hashPreset(preset);
+        const promptCount = Array.isArray(preset.prompts) ? preset.prompts.length : 0;
+        const promptOrderCount = Array.isArray(preset.prompt_order)
+            ? (preset.prompt_order[0]?.order?.length || 0)
+            : 0;
+        // 关键字段指纹（便于排查"toggle 改了但 hash 没变"这类幻觉）
+        const fingerprint = computeFingerprint(preset);
+
+        if (_lastSavedHash && newHash === _lastSavedHash) {
+            // 与上次比较没变化（可能是 SETTINGS_UPDATED 重复触发）
+            logger.debug(
+                `[doSave] No change reason=${reason} hash=${newHash} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
+            );
+            _stats.skippedUnchanged++;
+            _dirty = false;
+            _setStatus('idle');
+            return null;
+        }
+
+        logger.debug(
+            `[doSave] Snapshotting reason=${reason} hash=${_lastSavedHash}->${newHash} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
+        );
+
+        // 创建历史快照（store 会自己再判断一次去重 + 合并窗口）
         const snapshot = await addSnapshot(presetName, apiId, preset, trigger);
 
         if (!snapshot) {
-            // 内容未变化，跳过
+            // store 判断未变化（可能在合并窗口内）
             _dirty = false;
             _setStatus('idle');
+            _stats.skippedUnchanged++;
             return null;
         }
 
@@ -380,13 +605,16 @@ async function doSave(trigger = TRIGGER.AUTO) {
         _lastSavedHash = snapshot.hash;
         _dirty = false;
         _setStatus('saved');
+        _stats.saved++;
 
         const settings = getSettings();
         if (settings.notifyOnSave) {
             toast.success(t('Saved Toast', { name: presetName }));
         }
 
-        logger.debug(`Saved [${apiId}] ${presetName} (hash: ${snapshot.hash})`);
+        logger.info(
+            `[Saved] [${apiId}] ${presetName} (hash=${snapshot.hash}, size=${snapshot.size}, reason=${reason})`
+        );
         return snapshot;
     } catch (e) {
         logger.error('Save failed:', e);
@@ -403,7 +631,44 @@ async function doSave(trigger = TRIGGER.AUTO) {
  */
 export async function saveNow(trigger = TRIGGER.MANUAL) {
     cancelPendingSave();
-    return await doSave(trigger);
+    return await doSave(trigger, 'manual');
+}
+
+/**
+ * 关键字段指纹：让用户能从日志判断"哪个字段刚刚被改了"
+ * 输出：长度（prompt array）+ 几个常见 toggle 的真实值
+ */
+function computeFingerprint(preset) {
+    if (!preset) return '(empty)';
+    const fp = {};
+    const watchKeys = [
+        'temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty',
+        'temp', 'rep_pen',
+        'streaming', 'stream_response',
+        'wrap_in_quotes', 'wi_format', 'show_external_links',
+        'function_calling', 'request_images',
+        'reasoning_effort', 'show_thoughts',
+        'preset', 'name',
+    ];
+    for (const k of watchKeys) {
+        if (Object.hasOwn(preset, k)) {
+            const v = preset[k];
+            // 仅保留简单标量
+            if (v === null || v === undefined) continue;
+            if (typeof v === 'object') continue;
+            fp[k] = v;
+        }
+    }
+    if (Array.isArray(preset.prompts)) fp._prompts_len = preset.prompts.length;
+    if (Array.isArray(preset.prompt_order)) {
+        fp._order_len = preset.prompt_order[0]?.order?.length || 0;
+    }
+    // 输出短串
+    try {
+        return JSON.stringify(fp).slice(0, 200);
+    } catch {
+        return '(unserializable)';
+    }
 }
 
 // =====================================================
@@ -411,7 +676,6 @@ export async function saveNow(trigger = TRIGGER.MANUAL) {
 // =====================================================
 /**
  * 设置忽略输入标志，带自动超时保护
- * 防止因事件丢失导致 _ignoreInput 永久卡死
  */
 function setIgnoreInput(value, autoResetMs = 5000) {
     _ignoreInput = value;
@@ -433,11 +697,22 @@ function setIgnoreInput(value, autoResetMs = 5000) {
 }
 
 function bindPresetEvents() {
+    // ----- SETTINGS_UPDATED：所有内部 state 变化的可靠信号 -----
+    const settingsUpdated = getEventType('SETTINGS_UPDATED', 'settings_updated');
+    _eventUnsubscribers.push(on(settingsUpdated, () => {
+        if (!_enabled || _ignoreInput || _isInternalSave) return;
+        if (Date.now() < _suspendUntil) return;
+        _stats.triggeredBySettingsUpdated++;
+        logger.debug('[ST event] SETTINGS_UPDATED');
+        // SETTINGS_UPDATED 是 ST 已经更新完内存后发的，不需要再让出微任务
+        scheduleAutoSave(getSettings().debounceMs, 'settings_updated');
+    }));
+
     // ----- OpenAI 专属切换前事件（最可靠的保护点）-----
     const oaiBefore = getEventType('OAI_PRESET_CHANGED_BEFORE', 'oai_preset_changed_before');
     _eventUnsubscribers.push(on(oaiBefore, async () => {
         if (!getSettings().enableSwitchGuard) {
-            setIgnoreInput(true);  // 仍然忽略事件，避免污染
+            setIgnoreInput(true);
             return;
         }
 
@@ -447,7 +722,7 @@ function bindPresetEvents() {
             if (_dirty || _debounceTimer) {
                 logger.info('Switch guard: saving dirty preset before switch');
                 cancelPendingSave();
-                await doSave(TRIGGER.SWITCH_GUARD);
+                await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard');
             }
         } catch (e) {
             logger.error('Switch guard error:', e);
@@ -457,32 +732,30 @@ function bindPresetEvents() {
     // ----- OpenAI 切换后事件 -----
     const oaiAfter = getEventType('OAI_PRESET_CHANGED_AFTER', 'oai_preset_changed_after');
     _eventUnsubscribers.push(on(oaiAfter, () => {
-        // 延迟退出，确保所有连锁的 input 事件都已处理完
+        // 切换会触发大量 SETTINGS_UPDATED，临时挂起 1.5s
+        _suspendUntil = Date.now() + 1500;
         setTimeout(() => {
             updateTrackingAfterSwitch();
             setIgnoreInput(false);
-        }, 150);
+        }, 200);
     }));
 
     // ----- 通用预设切换事件（适用于所有 API）-----
     const presetChanged = getEventType('PRESET_CHANGED', 'preset_changed');
     _eventUnsubscribers.push(on(presetChanged, async (data) => {
-        // 取消挂起的保存（属于旧预设）
         cancelPendingSave();
-
-        // 立即进入忽略模式
         setIgnoreInput(true);
+        _suspendUntil = Date.now() + 1500;
 
         if (data) {
             if (data.apiId) _currentApiId = data.apiId;
             if (data.name) _currentPresetName = data.name;
         }
 
-        // 延迟更新跟踪与退出忽略模式
         setTimeout(() => {
             updateTrackingAfterSwitch();
             setIgnoreInput(false);
-        }, 200);
+        }, 250);
     }));
 
     // ----- 主 API 切换 -----
@@ -490,11 +763,12 @@ function bindPresetEvents() {
     _eventUnsubscribers.push(on(mainApiChanged, () => {
         cancelPendingSave();
         setIgnoreInput(true);
+        _suspendUntil = Date.now() + 1500;
 
         setTimeout(() => {
             updateTrackingAfterSwitch();
             setIgnoreInput(false);
-        }, 200);
+        }, 250);
     }));
 }
 
@@ -510,7 +784,7 @@ function updateTrackingAfterSwitch() {
     _dirty = false;
     _setStatus('idle');
 
-    logger.debug(`Tracking updated: [${_currentApiId}] ${_currentPresetName}`);
+    logger.debug(`Tracking updated: [${_currentApiId}] ${_currentPresetName} hash=${_lastSavedHash}`);
 }
 
 // =====================================================
@@ -541,7 +815,19 @@ export function getCurrentTracking() {
         pending: _debounceTimer !== null,
         ignoring: _ignoreInput,
         lastHash: _lastSavedHash,
+        suspended: Date.now() < _suspendUntil,
+        stats: { ..._stats },
     };
+}
+
+/**
+ * 重置最后保存的哈希（强制下次保存被认为有变化）。
+ * 调试或修复"卡住"状态时使用。
+ */
+export function resetLastSavedHash() {
+    _lastSavedHash = null;
+    _dirty = false;
+    logger.warn('lastSavedHash forcibly reset');
 }
 
 // =====================================================
@@ -550,6 +836,8 @@ export function getCurrentTracking() {
 export function teardown() {
     cancelPendingSave();
     unbindDOMListeners();
+    unbindPromptManagerListeners();
+    stopPolling();
     if (_settingUnsubscribe) {
         try { _settingUnsubscribe(); } catch (_) {}
         _settingUnsubscribe = null;
