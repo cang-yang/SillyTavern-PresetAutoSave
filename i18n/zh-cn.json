@@ -132,5 +132,16 @@
     "Purge Corrupt Hint": "将扫描所有快照，移除明显损坏的（预设为空对象或字段少于 5 个）。",
     "Purge Corrupt Detail": "这些坏快照通常是早期 bug 留下的脏数据。如果直接恢复它们，会清空你的真实预设。",
     "Purge Corrupt Done": "已清理 {{cleaned}} / {{scanned}} 条坏快照",
-    "Purge Corrupt Failed": "清理失败: {{message}}"
+    "Purge Corrupt Failed": "清理失败: {{message}}",
+    "Summary Initial": "初次基线",
+    "Summary Minor": "细微改动",
+    "Summary Unknown": "（旧版快照，无对比信息）",
+    "Summary Tag Initial": "初始",
+    "Summary Tag Prompt+": "新增条目",
+    "Summary Tag Prompt-": "删除条目",
+    "Summary Tag PromptEdit": "编辑条目",
+    "Summary Tag Reorder": "调整顺序",
+    "Summary Tag Toggle": "启用切换",
+    "Summary Tag Settings": "设置项",
+    "Summary Tag Minor": "细微改动"
 }

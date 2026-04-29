@@ -35,10 +35,125 @@
  * ============================================ */
 .pas-history-btn {
     transition: all 0.2s ease;
+    /* 与左侧的"新增预设"按钮拉开间距 */
+    margin-left: 6px;
 }
 .pas-history-btn:hover {
     color: var(--SmartThemeQuoteColor, #b794f6) !important;
     transform: scale(1.05);
+}
+
+/* ============================================
+ * 卡片修改摘要
+ * ============================================ */
+.pas-card-summary {
+    margin: 6px 0 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.pas-card-summary.pas-summary-empty {
+    color: var(--white50a, #999);
+    font-size: 0.8em;
+    font-style: italic;
+}
+.pas-summary-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.pas-summary-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 0.78em;
+    line-height: 1.6;
+    white-space: nowrap;
+    background: rgba(150, 150, 150, 0.18);
+    color: var(--SmartThemeBodyColor, #e2e8f0);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.pas-summary-tag b {
+    font-weight: 600;
+    margin-left: 2px;
+    opacity: 0.85;
+}
+.pas-summary-tag i {
+    font-size: 0.85em;
+}
+/* 不同类型的标签着色 */
+.pas-summary-tag-first {
+    background: rgba(96, 165, 250, 0.18);
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.32);
+}
+.pas-summary-tag-prompt-add {
+    background: rgba(34, 197, 94, 0.18);
+    color: #86efac;
+    border-color: rgba(34, 197, 94, 0.3);
+}
+.pas-summary-tag-prompt-del {
+    background: rgba(239, 68, 68, 0.18);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.3);
+}
+.pas-summary-tag-prompt-edit {
+    background: rgba(168, 85, 247, 0.18);
+    color: #d8b4fe;
+    border-color: rgba(168, 85, 247, 0.3);
+}
+.pas-summary-tag-prompt-reorder {
+    background: rgba(14, 165, 233, 0.18);
+    color: #7dd3fc;
+    border-color: rgba(14, 165, 233, 0.3);
+}
+.pas-summary-tag-prompt-toggle {
+    background: rgba(251, 191, 36, 0.18);
+    color: #fde68a;
+    border-color: rgba(251, 191, 36, 0.3);
+}
+.pas-summary-tag-settings {
+    background: rgba(99, 102, 241, 0.18);
+    color: #c7d2fe;
+    border-color: rgba(99, 102, 241, 0.3);
+}
+.pas-summary-tag-minor {
+    background: rgba(120, 120, 120, 0.16);
+    color: #cbd5e1;
+    border-color: rgba(255, 255, 255, 0.05);
+}
+
+.pas-summary-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.78em;
+    color: var(--white70a, #c0c0c0);
+    padding: 2px 0 0 2px;
+}
+.pas-summary-detail {
+    display: inline-flex;
+    gap: 5px;
+    align-items: baseline;
+    background: rgba(0, 0, 0, 0.18);
+    padding: 1px 7px;
+    border-radius: 5px;
+}
+.pas-summary-key {
+    color: var(--SmartThemeQuoteColor, #b794f6);
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 0.95em;
+}
+.pas-summary-arrow {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 0.95em;
+    opacity: 0.92;
+}
+.pas-summary-more {
+    color: var(--white50a, #888);
+    font-style: italic;
 }
 
 /* ============================================

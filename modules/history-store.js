@@ -135,6 +135,217 @@ export function formatBytes(bytes) {
     return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
 }
 
+/**
+ * 计算两份预设之间的修改摘要（人类可读）
+ * 返回结构化数据，UI 层负责渲染
+ *
+ * @param {object|null} prev - 上一份快照的 preset
+ * @param {object|null} curr - 当前 preset
+ * @returns {{
+ *   tags: Array<{type:string, label:string, count?:number}>,  // 修改类型标签
+ *   details: Array<{key:string, from:any, to:any}>,            // 字段级变更明细（最多保留 6 项）
+ *   promptChange: {added:number, removed:number, modified:number, reordered:boolean}|null,
+ *   isFirst: boolean
+ * }}
+ */
+export function computeChangeSummary(prev, curr) {
+    const result = {
+        tags: [],
+        details: [],
+        promptChange: null,
+        isFirst: false,
+    };
+
+    if (!curr || typeof curr !== 'object') return result;
+    if (!prev || typeof prev !== 'object') {
+        result.isFirst = true;
+        result.tags.push({ type: 'first', label: 'Initial' });
+        return result;
+    }
+
+    // 1. Prompts 数组比较
+    const prevPrompts = Array.isArray(prev.prompts) ? prev.prompts : [];
+    const currPrompts = Array.isArray(curr.prompts) ? curr.prompts : [];
+    const promptDiff = comparePrompts(prevPrompts, currPrompts);
+    if (promptDiff.added || promptDiff.removed || promptDiff.modified) {
+        result.promptChange = promptDiff;
+        if (promptDiff.added) result.tags.push({ type: 'prompt-add', label: 'Prompt+', count: promptDiff.added });
+        if (promptDiff.removed) result.tags.push({ type: 'prompt-del', label: 'Prompt-', count: promptDiff.removed });
+        if (promptDiff.modified) result.tags.push({ type: 'prompt-edit', label: 'PromptEdit', count: promptDiff.modified });
+    }
+
+    // 2. Prompt order 比较（顺序变化）
+    const prevOrder = extractOrder(prev.prompt_order);
+    const currOrder = extractOrder(curr.prompt_order);
+    const orderChanged = prevOrder.length !== currOrder.length || prevOrder.some((id, i) => id !== currOrder[i]);
+    if (orderChanged) {
+        if (result.promptChange) {
+            result.promptChange.reordered = true;
+        } else {
+            result.promptChange = { added: 0, removed: 0, modified: 0, reordered: true };
+        }
+        // 只有当 prompts 数组没变化但顺序变了时才单独打标签
+        if (!result.tags.some(t => t.type.startsWith('prompt-'))) {
+            result.tags.push({ type: 'prompt-reorder', label: 'Reorder' });
+        }
+    }
+
+    // 3. 启用状态变化（prompt_order 中的 enabled 字段）
+    const enabledDiff = compareEnabled(prev.prompt_order, curr.prompt_order);
+    if (enabledDiff.toggled > 0) {
+        result.tags.push({ type: 'prompt-toggle', label: 'Toggle', count: enabledDiff.toggled });
+    }
+
+    // 4. 标量字段比较（temperature 之类）
+    const scalarDiff = compareScalars(prev, curr);
+    if (scalarDiff.length > 0) {
+        result.details = scalarDiff.slice(0, 6);
+        // 给整体打个 settings 标签（区别于 prompt 修改）
+        if (!result.tags.some(t => t.type === 'settings')) {
+            result.tags.push({ type: 'settings', label: 'Settings', count: scalarDiff.length });
+        }
+    }
+
+    // 没有任何检测到的修改，但 hash 已经不一样了 -> 给个 minor 标签
+    if (result.tags.length === 0) {
+        result.tags.push({ type: 'minor', label: 'Minor' });
+    }
+
+    return result;
+}
+
+/**
+ * 比较 prompts 数组（按 identifier 匹配）
+ */
+function comparePrompts(prev, curr) {
+    const prevMap = new Map();
+    for (const p of prev) {
+        if (p && p.identifier) prevMap.set(p.identifier, p);
+    }
+    const currMap = new Map();
+    for (const p of curr) {
+        if (p && p.identifier) currMap.set(p.identifier, p);
+    }
+
+    let added = 0, removed = 0, modified = 0;
+    for (const id of currMap.keys()) {
+        if (!prevMap.has(id)) added++;
+        else {
+            // 比较内容
+            const a = prevMap.get(id);
+            const b = currMap.get(id);
+            if (!shallowPromptEqual(a, b)) modified++;
+        }
+    }
+    for (const id of prevMap.keys()) {
+        if (!currMap.has(id)) removed++;
+    }
+    return { added, removed, modified, reordered: false };
+}
+
+function shallowPromptEqual(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    // 关键字段：name, content, role, system_prompt, marker, injection_position
+    const keys = ['name', 'content', 'role', 'system_prompt', 'marker', 'injection_position', 'injection_depth', 'forbid_overrides'];
+    for (const k of keys) {
+        if (a[k] !== b[k]) return false;
+    }
+    return true;
+}
+
+/**
+ * 提取 prompt_order 的 identifier 顺序（不含 enabled 状态）
+ */
+function extractOrder(prompt_order) {
+    if (!Array.isArray(prompt_order) || !prompt_order.length) return [];
+    const first = prompt_order[0];
+    if (!first || !Array.isArray(first.order)) return [];
+    return first.order.map(o => o?.identifier).filter(Boolean);
+}
+
+/**
+ * 比较 enabled 切换数
+ */
+function compareEnabled(prevOrder, currOrder) {
+    const prevMap = new Map();
+    if (Array.isArray(prevOrder) && prevOrder[0]?.order) {
+        for (const o of prevOrder[0].order) {
+            if (o?.identifier) prevMap.set(o.identifier, !!o.enabled);
+        }
+    }
+    let toggled = 0;
+    if (Array.isArray(currOrder) && currOrder[0]?.order) {
+        for (const o of currOrder[0].order) {
+            if (!o?.identifier) continue;
+            if (prevMap.has(o.identifier) && prevMap.get(o.identifier) !== !!o.enabled) {
+                toggled++;
+            }
+        }
+    }
+    return { toggled };
+}
+
+/**
+ * 字段级 diff（仅标量类型 + 数组长度）
+ */
+const SUMMARY_IGNORED_KEYS = new Set([
+    'prompts', 'prompt_order', 'extensions',
+    // 噪音字段
+    'preset_settings_openai', 'name',
+    // 内部
+    'bias_presets', 'bias_preset_selected',
+]);
+
+function compareScalars(prev, curr) {
+    const out = [];
+    const allKeys = new Set([...Object.keys(prev), ...Object.keys(curr)]);
+    for (const k of allKeys) {
+        if (SUMMARY_IGNORED_KEYS.has(k)) continue;
+        const a = prev[k];
+        const b = curr[k];
+        if (deepEqualStrict(a, b)) continue;
+
+        // 仅记录人类可读类型
+        const ta = typeof a, tb = typeof b;
+        if ((ta === 'function') || (tb === 'function')) continue;
+        // 复杂对象只记录有/无变化，不展开
+        if (typeof a === 'object' || typeof b === 'object') {
+            // 数组：只记录长度变化
+            if (Array.isArray(a) || Array.isArray(b)) {
+                const la = Array.isArray(a) ? a.length : 0;
+                const lb = Array.isArray(b) ? b.length : 0;
+                if (la !== lb) out.push({ key: k, from: `[${la}]`, to: `[${lb}]` });
+                continue;
+            }
+            out.push({ key: k, from: '(object)', to: '(object)' });
+            continue;
+        }
+        out.push({ key: k, from: a, to: b });
+    }
+    // 排序：把"用户最常关心的"放前面
+    const PRIORITY = ['temperature', 'top_p', 'top_k', 'frequency_penalty', 'presence_penalty', 'max_context_unlocked', 'openai_max_tokens', 'openai_max_context', 'reasoning_effort'];
+    out.sort((a, b) => {
+        const ai = PRIORITY.indexOf(a.key);
+        const bi = PRIORITY.indexOf(b.key);
+        if (ai !== bi) {
+            if (ai < 0) return 1;
+            if (bi < 0) return -1;
+            return ai - bi;
+        }
+        return a.key.localeCompare(b.key);
+    });
+    return out;
+}
+
+function deepEqualStrict(a, b) {
+    if (a === b) return true;
+    if (a === null || b === null || a === undefined || b === undefined) return a === b;
+    if (typeof a !== typeof b) return false;
+    if (typeof a !== 'object') return a === b;
+    return stableStringify(a) === stableStringify(b);
+}
+
 async function ensureStore() {
     if (!_initialized || !_store) {
         throw new Error('HistoryStore not initialized');
@@ -217,17 +428,25 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
         return null;
     }
 
+    // 计算修改摘要（对比上一条快照）
+    const previousSnapshot = list.length > 0 ? list[0] : null;
+    const summary = computeChangeSummary(previousSnapshot?.preset, preset);
+
     // 2. 合并窗口: 在窗口期内且触发类型相同 -> 替换最新
     const mergeWindowMs = settings.mergeWindowSec * 1000;
     if (mergeWindowMs > 0 && list.length > 0 && list[0].trigger === trigger) {
         const elapsed = now - list[0].timestamp;
         if (elapsed < mergeWindowMs) {
+            // 合并时摘要应基于"被合并条之前的那一条"
+            const baseSnapshot = list.length > 1 ? list[1] : null;
+            const mergedSummary = computeChangeSummary(baseSnapshot?.preset, preset);
             const merged = {
                 ...list[0],
                 timestamp: now,
                 preset: structuredClone(preset),
                 hash,
                 size,
+                summary: mergedSummary,
             };
             list[0] = merged;
             await safeSetItem(key, list);
@@ -246,6 +465,7 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
         preset: structuredClone(preset),
         hash,
         size,
+        summary,
     };
 
     list.unshift(snapshot);
@@ -257,7 +477,7 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
     }
 
     await safeSetItem(key, list);
-    logger.debug(`Snapshot added: ${presetName} (total: ${list.length}/${max})`);
+    logger.debug(`Snapshot added: ${presetName} (total: ${list.length}/${max}) tags=${summary.tags.map(t => t.label).join(',')}`);
     return snapshot;
 }
 

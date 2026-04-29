@@ -561,6 +561,7 @@ function startOfWeek() {
 function renderCard(s) {
     const triggerLabel = t(TRIGGER_LABEL_KEYS[s.trigger] || 'Trigger Auto');
     const id = escapeAttr(s.id);
+    const summaryHtml = renderSummary(s.summary);
 
     return `
 <div class="pas-card" data-snapshot-id="${id}">
@@ -570,6 +571,7 @@ function renderCard(s) {
             <span class="pas-card-time">${formatTime(s.timestamp)}</span>
             <span class="pas-tag pas-tag-${escapeAttr(s.trigger)}">${escapeHtml(triggerLabel)}</span>
         </div>
+        ${summaryHtml}
         <div class="pas-card-meta">
             <span class="pas-card-size">${formatBytes(s.size || 0)}</span>
             <span class="pas-divider">·</span>
@@ -588,6 +590,60 @@ function renderCard(s) {
         </button>
     </div>
 </div>`;
+}
+
+/**
+ * 渲染修改摘要（标签 + 字段 diff 简洁显示）
+ */
+function renderSummary(summary) {
+    if (!summary || typeof summary !== 'object') {
+        return `<div class="pas-card-summary pas-summary-empty">${escapeHtml(t('Summary Unknown'))}</div>`;
+    }
+    if (summary.isFirst) {
+        return `<div class="pas-card-summary"><span class="pas-summary-tag pas-summary-tag-first"><i class="fa-solid fa-flag"></i>${escapeHtml(t('Summary Initial'))}</span></div>`;
+    }
+
+    const tagHtml = (summary.tags || []).map(tag => {
+        const labelKey = `Summary Tag ${tag.label}`;
+        const text = t(labelKey, { count: tag.count ?? '' });
+        return `<span class="pas-summary-tag pas-summary-tag-${escapeAttr(tag.type)}" title="${escapeAttr(text)}">${escapeHtml(text)}${tag.count != null && tag.count > 0 ? ` <b>${tag.count}</b>` : ''}</span>`;
+    }).join('');
+
+    let detailsHtml = '';
+    if (summary.details && summary.details.length > 0) {
+        const items = summary.details.slice(0, 4).map(d => {
+            const fromStr = formatSummaryValue(d.from);
+            const toStr = formatSummaryValue(d.to);
+            return `<span class="pas-summary-detail" title="${escapeAttr(`${d.key}: ${fromStr} → ${toStr}`)}"><span class="pas-summary-key">${escapeHtml(d.key)}</span> <span class="pas-summary-arrow">${escapeHtml(fromStr)} → ${escapeHtml(toStr)}</span></span>`;
+        }).join('');
+        const more = summary.details.length > 4
+            ? `<span class="pas-summary-more">+${summary.details.length - 4}</span>`
+            : '';
+        detailsHtml = `<div class="pas-summary-details">${items}${more}</div>`;
+    }
+
+    if (!tagHtml && !detailsHtml) {
+        return `<div class="pas-card-summary pas-summary-empty">${escapeHtml(t('Summary Minor'))}</div>`;
+    }
+
+    return `<div class="pas-card-summary">
+        ${tagHtml ? `<div class="pas-summary-tags">${tagHtml}</div>` : ''}
+        ${detailsHtml}
+    </div>`;
+}
+
+function formatSummaryValue(v) {
+    if (v === null || v === undefined) return '∅';
+    if (typeof v === 'boolean') return v ? '✓' : '✗';
+    if (typeof v === 'number') {
+        if (!Number.isFinite(v)) return '∞';
+        // 短化显示
+        return Number.isInteger(v) ? String(v) : v.toFixed(2);
+    }
+    if (typeof v === 'string') {
+        return v.length > 20 ? v.slice(0, 18) + '…' : v;
+    }
+    return String(v);
 }
 
 function renderEmptyState() {
@@ -699,6 +755,7 @@ async function onView(snapshotId) {
     const json = JSON.stringify(snapshot.preset, null, 2);
     const time = formatTime(snapshot.timestamp);
     const triggerLabel = t(TRIGGER_LABEL_KEYS[snapshot.trigger] || 'Trigger Auto');
+    const summaryHtml = renderSummary(snapshot.summary);
     const ctx = SillyTavern.getContext();
 
     const html = `
@@ -710,6 +767,7 @@ async function onView(snapshotId) {
     <div style="font-size: 0.85em; color: var(--white50a, #999); margin-bottom: 12px;">
         ${escapeHtml(time)} · ${escapeHtml(triggerLabel)} · ${formatBytes(snapshot.size || 0)}
     </div>
+    <div style="margin-bottom: 12px;">${summaryHtml}</div>
     <pre style="max-height: 60vh; overflow: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-size: 0.85em; line-height: 1.5;"><code>${escapeHtml(json)}</code></pre>
     <div style="margin-top: 12px; display: flex; gap: 8px; justify-content: flex-end;">
         <button class="menu_button" id="pas-view-copy" type="button">

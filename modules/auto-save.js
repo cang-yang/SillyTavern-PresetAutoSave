@@ -525,7 +525,7 @@ export async function flushSave() {
 // =====================================================
 // 核心保存
 // =====================================================
-async function doSave(trigger = TRIGGER.AUTO, reason = '') {
+async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null) {
     if (_isInternalSave) {
         logger.debug('Save skipped (internal save in progress)');
         _stats.aborted++;
@@ -539,8 +539,10 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '') {
         // 让出一个微任务，确保上层（PromptManager / oai_settings 同步）已完成
         await new Promise(resolve => setTimeout(resolve, 0));
 
-        const apiId = getCurrentApiId();
-        const presetName = getSelectedPresetName();
+        // explicitTarget 用于切换前保护：明确指定要保存的预设名
+        // 否则用当前选中的（可能在切换过程中已经变了）
+        const apiId = explicitTarget?.apiId || getCurrentApiId();
+        const presetName = explicitTarget?.presetName || getSelectedPresetName();
 
         if (!apiId || !presetName) {
             logger.warn('Cannot save: API or preset not available');
@@ -549,8 +551,9 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '') {
             return null;
         }
 
-        // 检测预设切换（防止把新预设的内容写入旧预设名）
-        if (_currentPresetName && _currentPresetName !== presetName) {
+        // 仅在非显式目标的情况下才做"切换中"中止逻辑
+        // （显式 target 通常来自 switch-guard，必须强制保存到指定预设）
+        if (!explicitTarget && _currentPresetName && _currentPresetName !== presetName) {
             logger.debug(
                 `Preset changed during save: "${_currentPresetName}" -> "${presetName}", aborting old save`
             );
@@ -738,10 +741,21 @@ function bindPresetEvents() {
         try {
             setIgnoreInput(true);
 
+            // 关键修复：传入"切换前"我们记录的预设名作为显式 target，
+            // 因为此时 ST 内部 oai_settings.preset_settings_openai 可能已经
+            // 被改成新名字了（getSelectedPresetName 会返回新名字）。
+            // 只要 _currentPresetName 仍是旧名字，就用它作为保存目标。
             if (_dirty || _debounceTimer) {
-                logger.info('Switch guard: saving dirty preset before switch');
-                cancelPendingSave();
-                await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard');
+                if (_currentPresetName && _currentApiId) {
+                    logger.info(`Switch guard: saving dirty preset "${_currentPresetName}" before switch`);
+                    cancelPendingSave();
+                    await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
+                        apiId: _currentApiId,
+                        presetName: _currentPresetName,
+                    });
+                } else {
+                    logger.warn('Switch guard skipped: no tracked preset to save');
+                }
             }
         } catch (e) {
             logger.error('Switch guard error:', e);
