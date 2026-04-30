@@ -1,172 +1,105 @@
-/* ===========================================
+/* =========================================================
  * SillyTavern Preset Auto Save - Stylesheet
- * 兼容 SillyTavern 主题色，所有颜色都有 fallback
- * =========================================== */
+ * Modernized 2.0 — 简约扁平、低饱和、紧凑、专业感
+ *
+ * 设计原则：
+ *  - 不使用渐变 / 重阴影；改用细边框 + 微弱底色提示状态
+ *  - 颜色全部继承 SillyTavern 主题变量（带 fallback）
+ *  - 用一组 CSS 变量集中管理强调色，便于一处改全局适配
+ *  - 信息密度提升：标题/卡片/行内 padding 都收紧 ~25%
+ *  - 状态色（add/del/edit/...）用 left-border + 透明 tint，不再大面积涂色
+ * ========================================================= */
 
-/* ============================================
+/* =========================================================
+ * 主题变量（命名空间 --pas-* 不污染外部）
+ * 所有取自 SillyTavern 的颜色都加 fallback，独立可用
+ * ========================================================= */
+.pas-panel,
+.pas-view-popup,
+.pas-diff-popup {
+    --pas-fg:        var(--SmartThemeBodyColor, #e2e8f0);
+    --pas-fg-muted:  rgba(255, 255, 255, 0.55);
+    --pas-fg-faint:  rgba(255, 255, 255, 0.36);
+    --pas-bg-1:      rgba(255, 255, 255, 0.025);   /* 卡片底色 */
+    --pas-bg-2:      rgba(255, 255, 255, 0.05);    /* hover */
+    --pas-bg-3:      rgba(0, 0, 0, 0.18);          /* 内嵌区 */
+    --pas-border:    var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.10));
+    --pas-border-strong: rgba(255, 255, 255, 0.16);
+    --pas-accent:    var(--SmartThemeQuoteColor, #b794f6);
+    --pas-radius:    6px;
+    --pas-radius-sm: 4px;
+
+    /* 语义色（去饱和 + 透明度，避免太刺眼） */
+    --pas-c-add:    #4ade80;
+    --pas-c-del:    #f87171;
+    --pas-c-edit:   #c084fc;
+    --pas-c-info:   #60a5fa;
+    --pas-c-warn:   #fbbf24;
+    --pas-c-toggle: #a3a3a3;
+    --pas-c-pin:    #f59e0b;
+    --pas-c-a:      #3b82f6;   /* diff: A 列 */
+    --pas-c-b:      #f97316;   /* diff: B 列 */
+}
+
+/* =========================================================
  * 状态指示器（注入到预设栏）
- * ============================================ */
+ * ========================================================= */
 .pas-status-dot {
     display: inline-block;
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     margin-right: 6px;
     margin-left: 2px;
     vertical-align: middle;
     background: #888;
-    transition: all 0.3s ease;
-    box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+    transition: background 0.2s ease, opacity 0.2s ease;
     flex-shrink: 0;
 }
-.pas-status-idle    { background: #888; opacity: 0.4; }
-.pas-status-pending { background: #facc15; animation: pas-pulse 1s infinite; }
-.pas-status-saving  { background: #3b82f6; animation: pas-pulse 0.6s infinite; }
-.pas-status-saved   { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
-.pas-status-error   { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+.pas-status-idle    { background: #6b7280; opacity: 0.45; }
+.pas-status-pending { background: #facc15; animation: pas-pulse 1.2s infinite; }
+.pas-status-saving  { background: #3b82f6; animation: pas-pulse 0.7s infinite; }
+.pas-status-saved   { background: #22c55e; }
+.pas-status-error   { background: #ef4444; }
 
 @keyframes pas-pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    50%      { opacity: 0.35; }
 }
 
-/* ============================================
- * 历史按钮
- * ============================================ */
+/* =========================================================
+ * 历史按钮（预设栏内）
+ * ========================================================= */
 .pas-history-btn {
-    transition: all 0.2s ease;
-    /* 与左侧的"新增预设"按钮拉开间距 */
+    transition: color 0.15s ease, transform 0.15s ease;
     margin-left: 6px;
 }
 .pas-history-btn:hover {
-    color: var(--SmartThemeQuoteColor, #b794f6) !important;
+    color: var(--pas-accent) !important;
     transform: scale(1.05);
 }
 
-/* ============================================
- * 卡片修改摘要 - 旧版兼容样式（标签 + 字段 diff）
- * 新版样式见下方"摘要：每行一条改动"
- * ============================================ */
-.pas-summary-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-}
-.pas-summary-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 1px 7px;
-    border-radius: 10px;
-    font-size: 0.78em;
-    line-height: 1.6;
-    white-space: nowrap;
-    background: rgba(150, 150, 150, 0.18);
-    color: var(--SmartThemeBodyColor, #e2e8f0);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-}
-.pas-summary-tag b {
-    font-weight: 600;
-    margin-left: 2px;
-    opacity: 0.85;
-}
-.pas-summary-tag i {
-    font-size: 0.85em;
-}
-/* 不同类型的标签着色 */
-.pas-summary-tag-first {
-    background: rgba(96, 165, 250, 0.18);
-    color: #93c5fd;
-    border-color: rgba(96, 165, 250, 0.32);
-}
-.pas-summary-tag-prompt-add {
-    background: rgba(34, 197, 94, 0.18);
-    color: #86efac;
-    border-color: rgba(34, 197, 94, 0.3);
-}
-.pas-summary-tag-prompt-del {
-    background: rgba(239, 68, 68, 0.18);
-    color: #fca5a5;
-    border-color: rgba(239, 68, 68, 0.3);
-}
-.pas-summary-tag-prompt-edit {
-    background: rgba(168, 85, 247, 0.18);
-    color: #d8b4fe;
-    border-color: rgba(168, 85, 247, 0.3);
-}
-.pas-summary-tag-prompt-reorder {
-    background: rgba(14, 165, 233, 0.18);
-    color: #7dd3fc;
-    border-color: rgba(14, 165, 233, 0.3);
-}
-.pas-summary-tag-prompt-toggle {
-    background: rgba(251, 191, 36, 0.18);
-    color: #fde68a;
-    border-color: rgba(251, 191, 36, 0.3);
-}
-.pas-summary-tag-settings {
-    background: rgba(99, 102, 241, 0.18);
-    color: #c7d2fe;
-    border-color: rgba(99, 102, 241, 0.3);
-}
-.pas-summary-tag-minor {
-    background: rgba(120, 120, 120, 0.16);
-    color: #cbd5e1;
-    border-color: rgba(255, 255, 255, 0.05);
-}
-
-.pas-summary-details {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    font-size: 0.78em;
-    color: var(--white70a, #c0c0c0);
-    padding: 2px 0 0 2px;
-}
-.pas-summary-detail {
-    display: inline-flex;
-    gap: 5px;
-    align-items: baseline;
-    background: rgba(0, 0, 0, 0.18);
-    padding: 1px 7px;
-    border-radius: 5px;
-}
-.pas-summary-key {
-    color: var(--SmartThemeQuoteColor, #b794f6);
-    font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.95em;
-}
-.pas-summary-arrow {
-    font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.95em;
-    opacity: 0.92;
-}
-.pas-summary-more {
-    color: var(--white50a, #888);
-    font-style: italic;
-}
-
-/* ============================================
- * 摘要：每行一条改动（人类可读）
- * ============================================ */
+/* =========================================================
+ * 修改摘要（卡片下方"每行一条改动"）
+ * ========================================================= */
 .pas-card-summary {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 2px;
     margin-top: 2px;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 .pas-summary-line {
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    font-size: 0.82em;
-    line-height: 1.55;
-    color: var(--SmartThemeBodyColor, #d8d8df);
+    font-size: 0.81em;
+    line-height: 1.5;
+    color: var(--pas-fg);
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: 3px;
     border-left: 2px solid transparent;
-    background: rgba(0, 0, 0, 0.14);
+    background: rgba(255, 255, 255, 0.025);
 }
 .pas-summary-line-icon {
     flex-shrink: 0;
@@ -182,114 +115,89 @@
 }
 .pas-summary-line-text b {
     font-weight: 600;
-    color: var(--SmartThemeQuoteColor, #d4b8ff);
+    color: var(--pas-accent);
 }
 .pas-summary-line-text code {
     font-family: 'SF Mono', Consolas, monospace;
     font-size: 0.92em;
     padding: 1px 5px;
-    background: rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.06);
     border-radius: 3px;
 }
-.pas-summary-line-text code.pas-summary-from {
-    color: rgba(248, 180, 180, 0.95);
-}
-.pas-summary-line-text code.pas-summary-to {
-    color: rgba(170, 230, 170, 0.95);
-}
+.pas-summary-line-text code.pas-summary-from { color: rgba(248, 180, 180, 0.95); }
+.pas-summary-line-text code.pas-summary-to   { color: rgba(170, 230, 170, 0.95); }
 .pas-summary-line-text .pas-summary-arrow {
-    opacity: 0.7;
+    opacity: 0.55;
     margin: 0 2px;
 }
 .pas-summary-line-text .pas-summary-fkey {
-    color: var(--SmartThemeQuoteColor, #b794f6);
+    color: var(--pas-accent);
     font-weight: 500;
 }
 .pas-summary-line-text .pas-summary-sep {
-    color: var(--white50a, #888);
+    color: var(--pas-fg-faint);
     margin: 0 2px;
 }
 .pas-summary-line-text .pas-summary-fmore {
-    color: var(--white50a, #888);
+    color: var(--pas-fg-faint);
     font-style: italic;
     margin-left: 4px;
     font-size: 0.92em;
 }
-/* 不同类型的左边框颜色 */
-.pas-summary-line-add {
-    border-left-color: rgba(34, 197, 94, 0.7);
-    background: rgba(34, 197, 94, 0.08);
-}
-.pas-summary-line-add .pas-summary-line-icon { color: rgba(74, 222, 128, 0.95); }
-.pas-summary-line-del {
-    border-left-color: rgba(239, 68, 68, 0.7);
-    background: rgba(239, 68, 68, 0.08);
-}
-.pas-summary-line-del .pas-summary-line-icon { color: rgba(248, 113, 113, 0.95); }
-.pas-summary-line-edit {
-    border-left-color: rgba(168, 85, 247, 0.7);
-    background: rgba(168, 85, 247, 0.08);
-}
-.pas-summary-line-edit .pas-summary-line-icon { color: rgba(192, 132, 252, 0.95); }
-.pas-summary-line-toggle-on {
-    border-left-color: rgba(34, 197, 94, 0.55);
-    background: rgba(34, 197, 94, 0.06);
-}
-.pas-summary-line-toggle-on .pas-summary-line-icon { color: rgba(74, 222, 128, 0.9); }
-.pas-summary-line-toggle-off {
-    border-left-color: rgba(120, 120, 120, 0.55);
-    background: rgba(0, 0, 0, 0.16);
-}
-.pas-summary-line-toggle-off .pas-summary-line-icon { color: rgba(180, 180, 180, 0.85); }
-.pas-summary-line-reorder {
-    border-left-color: rgba(14, 165, 233, 0.7);
-    background: rgba(14, 165, 233, 0.07);
-}
-.pas-summary-line-reorder .pas-summary-line-icon { color: rgba(56, 189, 248, 0.95); }
-.pas-summary-line-field {
-    border-left-color: rgba(99, 102, 241, 0.65);
-    background: rgba(99, 102, 241, 0.06);
-}
-.pas-summary-line-field .pas-summary-line-icon { color: rgba(165, 180, 252, 0.95); }
+
+/* 各类型左边框颜色（颜色区分 + 微底色） */
+.pas-summary-line-add        { border-left-color: var(--pas-c-add);    background: rgba(74, 222, 128, 0.06); }
+.pas-summary-line-add        .pas-summary-line-icon { color: var(--pas-c-add); }
+.pas-summary-line-del        { border-left-color: var(--pas-c-del);    background: rgba(248, 113, 113, 0.06); }
+.pas-summary-line-del        .pas-summary-line-icon { color: var(--pas-c-del); }
+.pas-summary-line-edit       { border-left-color: var(--pas-c-edit);   background: rgba(192, 132, 252, 0.06); }
+.pas-summary-line-edit       .pas-summary-line-icon { color: var(--pas-c-edit); }
+.pas-summary-line-toggle-on  { border-left-color: rgba(74, 222, 128, 0.55); background: rgba(74, 222, 128, 0.04); }
+.pas-summary-line-toggle-on  .pas-summary-line-icon { color: rgba(74, 222, 128, 0.9); }
+.pas-summary-line-toggle-off { border-left-color: rgba(180, 180, 180, 0.45); background: rgba(255, 255, 255, 0.02); }
+.pas-summary-line-toggle-off .pas-summary-line-icon { color: var(--pas-c-toggle); }
+.pas-summary-line-reorder    { border-left-color: var(--pas-c-info);   background: rgba(96, 165, 250, 0.06); }
+.pas-summary-line-reorder    .pas-summary-line-icon { color: var(--pas-c-info); }
+.pas-summary-line-field      { border-left-color: rgba(165, 180, 252, 0.55); background: rgba(99, 102, 241, 0.04); }
+.pas-summary-line-field      .pas-summary-line-icon { color: rgba(165, 180, 252, 0.95); }
+
 .pas-summary-more-line {
     font-size: 0.78em;
     font-style: italic;
-    color: var(--white50a, #888);
+    color: var(--pas-fg-faint);
     padding: 2px 8px 0 26px;
 }
-/* 紧凑摘要状态 */
 .pas-card-summary.pas-summary-empty,
 .pas-card-summary.pas-summary-first {
-    display: flex;
     flex-direction: row;
     align-items: center;
     gap: 6px;
-    font-size: 0.85em;
-    color: var(--white70a, #aaa);
+    font-size: 0.83em;
+    color: var(--pas-fg-muted);
     padding: 4px 8px;
-    background: rgba(0, 0, 0, 0.12);
-    border-radius: 4px;
-    border-left: 2px solid rgba(96, 165, 250, 0.5);
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 3px;
+    border-left: 2px solid rgba(96, 165, 250, 0.45);
 }
 .pas-card-summary.pas-summary-empty {
-    color: var(--white50a, #888);
-    border-left-color: rgba(120, 120, 120, 0.4);
+    color: var(--pas-fg-faint);
+    border-left-color: rgba(180, 180, 180, 0.32);
     font-style: italic;
 }
 .pas-card-summary.pas-summary-first {
-    color: rgba(96, 165, 250, 0.95);
-    border-left-color: rgba(96, 165, 250, 0.7);
+    color: rgba(96, 165, 250, 0.92);
+    border-left-color: rgba(96, 165, 250, 0.6);
 }
 
-/* ============================================
+/* =========================================================
  * 历史面板主体
- * ============================================ */
+ * ========================================================= */
 .pas-panel {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     min-height: 60vh;
-    color: var(--SmartThemeBodyColor, #e2e8f0);
+    color: var(--pas-fg);
     font-size: 14px;
 }
 
@@ -298,66 +206,136 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-bottom: 4px;
+    padding-bottom: 2px;
     flex-wrap: wrap;
     gap: 8px;
 }
 .pas-panel-title {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
 }
 .pas-panel-title h3 {
     margin: 0;
-    color: var(--SmartThemeQuoteColor, #b794f6);
-    font-size: 1.3em;
+    color: var(--pas-fg);
+    font-size: 1.15em;
+    font-weight: 600;
+    letter-spacing: 0.2px;
 }
 .pas-panel-title i {
-    color: var(--SmartThemeQuoteColor, #b794f6);
-    font-size: 1.2em;
+    color: var(--pas-accent);
+    font-size: 1em;
 }
 .pas-panel-stats {
-    color: var(--white50a, rgba(255,255,255,0.5));
-    font-size: 0.85em;
+    color: var(--pas-fg-faint);
+    font-size: 0.82em;
 }
 
 /* --- Tab 切换 --- */
 .pas-panel-tabs {
     display: flex;
-    gap: 2px;
-    border-bottom: 2px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    gap: 0;
+    border-bottom: 1px solid var(--pas-border);
 }
 .pas-tab {
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
-    padding: 10px 16px;
-    color: var(--SmartThemeBodyColor, #e2e8f0);
+    margin-bottom: -1px;
+    padding: 8px 14px;
+    color: var(--pas-fg-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 8px;
-    transition: all 0.2s ease;
-    font-size: 0.95em;
+    gap: 7px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    font-size: 0.92em;
     font-family: inherit;
 }
 .pas-tab:hover {
-    background: var(--white20a, rgba(255, 255, 255, 0.1));
+    color: var(--pas-fg);
 }
 .pas-tab-active {
-    color: var(--SmartThemeQuoteColor, #b794f6);
-    border-bottom-color: var(--SmartThemeQuoteColor, #b794f6);
+    color: var(--pas-accent);
+    border-bottom-color: var(--pas-accent);
 }
 .pas-tab-badge {
-    background: var(--SmartThemeQuoteColor, #b794f6);
-    color: white;
+    background: rgba(255, 255, 255, 0.10);
+    color: var(--pas-fg-muted);
     border-radius: 10px;
-    padding: 1px 8px;
-    font-size: 0.75em;
-    min-width: 20px;
+    padding: 1px 7px;
+    font-size: 0.72em;
+    min-width: 18px;
     text-align: center;
     font-weight: 500;
+}
+.pas-tab-active .pas-tab-badge {
+    background: var(--pas-accent);
+    color: white;
+}
+
+/* --- Diff 选择条（顶部状态栏） --- */
+.pas-diff-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius);
+    flex-wrap: wrap;
+    font-size: 0.85em;
+}
+.pas-diff-bar-label {
+    color: var(--pas-fg-muted);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pas-diff-bar-slot {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px dashed var(--pas-border-strong);
+    color: var(--pas-fg-faint);
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.92em;
+    min-width: 90px;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pas-diff-bar-slot.pas-diff-slot-set {
+    border-style: solid;
+    color: var(--pas-fg);
+    background: rgba(255, 255, 255, 0.03);
+}
+.pas-diff-bar-slot.pas-diff-slot-a.pas-diff-slot-set { border-color: var(--pas-c-a); color: var(--pas-c-a); }
+.pas-diff-bar-slot.pas-diff-slot-b.pas-diff-slot-set { border-color: var(--pas-c-b); color: var(--pas-c-b); }
+.pas-diff-bar-slot-tag {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75em;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+}
+.pas-diff-slot-a .pas-diff-bar-slot-tag { background: var(--pas-c-a); }
+.pas-diff-slot-b .pas-diff-bar-slot-tag { background: var(--pas-c-b); }
+.pas-diff-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
 }
 
 /* --- 主体 --- */
@@ -372,7 +350,7 @@
     display: none;
     flex: 1;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     overflow: hidden;
 }
 .pas-tab-content-active { display: flex; }
@@ -381,7 +359,7 @@
 .pas-toolbar {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     flex-shrink: 0;
 }
 .pas-list-actions {
@@ -392,67 +370,81 @@
 }
 .pas-mini-btn {
     background: transparent;
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
-    color: var(--SmartThemeBodyColor, #e2e8f0);
-    padding: 4px 10px;
-    border-radius: 14px;
-    font-size: 0.8em;
+    border: 1px solid var(--pas-border);
+    color: var(--pas-fg-muted);
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.78em;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
     display: inline-flex;
     align-items: center;
     gap: 5px;
     font-family: inherit;
+    line-height: 1.5;
 }
 .pas-mini-btn:hover {
-    background: var(--white20a, rgba(255,255,255,0.1));
-    border-color: var(--SmartThemeQuoteColor, #b794f6);
+    color: var(--pas-fg);
+    border-color: var(--pas-accent);
 }
-.pas-search-wrap {
-    position: relative;
+.pas-mini-btn-primary {
+    border-color: var(--pas-accent);
+    color: var(--pas-accent);
 }
+.pas-mini-btn-primary:hover {
+    background: var(--pas-accent);
+    color: white;
+}
+.pas-mini-btn[disabled] {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.pas-search-wrap { position: relative; }
 .pas-search-icon {
     position: absolute;
     left: 12px;
     top: 50%;
     transform: translateY(-50%);
-    color: var(--white50a, rgba(255,255,255,0.5));
+    color: var(--pas-fg-faint);
     pointer-events: none;
     font-size: 0.9em;
 }
-.pas-search {
-    width: 100%;
-    padding-left: 36px !important;
-}
+.pas-search { width: 100%; padding-left: 34px !important; }
+
 .pas-filters {
     display: flex;
-    gap: 6px;
+    gap: 5px;
     flex-wrap: wrap;
 }
 .pas-filter {
     background: transparent;
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
-    color: var(--SmartThemeBodyColor, #e2e8f0);
-    padding: 5px 12px;
-    border-radius: 16px;
-    font-size: 0.85em;
+    border: 1px solid var(--pas-border);
+    color: var(--pas-fg-muted);
+    padding: 4px 11px;
+    border-radius: 14px;
+    font-size: 0.83em;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
     display: inline-flex;
     align-items: center;
     gap: 5px;
     font-family: inherit;
 }
 .pas-filter:hover {
-    background: var(--white20a, rgba(255, 255, 255, 0.1));
+    color: var(--pas-fg);
+    border-color: var(--pas-border-strong);
 }
 .pas-filter-active {
-    background: var(--SmartThemeQuoteColor, #b794f6);
+    background: var(--pas-accent);
     color: white;
-    border-color: var(--SmartThemeQuoteColor, #b794f6);
+    border-color: var(--pas-accent);
 }
 
-/* --- 列表 --- */
+/* =========================================================
+ * 列表 / 预设分组
+ * ========================================================= */
 .pas-snapshot-list {
     flex: 1;
     overflow-y: auto;
@@ -461,56 +453,56 @@
 }
 .pas-snapshot-list::-webkit-scrollbar { width: 6px; }
 .pas-snapshot-list::-webkit-scrollbar-thumb {
-    background: var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    background: var(--pas-border-strong);
     border-radius: 3px;
 }
 
-/* --- 预设分组（折叠/展开） --- */
+/* 预设分组 */
 .pas-preset-group {
-    margin-bottom: 10px;
-    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.15));
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
-    border-radius: 8px;
+    margin-bottom: 8px;
+    background: var(--pas-bg-1);
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius);
     overflow: hidden;
-    transition: border-color 0.2s ease;
+    transition: border-color 0.15s ease;
 }
 .pas-preset-group.pas-preset-current {
-    border-color: rgba(245, 158, 11, 0.5);
-    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.15);
+    border-color: rgba(245, 158, 11, 0.45);
 }
 .pas-preset-group:hover {
-    border-color: var(--SmartThemeQuoteColor, #b794f6);
+    border-color: var(--pas-border-strong);
 }
+
 .pas-preset-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 14px;
+    padding: 8px 12px;
     cursor: pointer;
     user-select: none;
-    gap: 12px;
-    transition: background 0.15s ease;
+    gap: 10px;
+    transition: background 0.12s ease;
 }
 .pas-preset-header:hover {
-    background: var(--white20a, rgba(255,255,255,0.06));
+    background: var(--pas-bg-2);
 }
 .pas-preset-header-main {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     flex: 1;
     min-width: 0;
 }
 .pas-preset-chevron {
-    font-size: 0.8em;
-    color: var(--white50a, rgba(255,255,255,0.5));
-    width: 12px;
+    font-size: 0.75em;
+    color: var(--pas-fg-faint);
+    width: 10px;
     text-align: center;
-    transition: transform 0.2s ease;
+    transition: transform 0.15s ease;
 }
 .pas-preset-icon {
-    color: var(--SmartThemeQuoteColor, #b794f6);
-    font-size: 0.9em;
+    color: var(--pas-fg-muted);
+    font-size: 0.85em;
 }
 .pas-preset-name {
     font-weight: 600;
@@ -520,11 +512,11 @@
     min-width: 0;
 }
 .pas-preset-api {
-    background: var(--white20a, rgba(255,255,255,0.1));
-    color: var(--white50a, rgba(255,255,255,0.65));
-    padding: 1px 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--pas-fg-muted);
+    padding: 1px 7px;
     border-radius: 8px;
-    font-size: 0.7em;
+    font-size: 0.68em;
     font-family: 'Consolas', 'Monaco', monospace;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -533,54 +525,84 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 0.82em;
-    color: var(--white50a, rgba(255,255,255,0.5));
+    font-size: 0.78em;
+    color: var(--pas-fg-faint);
     flex-shrink: 0;
 }
 .pas-preset-count {
-    background: var(--SmartThemeQuoteColor, #b794f6);
-    color: white;
-    border-radius: 10px;
-    padding: 1px 8px;
-    font-size: 0.95em;
+    background: rgba(255, 255, 255, 0.10);
+    color: var(--pas-fg-muted);
+    border-radius: 9px;
+    padding: 1px 7px;
+    font-size: 1em;
     font-weight: 500;
-    min-width: 22px;
+    min-width: 20px;
     text-align: center;
+}
+.pas-preset-current .pas-preset-count {
+    background: var(--pas-c-pin);
+    color: white;
 }
 .pas-preset-size,
 .pas-preset-latest {
     font-family: 'Consolas', 'Monaco', monospace;
 }
 .pas-btn-clear-preset {
-    width: 26px !important;
-    height: 26px !important;
-    margin-left: 4px;
+    width: 24px !important;
+    height: 24px !important;
+    margin-left: 2px;
 }
 .pas-preset-body {
-    padding: 4px 10px 10px 10px;
-    border-top: 1px dashed var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    padding: 4px 8px 8px 8px;
+    border-top: 1px solid var(--pas-border);
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    background: rgba(0, 0, 0, 0.08);
+    gap: 5px;
+    background: rgba(0, 0, 0, 0.10);
 }
 
-/* --- 快照卡片（在预设组内） --- */
+/* =========================================================
+ * 快照卡片
+ * ========================================================= */
 .pas-card {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    padding: 8px 12px;
-    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.18));
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
-    border-radius: 6px;
-    transition: all 0.15s ease;
-    gap: 12px;
+    align-items: stretch;
+    padding: 7px 10px;
+    background: var(--pas-bg-1);
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius-sm);
+    transition: border-color 0.15s ease, background 0.15s ease;
+    gap: 10px;
+    position: relative;
 }
 .pas-card:hover {
-    border-color: var(--SmartThemeQuoteColor, #b794f6);
-    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.3));
+    border-color: var(--pas-border-strong);
+    background: var(--pas-bg-2);
 }
+
+/* 选中态：A / B（diff 对比） */
+.pas-card.pas-card-selected-a {
+    border-color: var(--pas-c-a);
+    background: rgba(59, 130, 246, 0.06);
+    box-shadow: inset 3px 0 0 var(--pas-c-a);
+}
+.pas-card.pas-card-selected-b {
+    border-color: var(--pas-c-b);
+    background: rgba(249, 115, 22, 0.06);
+    box-shadow: inset 3px 0 0 var(--pas-c-b);
+}
+
+/* pinned 态：黄色边框 + 微微高亮 */
+.pas-card.pas-card-pinned {
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.04);
+}
+.pas-card.pas-card-pinned.pas-card-selected-a,
+.pas-card.pas-card-pinned.pas-card-selected-b {
+    /* 选中优先于 pinned 视觉，但保留 pin 图标 */
+}
+
 .pas-card-main {
     flex: 1;
     min-width: 0;
@@ -591,134 +613,176 @@
 .pas-card-title-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
+    flex-wrap: wrap;
 }
-.pas-card-hash {
-    font-family: 'Consolas', 'Monaco', monospace;
-    font-size: 0.78em;
-    opacity: 0.7;
-}
-.pas-card-dot {
-    font-size: 0.5em;
-    color: var(--SmartThemeQuoteColor, #b794f6);
+.pas-card-pin-icon {
+    color: var(--pas-c-pin);
+    font-size: 0.85em;
     flex-shrink: 0;
 }
-.pas-card-name {
+.pas-card-name-custom {
+    color: var(--pas-accent);
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
-    min-width: 0;
+    max-width: 220px;
+}
+.pas-card-time {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.85em;
+    color: var(--pas-fg-muted);
+}
+.pas-card-name-custom + .pas-card-time {
+    color: var(--pas-fg-faint);
+    font-size: 0.78em;
+}
+.pas-card-hash {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.74em;
+    opacity: 0.55;
 }
 .pas-card-meta {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 0.82em;
-    color: var(--white50a, rgba(255,255,255,0.5));
+    font-size: 0.78em;
+    color: var(--pas-fg-faint);
     flex-wrap: wrap;
 }
-.pas-card-time {
-    font-family: 'Consolas', 'Monaco', monospace;
-}
+.pas-card-size { font-family: 'Consolas', 'Monaco', monospace; }
 .pas-divider { opacity: 0.4; }
 
-/* --- 标签 --- */
+/* --- 触发类型标签 --- */
 .pas-tag {
-    padding: 1px 8px;
-    border-radius: 10px;
-    font-size: 0.75em;
+    padding: 0 7px;
+    border-radius: 9px;
+    font-size: 0.7em;
     font-weight: 500;
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    height: 17px;
+    line-height: 1;
     white-space: nowrap;
+    letter-spacing: 0.2px;
 }
 .pas-tag-current {
-    background: linear-gradient(135deg, #fbbf24, #f59e0b);
+    background: var(--pas-c-pin);
     color: white;
-    box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
 }
 .pas-tag-auto {
-    background: rgba(59, 130, 246, 0.2);
-    color: #60a5fa;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: rgba(96, 165, 250, 0.14);
+    color: #93c5fd;
 }
 .pas-tag-switch_guard {
-    background: rgba(34, 197, 94, 0.2);
-    color: #4ade80;
-    border: 1px solid rgba(34, 197, 94, 0.3);
+    background: rgba(74, 222, 128, 0.14);
+    color: #86efac;
 }
 .pas-tag-manual {
-    background: rgba(168, 85, 247, 0.2);
-    color: #c084fc;
-    border: 1px solid rgba(168, 85, 247, 0.3);
+    background: rgba(192, 132, 252, 0.14);
+    color: #d8b4fe;
 }
 
 /* --- 卡片操作按钮 --- */
 .pas-card-actions {
     display: flex;
-    gap: 4px;
+    gap: 3px;
     flex-shrink: 0;
+    align-items: center;
 }
 .pas-btn-action {
     background: transparent;
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
-    color: var(--SmartThemeBodyColor, #e2e8f0);
-    width: 32px;
-    height: 32px;
-    border-radius: 6px;
+    border: 1px solid var(--pas-border);
+    color: var(--pas-fg-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: var(--pas-radius-sm);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     font-family: inherit;
+    font-size: 0.85em;
 }
 .pas-btn-action:hover {
-    background: var(--white20a, rgba(255,255,255,0.1));
-    border-color: var(--SmartThemeQuoteColor, #b794f6);
-    transform: scale(1.05);
+    color: var(--pas-fg);
+    border-color: var(--pas-border-strong);
+    background: var(--pas-bg-2);
 }
 .pas-btn-restore:hover {
-    background: rgba(34, 197, 94, 0.2);
-    border-color: #22c55e;
-    color: #4ade80;
+    border-color: var(--pas-c-add);
+    color: var(--pas-c-add);
 }
 .pas-btn-view:hover {
-    background: rgba(59, 130, 246, 0.2);
-    border-color: #3b82f6;
-    color: #60a5fa;
+    border-color: var(--pas-c-info);
+    color: var(--pas-c-info);
+}
+.pas-btn-rename:hover {
+    border-color: var(--pas-accent);
+    color: var(--pas-accent);
+}
+.pas-btn-pin:hover,
+.pas-btn-pin.pas-btn-pin-active {
+    border-color: var(--pas-c-pin);
+    color: var(--pas-c-pin);
+}
+.pas-btn-pin.pas-btn-pin-active {
+    background: rgba(245, 158, 11, 0.10);
+}
+.pas-btn-diff-a:hover,
+.pas-btn-diff-a.pas-btn-diff-active {
+    border-color: var(--pas-c-a);
+    color: var(--pas-c-a);
+}
+.pas-btn-diff-a.pas-btn-diff-active {
+    background: rgba(59, 130, 246, 0.10);
+}
+.pas-btn-diff-b:hover,
+.pas-btn-diff-b.pas-btn-diff-active {
+    border-color: var(--pas-c-b);
+    color: var(--pas-c-b);
+}
+.pas-btn-diff-b.pas-btn-diff-active {
+    background: rgba(249, 115, 22, 0.10);
 }
 .pas-btn-delete:hover {
-    background: rgba(239, 68, 68, 0.2);
-    border-color: #ef4444;
-    color: #ef4444;
+    border-color: var(--pas-c-del);
+    color: var(--pas-c-del);
+}
+.pas-btn-delete[disabled] {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
-/* ============================================
+/* =========================================================
  * 设置 Tab
- * ============================================ */
+ * ========================================================= */
 .pas-settings {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 14px;
     padding: 4px;
     overflow-y: auto;
     overflow-x: hidden;
 }
 .pas-settings-group {
-    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.15));
-    border-radius: 8px;
-    padding: 12px;
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    background: var(--pas-bg-1);
+    border-radius: var(--pas-radius);
+    padding: 10px 14px;
+    border: 1px solid var(--pas-border);
 }
 .pas-settings-group-title {
-    color: var(--SmartThemeQuoteColor, #b794f6);
-    font-size: 0.95em;
+    color: var(--pas-fg-muted);
+    font-size: 0.78em;
     font-weight: 600;
-    margin-bottom: 10px;
-    padding-bottom: 6px;
-    border-bottom: 1px dashed var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--pas-border);
 }
 .pas-settings-group-items {
     display: flex;
@@ -729,11 +793,11 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 0;
+    padding: 8px 0;
     gap: 12px;
 }
 .pas-setting-item + .pas-setting-item {
-    border-top: 1px dotted var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    border-top: 1px solid var(--pas-border);
 }
 .pas-setting-info {
     flex: 1;
@@ -741,11 +805,11 @@
 }
 .pas-setting-label {
     font-weight: 500;
-    margin-bottom: 2px;
+    margin-bottom: 1px;
 }
 .pas-setting-desc {
-    font-size: 0.82em;
-    color: var(--white50a, rgba(255,255,255,0.5));
+    font-size: 0.79em;
+    color: var(--pas-fg-faint);
     line-height: 1.4;
 }
 .pas-setting-input {
@@ -755,21 +819,21 @@
     flex-shrink: 0;
 }
 .pas-number-input {
-    width: 100px !important;
+    width: 90px !important;
     text-align: right;
 }
 .pas-setting-unit {
-    color: var(--white50a, rgba(255,255,255,0.5));
-    font-size: 0.85em;
-    min-width: 28px;
+    color: var(--pas-fg-faint);
+    font-size: 0.82em;
+    min-width: 24px;
 }
 
 /* --- 自定义开关 --- */
 .pas-switch {
     position: relative;
     display: inline-block;
-    width: 44px;
-    height: 24px;
+    width: 38px;
+    height: 20px;
     flex-shrink: 0;
 }
 .pas-switch input {
@@ -781,81 +845,72 @@
     position: absolute;
     cursor: pointer;
     top: 0; left: 0; right: 0; bottom: 0;
-    background-color: var(--white30a, rgba(255,255,255,0.2));
-    border-radius: 24px;
-    transition: 0.2s;
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 20px;
+    transition: background 0.15s ease;
 }
 .pas-switch-slider::before {
     content: "";
     position: absolute;
-    height: 18px;
-    width: 18px;
+    height: 14px;
+    width: 14px;
     left: 3px;
     bottom: 3px;
     background-color: white;
     border-radius: 50%;
-    transition: 0.2s;
+    transition: transform 0.15s ease;
 }
 .pas-switch input:checked + .pas-switch-slider {
-    background-color: var(--SmartThemeQuoteColor, #b794f6);
+    background-color: var(--pas-accent);
 }
 .pas-switch input:checked + .pas-switch-slider::before {
-    transform: translateX(20px);
+    transform: translateX(18px);
 }
 
-/* --- 设置底部按钮 --- */
-.pas-settings-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 12px;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-}
-
-/* ============================================
+/* =========================================================
  * 空状态
- * ============================================ */
+ * ========================================================= */
 .pas-empty {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 40px 20px;
-    color: var(--white50a, rgba(255,255,255,0.5));
-    gap: 10px;
+    color: var(--pas-fg-faint);
+    gap: 8px;
     text-align: center;
 }
 .pas-empty-icon {
-    font-size: 3em;
-    opacity: 0.4;
-    margin-bottom: 8px;
+    font-size: 2.4em;
+    opacity: 0.35;
+    margin-bottom: 4px;
 }
 .pas-empty-text {
-    font-size: 1.1em;
+    font-size: 1em;
     font-weight: 500;
     margin: 0;
 }
 .pas-empty-hint {
-    font-size: 0.85em;
+    font-size: 0.83em;
     opacity: 0.7;
     margin: 0;
 }
 
-/* ============================================
+/* =========================================================
  * 面板底部
- * ============================================ */
+ * ========================================================= */
 .pas-panel-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-top: 8px;
-    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    padding-top: 6px;
+    border-top: 1px solid var(--pas-border);
     flex-wrap: wrap;
     gap: 8px;
 }
 .pas-stats {
-    color: var(--white50a, rgba(255,255,255,0.5));
-    font-size: 0.85em;
+    color: var(--pas-fg-faint);
+    font-size: 0.82em;
 }
 .pas-footer-actions {
     display: flex;
@@ -863,21 +918,259 @@
     flex-wrap: wrap;
 }
 
-/* ============================================
+/* =========================================================
  * 查看 JSON 弹窗
- * ============================================ */
+ * ========================================================= */
 .pas-view-popup pre {
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
     line-height: 1.5;
 }
 
-/* ============================================
+/* =========================================================
+ * Diff 对比弹窗（modules/diff-viewer.js）
+ * ========================================================= */
+.pas-diff-popup {
+    color: var(--pas-fg);
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.pas-diff-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.pas-diff-header h4 {
+    margin: 0;
+    color: var(--pas-fg);
+    font-weight: 600;
+    font-size: 1.1em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pas-diff-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+.pas-diff-side-meta {
+    background: var(--pas-bg-1);
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius-sm);
+    padding: 6px 10px;
+    font-size: 0.85em;
+    line-height: 1.5;
+    overflow: hidden;
+}
+.pas-diff-side-meta-a { border-left: 3px solid var(--pas-c-a); }
+.pas-diff-side-meta-b { border-left: 3px solid var(--pas-c-b); }
+.pas-diff-side-meta-tag {
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 0.7em;
+    font-weight: 700;
+    color: white;
+    margin-right: 6px;
+    vertical-align: 1px;
+}
+.pas-diff-side-meta-a .pas-diff-side-meta-tag { background: var(--pas-c-a); }
+.pas-diff-side-meta-b .pas-diff-side-meta-tag { background: var(--pas-c-b); }
+.pas-diff-side-meta-name {
+    font-weight: 600;
+    color: var(--pas-fg);
+}
+.pas-diff-side-meta-time {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.92em;
+    color: var(--pas-fg-muted);
+    margin-left: 4px;
+}
+.pas-diff-side-meta-extra {
+    color: var(--pas-fg-faint);
+    font-size: 0.85em;
+    display: block;
+    margin-top: 2px;
+}
+
+/* Diff 工具栏 */
+.pas-diff-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 6px 8px;
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius-sm);
+    background: var(--pas-bg-1);
+}
+.pas-diff-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.85em;
+    color: var(--pas-fg-muted);
+    flex-wrap: wrap;
+}
+.pas-diff-counter {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.pas-diff-counter b { color: var(--pas-fg); }
+.pas-diff-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+
+/* Diff 主体 */
+.pas-diff-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: var(--pas-bg-1);
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius);
+    max-height: 64vh;
+}
+.pas-diff-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.pas-diff-body::-webkit-scrollbar-thumb {
+    background: var(--pas-border-strong);
+    border-radius: 4px;
+}
+
+.pas-diff-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) minmax(0, 2fr) minmax(0, 2fr);
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--pas-border);
+    align-items: flex-start;
+    font-size: 0.86em;
+    line-height: 1.45;
+}
+.pas-diff-row:last-child { border-bottom: 0; }
+.pas-diff-row:hover { background: rgba(255, 255, 255, 0.02); }
+
+.pas-diff-row-key {
+    color: var(--pas-fg-muted);
+    font-family: 'Consolas', 'Monaco', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-all;
+}
+.pas-diff-row-key b {
+    color: var(--pas-fg);
+    font-weight: 600;
+}
+.pas-diff-row-key-section {
+    color: var(--pas-fg-faint);
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.pas-diff-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.025);
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.92em;
+    min-height: 1.6em;
+}
+.pas-diff-cell-empty {
+    color: var(--pas-fg-faint);
+    font-style: italic;
+    font-family: inherit;
+    font-size: 0.92em;
+}
+.pas-diff-cell.pas-diff-cell-only-a {
+    background: rgba(59, 130, 246, 0.10);
+    border-left: 2px solid var(--pas-c-a);
+}
+.pas-diff-cell.pas-diff-cell-only-b {
+    background: rgba(249, 115, 22, 0.10);
+    border-left: 2px solid var(--pas-c-b);
+}
+.pas-diff-cell.pas-diff-cell-changed-a {
+    background: rgba(239, 68, 68, 0.08);
+    border-left: 2px solid var(--pas-c-del);
+}
+.pas-diff-cell.pas-diff-cell-changed-b {
+    background: rgba(74, 222, 128, 0.08);
+    border-left: 2px solid var(--pas-c-add);
+}
+
+/* Diff 分节标题（Settings / Prompts / Order） */
+.pas-diff-section-head {
+    grid-column: 1 / -1;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--pas-fg-muted);
+    font-size: 0.78em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    padding: 5px 12px;
+    border-bottom: 1px solid var(--pas-border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pas-diff-section-head i {
+    color: var(--pas-fg-faint);
+    font-size: 1em;
+}
+
+/* 仅显示差异时的"无差异"占位 */
+.pas-diff-no-changes {
+    padding: 32px 16px;
+    text-align: center;
+    color: var(--pas-fg-faint);
+    font-style: italic;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.pas-diff-no-changes i {
+    font-size: 2em;
+    opacity: 0.4;
+}
+
+/* 重命名内联输入 */
+.pas-rename-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.pas-rename-popup input {
+    width: 100%;
+}
+.pas-rename-popup-hint {
+    font-size: 0.85em;
+    color: var(--pas-fg-faint);
+}
+
+/* =========================================================
  * 日志 Tab
- * ============================================ */
+ * ========================================================= */
 .pas-log-toolbar {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     flex-shrink: 0;
 }
 .pas-log-actions {
@@ -891,194 +1184,150 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--white50a, rgba(255,255,255,0.65));
-    font-size: 0.85em;
+    color: var(--pas-fg-muted);
+    font-size: 0.83em;
     margin-right: auto;
     cursor: pointer;
     user-select: none;
 }
 .pas-log-autoscroll input {
-    width: 14px;
-    height: 14px;
+    width: 13px;
+    height: 13px;
     cursor: pointer;
-    accent-color: var(--SmartThemeQuoteColor, #b794f6);
+    accent-color: var(--pas-accent);
 }
 
 .pas-log-filter {
     background: transparent;
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
-    color: var(--SmartThemeBodyColor, #e2e8f0);
-    padding: 4px 12px;
-    border-radius: 14px;
-    font-size: 0.78em;
+    border: 1px solid var(--pas-border);
+    color: var(--pas-fg-muted);
+    padding: 3px 11px;
+    border-radius: 12px;
+    font-size: 0.74em;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
     font-family: 'Consolas', 'Monaco', monospace;
     letter-spacing: 0.5px;
     font-weight: 600;
 }
 .pas-log-filter:hover {
-    background: var(--white20a, rgba(255,255,255,0.1));
+    color: var(--pas-fg);
 }
 .pas-log-filter.pas-filter-active {
-    background: var(--SmartThemeQuoteColor, #b794f6);
+    background: var(--pas-accent);
     color: white;
-    border-color: var(--SmartThemeQuoteColor, #b794f6);
+    border-color: var(--pas-accent);
 }
 .pas-log-filter-debug.pas-filter-active { background: #94a3b8; border-color: #94a3b8; }
-.pas-log-filter-info.pas-filter-active  { background: #3b82f6; border-color: #3b82f6; }
-.pas-log-filter-warn.pas-filter-active  { background: #f59e0b; border-color: #f59e0b; color: #1a1a1a; }
-.pas-log-filter-error.pas-filter-active { background: #ef4444; border-color: #ef4444; }
+.pas-log-filter-info.pas-filter-active  { background: var(--pas-c-info); border-color: var(--pas-c-info); }
+.pas-log-filter-warn.pas-filter-active  { background: var(--pas-c-warn); border-color: var(--pas-c-warn); color: #1a1a1a; }
+.pas-log-filter-error.pas-filter-active { background: var(--pas-c-del);  border-color: var(--pas-c-del); }
 
 .pas-log-view {
     flex: 1;
     overflow-y: auto;
     overflow-x: auto;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
-    border-radius: 6px;
-    padding: 8px;
+    background: rgba(0, 0, 0, 0.30);
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius-sm);
+    padding: 6px;
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     font-size: 12px;
-    line-height: 1.6;
+    line-height: 1.55;
 }
 .pas-log-view::-webkit-scrollbar { width: 8px; height: 8px; }
 .pas-log-view::-webkit-scrollbar-thumb {
-    background: var(--SmartThemeBorderColor, rgba(255,255,255,0.2));
+    background: var(--pas-border-strong);
     border-radius: 4px;
 }
 .pas-log-row {
     display: flex;
     gap: 8px;
-    padding: 2px 4px;
-    border-bottom: 1px dotted rgba(255,255,255,0.05);
+    padding: 1px 4px;
+    border-bottom: 1px dotted rgba(255, 255, 255, 0.04);
     align-items: flex-start;
     word-break: break-word;
     white-space: pre-wrap;
 }
-.pas-log-row:hover {
-    background: rgba(255,255,255,0.04);
-}
+.pas-log-row:hover { background: rgba(255, 255, 255, 0.03); }
 .pas-log-time {
-    color: var(--white50a, rgba(255,255,255,0.45));
+    color: var(--pas-fg-faint);
     flex-shrink: 0;
     min-width: 100px;
 }
 .pas-log-level {
     flex-shrink: 0;
-    min-width: 56px;
-    padding: 0 6px;
-    border-radius: 3px;
+    min-width: 52px;
+    padding: 0 5px;
+    border-radius: 2px;
     font-size: 0.85em;
     font-weight: 700;
     text-align: center;
     align-self: flex-start;
 }
-.pas-log-level-debug   { color: #94a3b8; background: rgba(148, 163, 184, 0.12); }
-.pas-log-level-info    { color: #60a5fa; background: rgba(59, 130, 246, 0.15); }
-.pas-log-level-success { color: #4ade80; background: rgba(34, 197, 94, 0.15); }
-.pas-log-level-warn    { color: #fbbf24; background: rgba(245, 158, 11, 0.15); }
-.pas-log-level-error   { color: #f87171; background: rgba(239, 68, 68, 0.18); }
+.pas-log-level-debug   { color: #94a3b8; background: rgba(148, 163, 184, 0.10); }
+.pas-log-level-info    { color: var(--pas-c-info); background: rgba(96, 165, 250, 0.12); }
+.pas-log-level-success { color: var(--pas-c-add); background: rgba(74, 222, 128, 0.12); }
+.pas-log-level-warn    { color: var(--pas-c-warn); background: rgba(251, 191, 36, 0.12); }
+.pas-log-level-error   { color: var(--pas-c-del); background: rgba(248, 113, 113, 0.14); }
 
-.pas-log-row-error {
-    background: rgba(239, 68, 68, 0.06);
-}
-.pas-log-row-warn {
-    background: rgba(245, 158, 11, 0.05);
-}
+.pas-log-row-error { background: rgba(239, 68, 68, 0.05); }
+.pas-log-row-warn  { background: rgba(245, 158, 11, 0.04); }
 .pas-log-msg {
     flex: 1;
     min-width: 0;
-    color: var(--SmartThemeBodyColor, #e2e8f0);
+    color: var(--pas-fg);
 }
 
-/* ============================================
+/* =========================================================
  * 移动端适配
- * ============================================ */
+ * ========================================================= */
 @media (max-width: 768px) {
-    .pas-panel {
-        font-size: 13px;
-    }
+    .pas-panel { font-size: 13px; }
     .pas-card {
         flex-direction: column;
         align-items: stretch;
-        gap: 8px;
+        gap: 6px;
     }
     .pas-card-actions {
         justify-content: flex-end;
     }
-    .pas-tab span {
-        display: none;
-    }
-    .pas-tab {
-        padding: 10px 12px;
-    }
+    .pas-tab span { display: none; }
+    .pas-tab     { padding: 8px 10px; }
     .pas-setting-item {
         flex-direction: column;
         align-items: stretch;
     }
-    .pas-setting-input {
-        align-self: flex-end;
-    }
-    .pas-filter span {
-        display: none;
-    }
-    .pas-filters {
-        gap: 4px;
-    }
+    .pas-setting-input { align-self: flex-end; }
+    .pas-filter span   { display: none; }
+    .pas-filters { gap: 4px; }
     .pas-panel-footer {
         flex-direction: column;
         align-items: stretch;
     }
-    .pas-footer-actions {
-        justify-content: space-between;
+    .pas-footer-actions { justify-content: space-between; }
+    .pas-preset-header  {
+        flex-wrap: wrap;
+        gap: 6px;
     }
+    .pas-preset-header-main { flex: 1 1 100%; }
+    .pas-list-actions { justify-content: space-between; }
+    .pas-mini-btn span { display: none; }
+    .pas-log-actions .pas-mini-btn span { display: none; }
+    .pas-log-time { min-width: 88px; font-size: 0.85em; }
+
+    .pas-diff-meta { grid-template-columns: 1fr; }
+    .pas-diff-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+    .pas-diff-row-key { font-size: 0.85em; }
 }
 
 @media (max-width: 480px) {
-    .pas-card {
-        padding: 8px 10px;
-    }
-    .pas-card-meta {
-        font-size: 0.78em;
-    }
-    .pas-card-time {
-        font-size: 0.95em;
-    }
-    .pas-preset-header {
-        flex-wrap: wrap;
-    }
-    .pas-preset-header-meta {
-        flex-wrap: wrap;
-    }
-    .pas-log-time {
-        min-width: 80px;
-    }
-}
-
-/* 768px 适配下的预设组优化 */
-@media (max-width: 768px) {
-    .pas-preset-header {
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-    .pas-preset-header-main {
-        flex: 1 1 100%;
-    }
-    .pas-list-actions {
-        justify-content: space-between;
-    }
-    .pas-mini-btn span {
-        display: none;
-    }
-    .pas-log-actions .pas-mini-btn span {
-        display: none;
-    }
-    .pas-log-autoscroll span {
-        display: inline;
-    }
-    .pas-log-time {
-        min-width: 90px;
-        font-size: 0.85em;
-    }
+    .pas-card { padding: 7px 9px; }
+    .pas-card-meta { font-size: 0.74em; }
+    .pas-card-time { font-size: 0.92em; }
+    .pas-preset-header-meta { flex-wrap: wrap; }
+    .pas-log-time { min-width: 76px; }
 }

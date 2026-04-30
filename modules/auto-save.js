@@ -90,11 +90,15 @@ let _noChangeCount = 0;            // 连续无变化次数，用于日志降噪
 let _currentApiId = null;          // 当前跟踪的 API
 let _currentPresetName = null;     // 当前跟踪的预设名
 
-let _domHandlers = [];             // DOM 事件处理器记录
-let _settingUnsubscribe = null;    // 设置变更订阅
-let _eventUnsubscribers = [];      // ST 事件订阅取消函数集合
-let _promptObserver = null;        // Prompt Manager 区域 MutationObserver
-let _pollingTimer = null;          // 兜底轮询计时器
+// 容器级监听：只在 WATCH_SELECTORS 命中的元素上 bind input/change，
+// 而不是在整个 document 捕获。聊天框、其他扩展的输入完全不进入热路径。
+let _containerListeners = new Map();  // HTMLElement -> { input, change }
+let _containerObserver = null;        // 监听容器出现 / 消失，自动重绑
+let _containerRebindTimer = null;     // 节流定时器
+let _settingUnsubscribe = null;       // 设置变更订阅
+let _eventUnsubscribers = [];         // ST 事件订阅取消函数集合
+let _promptObserver = null;           // Prompt Manager 区域 MutationObserver
+let _pollingTimer = null;             // 兜底轮询计时器
 
 // 诊断/统计
 const _stats = {
@@ -143,10 +147,16 @@ export async function initAutoSave() {
     // 绑定 ST 事件（包含 SETTINGS_UPDATED + 切换/预设变更）
     bindPresetEvents();
 
-    // 监听设置变更（动态启用/禁用）
-    _settingUnsubscribe = onSettingChange(({ key }) => {
+    // 监听设置变更（动态启用/禁用 + polling 联动）
+    _settingUnsubscribe = onSettingChange(({ key, newValue }) => {
         if (key === 'enabled') {
             applyEnabledState();
+        } else if (key === 'fallbackPolling') {
+            if (newValue) {
+                if (_enabled) startPolling();
+            } else {
+                stopPolling();
+            }
         }
     });
 
@@ -182,26 +192,26 @@ function applyEnabledState() {
 }
 
 // =====================================================
-// 兜底轮询：每 N 秒检查一次预设内容的 hash 是否变化
-// 用于防止某些事件被跳过 / 未发出 SETTINGS_UPDATED 的 ST 版本
+// 兜底轮询（默认关闭 / 仅作为应急兜底）
+// 性能修复：原本 5 秒一次 hashPreset(getPresetSnapshot()) 会持续 CPU 工作；
+// 在事件 + DOM 容器监听已覆盖所有路径的情况下，polling 实际几乎没用，
+// 默认关闭，遇到诡异 ST 版本时再由 settings.fallbackPolling 手动启用。
 // =====================================================
-const POLLING_INTERVAL_MS = 5000;
+const POLLING_INTERVAL_MS = 15_000;            // 启用时的常规间隔
 const POLLING_INACTIVE_THRESHOLD_MS = 60_000;  // 60秒无操作后降为低频
-const POLLING_LOW_INTERVAL_MS = 30_000;        // 低频间隔 30 秒
+const POLLING_LOW_INTERVAL_MS = 60_000;        // 低频间隔
 let _lastUserActivity = Date.now();
 let _pollingMode = 'normal';                   // 'normal' | 'low'
 
 function markUserActive() {
     _lastUserActivity = Date.now();
-    if (_pollingMode === 'low' && _pollingTimer) {
-        // 切回正常频率
-        stopPolling();
-        startPolling();
-    }
 }
 
 function startPolling() {
     if (_pollingTimer) return;
+    // 默认关闭：只有用户在设置里显式开启 fallbackPolling 才启动
+    if (!getSettings().fallbackPolling) return;
+
     const idle = Date.now() - _lastUserActivity > POLLING_INACTIVE_THRESHOLD_MS;
     const interval = idle ? POLLING_LOW_INTERVAL_MS : POLLING_INTERVAL_MS;
     _pollingMode = idle ? 'low' : 'normal';
@@ -212,14 +222,8 @@ function startPolling() {
         if (_debounceTimer) return;
         // 标签页不可见时跳过——节省后台 CPU
         if (typeof document !== 'undefined' && document.hidden) return;
-
-        // 长时间无活动 → 降级到低频模式
-        const idleNow = Date.now() - _lastUserActivity > POLLING_INACTIVE_THRESHOLD_MS;
-        if (idleNow && _pollingMode === 'normal') {
-            stopPolling();
-            startPolling(); // 会以低频重启
-            return;
-        }
+        // 用户长时间无操作时直接跳过（不做 hash 计算）
+        if (Date.now() - _lastUserActivity > POLLING_INACTIVE_THRESHOLD_MS) return;
 
         try {
             const preset = getPresetSnapshot();
@@ -233,7 +237,7 @@ function startPolling() {
             logger.warn('Polling check failed:', e);
         }
     }, interval);
-    logger.debug(`Polling started (interval=${interval}ms, mode=${_pollingMode})`);
+    logger.debug(`Polling started (interval=${interval}ms)`);
 }
 
 function stopPolling() {
@@ -245,35 +249,101 @@ function stopPolling() {
 }
 
 // =====================================================
-// DOM 监听（事件委托）
+// DOM 监听（容器级 - 不再全文档监听）
 // =====================================================
+/**
+ * 关键性能修复：
+ * 旧实现把 input/change 监听绑在 document 上（捕获阶段），
+ * 用户在聊天框打字、其他扩展的任何输入都会进入热路径，
+ * 每个 keystroke 都要跑 closest() 上溯到 body —— CPU 显著拉高。
+ *
+ * 新实现只在 WATCH_SELECTORS 命中的容器元素上绑定监听器，
+ * 浏览器原生事件冒泡只会送达这些容器，完全不打扰其他元素。
+ *
+ * 容器在 SPA 中可能后加载/销毁，所以用 MutationObserver 在
+ * #form_sheld（设置面板根）下监听新出现/消失的容器并自动重绑。
+ */
 function bindDOMListeners() {
-    if (_domHandlers.length > 0) return;
+    if (_containerListeners.size > 0) return;
 
-    const handleInput = (event) => onElementInput(event);
-    const handleChange = (event) => onElementChange(event);
+    rebindContainers();
 
-    // 使用捕获阶段，确保即使被 stopPropagation 也能拿到
-    document.addEventListener('input', handleInput, true);
-    document.addEventListener('change', handleChange, true);
-
-    _domHandlers.push(
-        { type: 'input', handler: handleInput },
-        { type: 'change', handler: handleChange }
-    );
-
-    logger.debug('DOM listeners bound');
-}
-
-function unbindDOMListeners() {
-    for (const { type, handler } of _domHandlers) {
-        document.removeEventListener(type, handler, true);
+    // 容器观察器：监听 #form_sheld（设置面板根）下的子树变化
+    // 当目标容器被插入/移除时增量更新绑定
+    if (_containerObserver) return;
+    const root = document.querySelector('#form_sheld') || document.body;
+    try {
+        _containerObserver = new MutationObserver(() => {
+            // 节流：连续变化只触发一次重绑
+            if (_containerRebindTimer) return;
+            _containerRebindTimer = setTimeout(() => {
+                _containerRebindTimer = null;
+                rebindContainers();
+            }, 300);
+        });
+        _containerObserver.observe(root, { childList: true, subtree: true });
+    } catch (e) {
+        logger.warn('Failed to attach container observer:', e);
     }
-    _domHandlers = [];
+
+    logger.debug(`DOM listeners bound to ${_containerListeners.size} container(s)`);
 }
 
 /**
- * 判断元素是否在我们关心的区域内
+ * 扫描 WATCH_SELECTORS、将监听器绑到目标容器上（已绑过的跳过）。
+ * 同时清理已经从 DOM 中移除的容器对应的旧监听记录。
+ */
+function rebindContainers() {
+    const present = new Set();
+    for (const selector of WATCH_SELECTORS) {
+        let nodes;
+        try { nodes = document.querySelectorAll(selector); } catch (_) { continue; }
+        for (const node of nodes) {
+            present.add(node);
+            if (_containerListeners.has(node)) continue;
+            const handlers = {
+                input: (event) => onElementInput(event),
+                change: (event) => onElementChange(event),
+            };
+            // 冒泡阶段（false）：成本低且足够触达
+            node.addEventListener('input', handlers.input, false);
+            node.addEventListener('change', handlers.change, false);
+            _containerListeners.set(node, handlers);
+        }
+    }
+    // 清理已经离开 DOM 的容器
+    for (const [node, handlers] of _containerListeners) {
+        if (!present.has(node) || !node.isConnected) {
+            try {
+                node.removeEventListener('input', handlers.input, false);
+                node.removeEventListener('change', handlers.change, false);
+            } catch (_) {}
+            _containerListeners.delete(node);
+        }
+    }
+}
+
+function unbindDOMListeners() {
+    for (const [node, handlers] of _containerListeners) {
+        try {
+            node.removeEventListener('input', handlers.input, false);
+            node.removeEventListener('change', handlers.change, false);
+        } catch (_) {}
+    }
+    _containerListeners.clear();
+
+    if (_containerObserver) {
+        try { _containerObserver.disconnect(); } catch (_) {}
+        _containerObserver = null;
+    }
+    if (_containerRebindTimer) {
+        clearTimeout(_containerRebindTimer);
+        _containerRebindTimer = null;
+    }
+}
+
+/**
+ * 判断元素是否在我们关心的区域内（容器级监听后这只是双保险）
  */
 function isInWatchedArea(element) {
     if (!element || !element.closest) return false;
@@ -401,9 +471,19 @@ function onElementChange(event) {
  * 我们用 click 委托 + MutationObserver 来捕获它们，再调度保存。
  */
 let _pmClickHandler = null;
+let _pmClickHandlerTarget = null;     // 当前 click handler 绑定的目标节点
 function bindPromptManagerListeners() {
     if (_pmClickHandler || _promptObserver) return; // 幂等
-    // 文档级 click 委托（覆盖 popup 内 Save 按钮）
+
+    /**
+     * 性能修复：把 click 委托从 document 上移到 #completion_prompt_manager 容器上。
+     * 这样用户在聊天界面、其他扩展点击不会进入这个 handler。
+     *
+     * 同时**删除**了原来基于 attributes 的 MutationObserver——
+     * 它每次 prompt 行 class 切换都触发，是可观察到的性能损耗，
+     * 而且现在 click handler 已经覆盖了所有用户操作（toggle/add/delete）。
+     * 仅保留 childList observer 来捕获 SortableJS 拖拽排序这种纯 DOM 操作。
+     */
     const handler = (event) => {
         if (!_enabled || _ignoreInput || _isInternalSave) return;
 
@@ -421,9 +501,8 @@ function bindPromptManagerListeners() {
         }
 
         // Prompt 行上的"启用/禁用"切换、"删除"按钮等
-        const promptRow = target.closest('#completion_prompt_manager .completion_prompt_manager_prompt');
+        const promptRow = target.closest('.completion_prompt_manager_prompt');
         if (promptRow) {
-            // 仅在动作类元素上触发（避免点空白也保存）
             if (target.closest('.prompt-manager-toggle-action, .prompt-manager-detach-action, .prompt-manager-edit-action, [data-pm-action]')) {
                 _stats.triggeredByPrompt++;
                 logger.debug('[PromptManager] action button clicked');
@@ -439,50 +518,41 @@ function bindPromptManagerListeners() {
         }
     };
 
-    document.addEventListener('click', handler, true);
+    // 优先绑到 PromptManager 容器；找不到时回落到 #form_sheld（设置面板根）
+    const target = document.querySelector('#completion_prompt_manager')
+        || document.querySelector('#form_sheld')
+        || document.body;
+    target.addEventListener('click', handler, false);
     _pmClickHandler = handler;
+    _pmClickHandlerTarget = target;
 
-    // MutationObserver：监听 prompt 列表的 DOM 变化（拖拽排序、删除条目）
-    // 性能：单次 prompt 操作可能触发 4-8 次 mutation，这里用 RAF 节流到一次 schedule
+    // MutationObserver：仅监听 childList（拖拽排序 / 删除条目），
+    // 不监听 attributes（class 切换走 click handler 已覆盖，attributes
+    // observer 在 prompt 列表频繁 hover/选中时会被疯狂触发，是发热元凶之一）
     let _pmMutationPending = false;
     try {
         _promptObserver = new MutationObserver((mutations) => {
             if (!_enabled || _ignoreInput || _isInternalSave) return;
             if (_pmMutationPending) return;
 
-            // 快速判断有没有我们关心的 mutation（不打日志，节省 IO）
-            let kind = null;
+            // 快速过滤：只关心新增/删除节点
+            let hasChild = false;
             for (const m of mutations) {
                 if (m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length)) {
-                    kind = 'childList';
+                    hasChild = true;
                     break;
                 }
-                if (m.type === 'attributes' && m.attributeName === 'class') {
-                    const target = m.target;
-                    if (target && target.classList && (
-                        target.classList.contains('completion_prompt_manager_prompt') ||
-                        target.classList.contains('completion_prompt_manager_prompt_disabled') ||
-                        target.classList.contains('completion_prompt_manager_prompt_visible') ||
-                        target.classList.contains('completion_prompt_manager_prompt_invisible')
-                    )) {
-                        kind = 'class';
-                        break;
-                    }
-                }
             }
-            if (!kind) return;
+            if (!hasChild) return;
 
-            // 同一 tick 内的多个 mutation 节流为一次（合并 micro-task burst）
+            // 节流：同一 tick 内多个 mutation 合并为一次
             _pmMutationPending = true;
             queueMicrotask(() => {
                 _pmMutationPending = false;
                 if (!_enabled || _ignoreInput || _isInternalSave) return;
                 _stats.triggeredByPrompt++;
-                logger.debug(`[PromptManager] DOM mutation (${kind})`);
-                scheduleAutoSave(
-                    getSettings().debounceMs,
-                    kind === 'class' ? 'prompt-class' : 'prompt-mutation'
-                );
+                logger.debug('[PromptManager] DOM childList mutation');
+                scheduleAutoSave(getSettings().debounceMs, 'prompt-mutation');
             });
         });
 
@@ -493,8 +563,7 @@ function bindPromptManagerListeners() {
                     _promptObserver.observe(node, {
                         childList: true,
                         subtree: true,
-                        attributes: true,
-                        attributeFilter: ['class', 'data-pm-prompt'],
+                        // attributes: false  ← 关键：去掉，避免高频触发
                     });
                     logger.debug(`[PromptManager] observer attached to ${sel}`);
                 }
@@ -509,9 +578,10 @@ function bindPromptManagerListeners() {
 }
 
 function unbindPromptManagerListeners() {
-    if (_pmClickHandler) {
-        try { document.removeEventListener('click', _pmClickHandler, true); } catch (_) {}
+    if (_pmClickHandler && _pmClickHandlerTarget) {
+        try { _pmClickHandlerTarget.removeEventListener('click', _pmClickHandler, false); } catch (_) {}
         _pmClickHandler = null;
+        _pmClickHandlerTarget = null;
     }
     if (_promptObserver) {
         try { _promptObserver.disconnect(); } catch (_) {}

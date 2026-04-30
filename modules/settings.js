@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 
     // 高级
     debugMode: false,               // 启用详细日志
+    fallbackPolling: false,         // 兜底轮询（默认关闭，仅当事件触发不可靠时启用）
 });
 
 // =====================================================
@@ -58,6 +59,7 @@ const VALIDATORS = {
     showStatusIndicator: (v) => Boolean(v),
     notifyOnSave: (v) => Boolean(v),
     debugMode: (v) => Boolean(v),
+    fallbackPolling: (v) => Boolean(v),
 };
 
 function clamp(value, min, max) {

@@ -21,6 +21,7 @@ import {
     getStats, clearAll, trimOldSnapshots, cleanCorruptSnapshots,
     clearPresetHistory,
     exportAll, importAll,
+    renameSnapshot, togglePinSnapshot,
     TRIGGER_LABEL_KEYS, formatBytes,
 } from './history-store.js';
 import {
@@ -29,6 +30,7 @@ import {
     savePresetSafe, selectPresetSafe,
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
+import { showDiffPopup } from './diff-viewer.js';
 
 // =====================================================
 // 状态
@@ -45,6 +47,7 @@ const INITIAL_STATE = Object.freeze({
     search: '',
     snapshots: [],
     expandedPresets: null,    // Set<string> - 展开的预设 key（"<apiId>::<presetName>"）
+    diffSel: { a: null, b: null },  // 选中用于对比的两个 snapshot id
     log: {
         level: 'all',         // all | debug | info | success | warn | error
         search: '',
@@ -61,6 +64,7 @@ function newState() {
         search: '',
         snapshots: [],
         expandedPresets: new Set(),
+        diffSel: { a: null, b: null },
         log: { level: 'all', search: '', autoScroll: true },
     };
 }
@@ -213,12 +217,38 @@ function buildPanelHTML() {
                     <button class="pas-filter" data-filter="current" type="button">
                         <i class="fa-solid fa-bullseye"></i><span>${escapeHtml(t('Current Preset'))}</span>
                     </button>
+                    <button class="pas-filter" data-filter="pinned" type="button">
+                        <i class="fa-solid fa-thumbtack"></i><span>${escapeHtml(t('Filter Pinned'))}</span>
+                    </button>
                     <button class="pas-filter" data-filter="today" type="button">
                         <i class="fa-solid fa-calendar-day"></i><span>${escapeHtml(t('Today'))}</span>
                     </button>
                     <button class="pas-filter" data-filter="week" type="button">
                         <i class="fa-solid fa-calendar-week"></i><span>${escapeHtml(t('This Week'))}</span>
                     </button>
+                </div>
+                <div class="pas-diff-bar" id="pas-diff-bar">
+                    <span class="pas-diff-bar-label">
+                        <i class="fa-solid fa-code-compare"></i>
+                        ${escapeHtml(t('Diff Bar Label'))}
+                    </span>
+                    <span class="pas-diff-bar-slot pas-diff-slot-a" id="pas-diff-slot-a">
+                        <span class="pas-diff-bar-slot-tag">A</span>
+                        <span class="pas-diff-bar-slot-text">${escapeHtml(t('Diff Slot Empty'))}</span>
+                    </span>
+                    <span class="pas-diff-bar-slot pas-diff-slot-b" id="pas-diff-slot-b">
+                        <span class="pas-diff-bar-slot-tag">B</span>
+                        <span class="pas-diff-bar-slot-text">${escapeHtml(t('Diff Slot Empty'))}</span>
+                    </span>
+                    <span class="pas-diff-bar-actions">
+                        <button class="pas-mini-btn pas-mini-btn-primary pas-btn-start-diff" type="button" disabled>
+                            <i class="fa-solid fa-play"></i>
+                            <span>${escapeHtml(t('Diff Start'))}</span>
+                        </button>
+                        <button class="pas-mini-btn pas-btn-clear-diff" type="button" disabled title="${escapeAttr(t('Diff Clear'))}">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </span>
                 </div>
                 <div class="pas-list-actions">
                     <button class="pas-mini-btn pas-btn-expand-all" type="button" title="${escapeAttr(t('Expand All'))}">
@@ -352,6 +382,11 @@ function bindEvents() {
     // 列表事件委托
     const list = $('.pas-snapshot-list');
     if (list) list.addEventListener('click', handleListClick);
+
+    // diff 选择条
+    $('.pas-btn-start-diff')?.addEventListener('click', onStartDiff);
+    $('.pas-btn-clear-diff')?.addEventListener('click', () => onClearDiff());
+    updateDiffBar();
 
     // ----- 日志 Tab 事件 -----
     const logSearch = $('.pas-log-search');
@@ -531,6 +566,8 @@ function applyFiltersAndSearch(snapshots) {
         const name = getSelectedPresetName();
         const api = getCurrentApiId();
         result = result.filter(s => s.presetName === name && s.apiId === api);
+    } else if (_state.filter === 'pinned') {
+        result = result.filter(s => !!s.pinned);
     } else if (_state.filter === 'today') {
         const start = startOfToday();
         result = result.filter(s => s.timestamp >= start);
@@ -541,7 +578,11 @@ function applyFiltersAndSearch(snapshots) {
 
     if (_state.search) {
         const q = _state.search.toLowerCase();
-        result = result.filter(s => (s.presetName || '').toLowerCase().includes(q));
+        result = result.filter(s => {
+            if ((s.presetName || '').toLowerCase().includes(q)) return true;
+            if ((s.name || '').toLowerCase().includes(q)) return true;
+            return false;
+        });
     }
 
     return result;
@@ -562,12 +603,33 @@ function renderCard(s) {
     const triggerLabel = t(TRIGGER_LABEL_KEYS[s.trigger] || 'Trigger Auto');
     const id = escapeAttr(s.id);
     const summaryHtml = renderSummary(s.summary);
+    const isPinned = !!s.pinned;
+    const isA = _state.diffSel.a === s.id;
+    const isB = _state.diffSel.b === s.id;
+    const customName = (s.name || '').trim();
+
+    const cardCls = [
+        'pas-card',
+        isPinned ? 'pas-card-pinned' : '',
+        isA ? 'pas-card-selected-a' : '',
+        isB ? 'pas-card-selected-b' : '',
+    ].filter(Boolean).join(' ');
+
+    const pinTitle = isPinned ? t('Unpin Snapshot') : t('Pin Snapshot');
+    const aTitle = isA ? t('Diff Clear A') : t('Diff Set A');
+    const bTitle = isB ? t('Diff Clear B') : t('Diff Set B');
+
+    // 删除按钮：pinned 快照禁用
+    const deleteAttr = isPinned
+        ? `disabled title="${escapeAttr(t('Cannot Delete Pinned'))}"`
+        : `title="${escapeAttr(t('Delete'))}"`;
 
     return `
-<div class="pas-card" data-snapshot-id="${id}">
+<div class="${cardCls}" data-snapshot-id="${id}">
     <div class="pas-card-main">
         <div class="pas-card-title-row">
-            <i class="fa-solid fa-circle pas-card-dot"></i>
+            ${isPinned ? `<i class="fa-solid fa-thumbtack pas-card-pin-icon" title="${escapeAttr(t('Pinned'))}"></i>` : ''}
+            ${customName ? `<span class="pas-card-name-custom" title="${escapeAttr(customName)}">${escapeHtml(customName)}</span>` : ''}
             <span class="pas-card-time">${formatTime(s.timestamp)}</span>
             <span class="pas-tag pas-tag-${escapeAttr(s.trigger)}">${escapeHtml(triggerLabel)}</span>
         </div>
@@ -579,13 +641,25 @@ function renderCard(s) {
         </div>
     </div>
     <div class="pas-card-actions">
-        <button class="pas-btn-action pas-btn-restore" data-id="${id}" title="${escapeAttr(t('Restore'))}" type="button" aria-label="${escapeAttr(t('Restore'))}">
+        <button class="pas-btn-action pas-btn-diff-a ${isA ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-a" title="${escapeAttr(aTitle)}" type="button" aria-label="${escapeAttr(aTitle)}">
+            <span style="font-weight:700;font-size:0.85em;">A</span>
+        </button>
+        <button class="pas-btn-action pas-btn-diff-b ${isB ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-b" title="${escapeAttr(bTitle)}" type="button" aria-label="${escapeAttr(bTitle)}">
+            <span style="font-weight:700;font-size:0.85em;">B</span>
+        </button>
+        <button class="pas-btn-action pas-btn-rename" data-id="${id}" data-action="rename" title="${escapeAttr(t('Rename Snapshot'))}" type="button" aria-label="${escapeAttr(t('Rename Snapshot'))}">
+            <i class="fa-solid fa-pen"></i>
+        </button>
+        <button class="pas-btn-action pas-btn-pin ${isPinned ? 'pas-btn-pin-active' : ''}" data-id="${id}" data-action="pin" title="${escapeAttr(pinTitle)}" type="button" aria-label="${escapeAttr(pinTitle)}">
+            <i class="fa-solid fa-thumbtack"></i>
+        </button>
+        <button class="pas-btn-action pas-btn-restore" data-id="${id}" data-action="restore" title="${escapeAttr(t('Restore'))}" type="button" aria-label="${escapeAttr(t('Restore'))}">
             <i class="fa-solid fa-rotate-left"></i>
         </button>
-        <button class="pas-btn-action pas-btn-view" data-id="${id}" title="${escapeAttr(t('View'))}" type="button" aria-label="${escapeAttr(t('View'))}">
+        <button class="pas-btn-action pas-btn-view" data-id="${id}" data-action="view" title="${escapeAttr(t('View'))}" type="button" aria-label="${escapeAttr(t('View'))}">
             <i class="fa-solid fa-eye"></i>
         </button>
-        <button class="pas-btn-action pas-btn-delete" data-id="${id}" title="${escapeAttr(t('Delete'))}" type="button" aria-label="${escapeAttr(t('Delete'))}">
+        <button class="pas-btn-action pas-btn-delete" data-id="${id}" data-action="delete" ${deleteAttr} type="button" aria-label="${escapeAttr(t('Delete'))}">
             <i class="fa-solid fa-trash"></i>
         </button>
     </div>
@@ -998,18 +1072,177 @@ async function handleListClick(e) {
         return;
     }
 
-    // 2) 卡片操作按钮
+    // 2) 卡片操作按钮（按 data-action 分发）
     const btn = e.target.closest('.pas-btn-action');
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
 
     const id = btn.getAttribute('data-id');
+    const action = btn.getAttribute('data-action');
     if (!id) return;
 
-    if (btn.classList.contains('pas-btn-restore')) await onRestore(id);
-    else if (btn.classList.contains('pas-btn-view')) await onView(id);
-    else if (btn.classList.contains('pas-btn-delete')) await onDelete(id);
+    switch (action) {
+        case 'restore': await onRestore(id); break;
+        case 'view':    await onView(id);    break;
+        case 'delete':  await onDelete(id);  break;
+        case 'rename':  await onRename(id);  break;
+        case 'pin':     await onTogglePin(id); break;
+        case 'diff-a':  onSetDiff(id, 'a');  break;
+        case 'diff-b':  onSetDiff(id, 'b');  break;
+        default:
+            // 兼容旧 class 路由
+            if (btn.classList.contains('pas-btn-restore')) await onRestore(id);
+            else if (btn.classList.contains('pas-btn-view')) await onView(id);
+            else if (btn.classList.contains('pas-btn-delete')) await onDelete(id);
+    }
+}
+
+// =====================================================
+// 重命名 / 锁定 / Diff 选择
+// =====================================================
+async function onRename(snapshotId) {
+    const snapshot = await getSnapshotById(snapshotId);
+    if (!snapshot) return toast.error(t('Snapshot Not Found'));
+
+    const ctx = SillyTavern.getContext();
+    const current = (snapshot.name || '').trim();
+
+    let result;
+    try {
+        if (ctx.POPUP_TYPE && typeof ctx.POPUP_TYPE.INPUT !== 'undefined') {
+            const popup = new ctx.Popup(
+                `<div class="pas-rename-popup">
+                    <div><strong>${escapeHtml(t('Rename Snapshot'))}</strong></div>
+                    <div class="pas-rename-popup-hint">${escapeHtml(t('Rename Hint'))}</div>
+                </div>`,
+                ctx.POPUP_TYPE.INPUT,
+                current,
+                {
+                    okButton: t('Confirm'),
+                    cancelButton: t('Cancel'),
+                    rows: 1,
+                }
+            );
+            result = await popup.show();
+        } else {
+            result = window.prompt(t('Rename Snapshot'), current);
+        }
+    } catch (e) {
+        logger.warn('Rename input failed:', e);
+        return;
+    }
+
+    if (result === null || result === undefined || result === false) return; // 用户取消
+
+    const newName = String(result).trim().slice(0, 80);
+    const ok = await renameSnapshot(snapshotId, newName);
+    if (ok) {
+        toast.success(newName ? t('Rename Done') : t('Rename Cleared'));
+        await refreshData();
+    } else {
+        toast.error(t('Snapshot Not Found'));
+    }
+}
+
+async function onTogglePin(snapshotId) {
+    const snapshot = await getSnapshotById(snapshotId);
+    if (!snapshot) return toast.error(t('Snapshot Not Found'));
+    const next = !snapshot.pinned;
+    const result = await togglePinSnapshot(snapshotId, next);
+    if (result === null) return toast.error(t('Snapshot Not Found'));
+    toast.success(result ? t('Pinned Done') : t('Unpinned Done'));
+    await refreshData();
+}
+
+/**
+ * 设置 / 取消 diff 对比的 A 或 B 槽
+ * 同一 snapshot 重复点同一槽 = 取消
+ * 同一 snapshot 已被另一槽选中时 = 交换槽
+ */
+function onSetDiff(snapshotId, slot /* 'a' | 'b' */) {
+    if (slot !== 'a' && slot !== 'b') return;
+    const sel = _state.diffSel;
+
+    if (sel[slot] === snapshotId) {
+        sel[slot] = null;
+    } else if (sel.a === snapshotId && slot === 'b') {
+        sel.a = null;
+        sel.b = snapshotId;
+    } else if (sel.b === snapshotId && slot === 'a') {
+        sel.b = null;
+        sel.a = snapshotId;
+    } else {
+        sel[slot] = snapshotId;
+    }
+
+    updateDiffBar();
+    renderListTab();
+}
+
+function onClearDiff() {
+    _state.diffSel.a = null;
+    _state.diffSel.b = null;
+    updateDiffBar();
+    renderListTab();
+}
+
+async function onStartDiff() {
+    const { a, b } = _state.diffSel;
+    if (!a || !b) {
+        toast.warning(t('Diff Need Two'));
+        return;
+    }
+    const [snapA, snapB] = await Promise.all([
+        getSnapshotById(a),
+        getSnapshotById(b),
+    ]);
+    if (!snapA || !snapB) {
+        toast.error(t('Snapshot Not Found'));
+        return;
+    }
+    await showDiffPopup(snapA, snapB);
+}
+
+/**
+ * 同步顶部 diff 选择条的显示文本与按钮可用性
+ */
+function updateDiffBar() {
+    if (!_root) return;
+    const slotA = _root.querySelector('#pas-diff-slot-a');
+    const slotB = _root.querySelector('#pas-diff-slot-b');
+    const startBtn = _root.querySelector('.pas-btn-start-diff');
+    const clearBtn = _root.querySelector('.pas-btn-clear-diff');
+
+    const formatSlot = (slot, slotEl) => {
+        if (!slotEl) return;
+        const id = _state.diffSel[slot];
+        const text = slotEl.querySelector('.pas-diff-bar-slot-text');
+        if (!id) {
+            slotEl.classList.remove('pas-diff-slot-set');
+            if (text) text.textContent = t('Diff Slot Empty');
+            return;
+        }
+        const snap = _state.snapshots.find(s => s.id === id);
+        const label = snap
+            ? (snap.name?.trim() || formatTime(snap.timestamp))
+            : t('Diff Slot Empty');
+        slotEl.classList.add('pas-diff-slot-set');
+        if (text) text.textContent = label;
+    };
+    formatSlot('a', slotA);
+    formatSlot('b', slotB);
+
+    const ready = !!_state.diffSel.a && !!_state.diffSel.b;
+    if (startBtn) {
+        if (ready) startBtn.removeAttribute('disabled');
+        else startBtn.setAttribute('disabled', 'disabled');
+    }
+    if (clearBtn) {
+        const hasAny = !!_state.diffSel.a || !!_state.diffSel.b;
+        if (hasAny) clearBtn.removeAttribute('disabled');
+        else clearBtn.setAttribute('disabled', 'disabled');
+    }
 }
 
 async function onRestore(snapshotId) {
@@ -1256,6 +1489,7 @@ function renderSettingsTab() {
 
     ${group(t('Advanced Group'), [
         toggle('debugMode', t('Debug Mode'), t('Debug Mode Desc'), s.debugMode),
+        toggle('fallbackPolling', t('Fallback Polling'), t('Fallback Polling Desc'), s.fallbackPolling),
     ])}
 
     <div class="pas-settings-actions">

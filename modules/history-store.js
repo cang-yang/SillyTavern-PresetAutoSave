@@ -533,6 +533,30 @@ function isQuotaError(e) {
     );
 }
 
+/**
+ * 裁剪一个快照列表到上限，但保留所有 pinned 快照。
+ * 输入 list 假定已按时间倒序（最新在前），原地修改。
+ *
+ * 算法：
+ *   1) 把 pinned 快照按原顺序提取
+ *   2) 把非 pinned 也按原顺序提取，取前 (max - pinnedCount) 条
+ *   3) 重新合并并按 timestamp 倒序
+ *
+ * 极端情况：pinned 数量 ≥ max 时全部保留 pinned + 最新一条非 pinned，
+ * 避免锁定泛滥导致新快照立即被挤走（这通常说明用户应该提高上限了）。
+ */
+function trimListWithPinned(list, max) {
+    if (!Array.isArray(list) || list.length <= max) return list;
+    const pinned = list.filter(s => s && s.pinned);
+    const unpinned = list.filter(s => s && !s.pinned);
+    const keepUnpinnedCount = Math.max(1, max - pinned.length);
+    const keptUnpinned = unpinned.slice(0, keepUnpinnedCount);
+    const merged = [...pinned, ...keptUnpinned].sort((a, b) => b.timestamp - a.timestamp);
+    list.length = 0;
+    for (const s of merged) list.push(s);
+    return list;
+}
+
 // =====================================================
 // 核心: 添加快照
 // =====================================================
@@ -591,8 +615,9 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
     const summary = computeChangeSummary(previousSnapshot?.preset, preset);
 
     // 2. 合并窗口: 在窗口期内且触发类型相同 -> 替换最新
+    //    注意: 锁定（pinned）的快照永远不会被合并覆盖
     const mergeWindowMs = settings.mergeWindowSec * 1000;
-    if (mergeWindowMs > 0 && list.length > 0 && list[0].trigger === trigger) {
+    if (mergeWindowMs > 0 && list.length > 0 && list[0].trigger === trigger && !list[0].pinned) {
         const elapsed = now - list[0].timestamp;
         if (elapsed < mergeWindowMs) {
             // 合并时摘要应基于"被合并条之前的那一条"
@@ -624,15 +649,15 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
         hash,
         size,
         summary,
+        name: '',          // 用户自定义名（"跑通了！"等），默认空
+        pinned: false,     // 是否锁定（锁定的快照永不被自动清理/合并）
     };
 
     list.unshift(snapshot);
 
-    // 4. 按上限裁剪
+    // 4. 按上限裁剪（保留所有 pinned + 最新的非 pinned 直到上限）
     const max = settings.maxHistoryPerPreset;
-    if (list.length > max) {
-        list.length = max;
-    }
+    trimListWithPinned(list, max);
 
     await safeSetItem(key, list);
     const desc = describeSummaryForLog(summary);
@@ -701,8 +726,9 @@ async function emergencyCleanup() {
     for (const key of keys) {
         const list = (await _store.getItem(key)) || [];
         if (list.length > 10) {
-            removed += list.length - 10;
-            list.length = 10;
+            const before = list.length;
+            trimListWithPinned(list, 10);
+            removed += before - list.length;
             await _store.setItem(key, list);
         }
     }
@@ -859,15 +885,23 @@ export async function filterSnapshots(filter = {}) {
 // =====================================================
 /**
  * 删除单个快照
+ *
+ * 默认会拒绝删除 pinned 快照（返回 false 并打 warn）。
+ * 如果 UI 想强删（例如先解锁再删），传 force=true。
  */
-export async function deleteSnapshot(snapshotId) {
+export async function deleteSnapshot(snapshotId, options = {}) {
     await ensureStore();
     const keys = await getKeys();
+    const force = options && options.force === true;
 
     for (const key of keys) {
         const list = (await _store.getItem(key)) || [];
         const idx = list.findIndex(s => s.id === snapshotId);
         if (idx >= 0) {
+            if (list[idx].pinned && !force) {
+                logger.warn(`Refused to delete pinned snapshot: ${snapshotId}`);
+                return false;
+            }
             list.splice(idx, 1);
             if (list.length === 0) {
                 await _store.removeItem(key);
@@ -881,6 +915,58 @@ export async function deleteSnapshot(snapshotId) {
     }
 
     return false;
+}
+
+/**
+ * 重命名快照（自定义名字）
+ * @param {string} snapshotId
+ * @param {string} newName 空字符串表示清除自定义名
+ * @returns {Promise<boolean>}
+ */
+export async function renameSnapshot(snapshotId, newName) {
+    await ensureStore();
+    const keys = await getKeys();
+    const trimmed = (newName || '').toString().trim().slice(0, 80);
+
+    for (const key of keys) {
+        const list = (await _store.getItem(key)) || [];
+        const snap = list.find(s => s.id === snapshotId);
+        if (snap) {
+            if ((snap.name || '') === trimmed) return true;
+            snap.name = trimmed;
+            await _store.setItem(key, list);
+            invalidateKeysCache();
+            logger.debug(`Snapshot renamed: ${snapshotId} -> "${trimmed}"`);
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 切换快照的锁定状态
+ * @param {string} snapshotId
+ * @param {boolean} [pinned] 显式设置；省略则取反
+ * @returns {Promise<boolean|null>} 切换后的 pinned 状态；找不到时返回 null
+ */
+export async function togglePinSnapshot(snapshotId, pinned) {
+    await ensureStore();
+    const keys = await getKeys();
+
+    for (const key of keys) {
+        const list = (await _store.getItem(key)) || [];
+        const snap = list.find(s => s.id === snapshotId);
+        if (snap) {
+            const newVal = (typeof pinned === 'boolean') ? pinned : !snap.pinned;
+            if (snap.pinned === newVal) return newVal;
+            snap.pinned = newVal;
+            await _store.setItem(key, list);
+            invalidateKeysCache();
+            logger.debug(`Snapshot ${newVal ? 'pinned' : 'unpinned'}: ${snapshotId}`);
+            return newVal;
+        }
+    }
+    return null;
 }
 
 /**
@@ -943,7 +1029,7 @@ export async function cleanCorruptSnapshots() {
 }
 
 /**
- * 删除超过指定数量的旧快照（保留每预设最新的 N 条）
+ * 删除超过指定数量的旧快照（保留每预设最新的 N 条 + 所有 pinned）
  */
 export async function trimOldSnapshots(keepPerPreset = null) {
     await ensureStore();
@@ -954,19 +1040,20 @@ export async function trimOldSnapshots(keepPerPreset = null) {
     for (const key of keys) {
         const list = (await _store.getItem(key)) || [];
         if (list.length > keep) {
-            trimmed += list.length - keep;
-            list.length = keep;
+            const before = list.length;
+            trimListWithPinned(list, keep);
+            trimmed += before - list.length;
             await _store.setItem(key, list);
         }
     }
 
     invalidateKeysCache();
-    logger.info(`Trimmed ${trimmed} old snapshots (keep ${keep} per preset)`);
+    logger.info(`Trimmed ${trimmed} old snapshots (keep ${keep} per preset, pinned preserved)`);
     return trimmed;
 }
 
 /**
- * 删除超过指定天数的旧快照
+ * 删除超过指定天数的旧快照（pinned 永久保留）
  */
 export async function trimByAge(maxDays) {
     await ensureStore();
@@ -978,7 +1065,8 @@ export async function trimByAge(maxDays) {
 
     for (const key of keys) {
         const list = (await _store.getItem(key)) || [];
-        const filtered = list.filter(s => s.timestamp >= cutoff);
+        // pinned 永远不被按年龄裁剪
+        const filtered = list.filter(s => s.pinned || s.timestamp >= cutoff);
         if (filtered.length !== list.length) {
             trimmed += list.length - filtered.length;
             if (filtered.length === 0) {
@@ -990,7 +1078,7 @@ export async function trimByAge(maxDays) {
     }
 
     invalidateKeysCache();
-    logger.info(`Trimmed ${trimmed} snapshots older than ${maxDays} days`);
+    logger.info(`Trimmed ${trimmed} snapshots older than ${maxDays} days (pinned preserved)`);
     return trimmed;
 }
 
@@ -1091,16 +1179,19 @@ export async function importAll(payload, mode = 'merge') {
                 }
             }
             merged.sort((a, b) => b.timestamp - a.timestamp);
-            // 裁剪到设置的上限
+            // 裁剪到设置的上限（保留所有 pinned）
             if (merged.length > max) {
-                merged.length = max;
+                trimListWithPinned(merged, max);
             }
             await _store.setItem(key, merged);
         } else {
-            // replace 模式也裁剪
-            const sliced = list.slice(0, max);
-            await _store.setItem(key, sliced);
-            imported += sliced.length;
+            // replace 模式：先按 timestamp 倒序，再用 pinned-aware 裁剪
+            const ordered = [...list].sort((a, b) => b.timestamp - a.timestamp);
+            if (ordered.length > max) {
+                trimListWithPinned(ordered, max);
+            }
+            await _store.setItem(key, ordered);
+            imported += ordered.length;
         }
     }
 

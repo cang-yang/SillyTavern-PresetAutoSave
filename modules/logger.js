@@ -149,7 +149,22 @@ function formatArgs(args) {
     return msg;
 }
 
+/**
+ * 决定一条日志是否应该被记录到缓冲区
+ * - error / warn: 始终记录（这是问题排查的关键证据）
+ * - 其他级别（info/success/debug）: 仅在 _debugEnabled 时记录
+ *
+ * 这是一个重要的性能优化：debug 关闭时（默认状态）我们完全
+ * 不进行 formatArgs（涉及大对象 JSON.stringify）+ 不写缓冲 +
+ * 不调度持久化 + 不通知订阅者。整个链路在用户日常使用时为零开销。
+ */
+function shouldBuffer(level) {
+    if (level === 'error' || level === 'warn') return true;
+    return _debugEnabled;
+}
+
 function pushEntry(level, args) {
+    if (!shouldBuffer(level)) return null;
     const entry = {
         seq: ++_seq,
         ts: Date.now(),
@@ -244,34 +259,37 @@ export const logger = {
         if (_persistEnabled) persistNow();
     },
 
-    /** 普通信息（始终输出） */
+    /** 普通信息（debug 关闭时仅 console.log，不写缓冲） */
     info(...args) {
         console.log('%c' + PREFIX, STYLES.primary, ...args);
-        pushEntry('info', args);
+        if (_debugEnabled) pushEntry('info', args);
     },
 
     /** 成功提示 */
     success(...args) {
         console.log('%c' + PREFIX + ' ✓', STYLES.success, ...args);
-        pushEntry('success', args);
+        if (_debugEnabled) pushEntry('success', args);
     },
 
-    /** 调试信息（仅 debugMode 时打印到 console，但仍写入缓冲区） */
+    /**
+     * 调试信息
+     * 性能关键：debug 关闭时（默认状态）整个调用直接 return —
+     * 不调用 console.debug、不 formatArgs、不入缓冲。
+     * 这意味着代码里铺满 logger.debug(...) 也几乎零开销。
+     */
     debug(...args) {
-        if (_debugEnabled) {
-            console.debug('%c' + PREFIX, STYLES.debug, ...args);
-        }
-        // debug 也写缓冲，便于事后导出排查
+        if (!_debugEnabled) return;
+        console.debug('%c' + PREFIX, STYLES.debug, ...args);
         pushEntry('debug', args);
     },
 
-    /** 警告 */
+    /** 警告（始终记录到缓冲区） */
     warn(...args) {
         console.warn('%c' + PREFIX, STYLES.warn, ...args);
         pushEntry('warn', args);
     },
 
-    /** 错误 */
+    /** 错误（始终记录到缓冲区） */
     error(...args) {
         console.error('%c' + PREFIX, STYLES.error, ...args);
         pushEntry('error', args);
