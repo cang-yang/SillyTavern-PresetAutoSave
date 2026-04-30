@@ -126,9 +126,17 @@ function hasInjected() {
 // 历史按钮注入
 // =====================================================
 function injectHistoryButtons() {
-    const selects = document.querySelectorAll('select[data-preset-manager-for]');
+    let selects;
+    try {
+        selects = document.querySelectorAll('select[data-preset-manager-for]');
+    } catch (_) {
+        return;
+    }
 
     for (const select of selects) {
+        // 防御：select 已被脱离 DOM
+        if (!select || !select.isConnected) continue;
+
         const apiIds = (select.getAttribute('data-preset-manager-for') || '')
             .split(',').map(s => s.trim()).filter(Boolean);
         const apiId = apiIds[0] || 'openai';
@@ -143,10 +151,13 @@ function injectHistoryButtons() {
             continue;
         }
 
-        const btn = createHistoryButton(apiId, btnId);
-        container.appendChild(btn);
-
-        logger.debug(`History button injected: [${apiId}]`);
+        try {
+            const btn = createHistoryButton(apiId, btnId);
+            container.appendChild(btn);
+            logger.debug(`History button injected: [${apiId}]`);
+        } catch (e) {
+            logger.warn(`Failed to inject history button for ${apiId}:`, e);
+        }
     }
 }
 
@@ -211,9 +222,17 @@ function createHistoryButton(apiId, btnId) {
 // 状态指示器注入
 // =====================================================
 function injectStatusDots() {
-    const selects = document.querySelectorAll('select[data-preset-manager-for]');
+    let selects;
+    try {
+        selects = document.querySelectorAll('select[data-preset-manager-for]');
+    } catch (_) {
+        return;
+    }
 
     for (const select of selects) {
+        // 防御：select 已脱离 DOM 或父节点不存在
+        if (!select || !select.isConnected || !select.parentNode) continue;
+
         const apiIds = (select.getAttribute('data-preset-manager-for') || '')
             .split(',').map(s => s.trim()).filter(Boolean);
         const apiId = apiIds[0] || 'openai';
@@ -221,12 +240,14 @@ function injectStatusDots() {
         const dotId = STATUS_DOT_ID_PREFIX + apiId;
         if (document.getElementById(dotId)) continue;
 
-        const dot = createStatusDot(apiId, dotId);
-
-        // 插入到 select 之前
-        select.parentNode.insertBefore(dot, select);
-
-        logger.debug(`Status dot injected: [${apiId}]`);
+        try {
+            const dot = createStatusDot(apiId, dotId);
+            // 插入到 select 之前
+            select.parentNode.insertBefore(dot, select);
+            logger.debug(`Status dot injected: [${apiId}]`);
+        } catch (e) {
+            logger.warn(`Failed to inject status dot for ${apiId}:`, e);
+        }
     }
 }
 

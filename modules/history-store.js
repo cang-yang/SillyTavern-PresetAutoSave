@@ -605,7 +605,14 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
     const size = presetStr.length;
 
     // 1. 去重: 与最新一条相同则跳过
-    if (settings.skipUnchangedSave && list.length > 0 && list[0].hash === hash) {
+    //   manual trigger 不受 skipUnchangedSave 限制 —— 用户明确要求"立即快照"时
+    //   不应该被静默跳过（resetLastSavedHash 已重置内部 hash，但 store 层也应放行）
+    if (
+        settings.skipUnchangedSave
+        && trigger !== TRIGGER.MANUAL
+        && list.length > 0
+        && list[0].hash === hash
+    ) {
         logger.debug(`Snapshot skipped (unchanged): ${presetName}`);
         return null;
     }
@@ -755,15 +762,14 @@ export async function getSnapshots(apiId, presetName) {
 export async function getAllSnapshots() {
     await ensureStore();
     const keys = await getKeys();
+    if (!keys || keys.length === 0) return [];
+
+    // 性能优化：并行 getItem，IndexedDB 内部能 batch IO
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
     const all = [];
-
-    for (const key of keys) {
-        const list = await _store.getItem(key);
-        if (Array.isArray(list)) {
-            all.push(...list);
-        }
+    for (const list of lists) {
+        if (Array.isArray(list)) all.push(...list);
     }
-
     return all.sort((a, b) => b.timestamp - a.timestamp);
 }
 
@@ -773,14 +779,15 @@ export async function getAllSnapshots() {
 export async function getSnapshotById(snapshotId) {
     await ensureStore();
     const keys = await getKeys();
+    if (!keys || keys.length === 0) return null;
 
-    for (const key of keys) {
-        const list = await _store.getItem(key);
+    // 性能优化：并行查询，更快返回
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    for (const list of lists) {
         if (!Array.isArray(list)) continue;
         const found = list.find(s => s.id === snapshotId);
         if (found) return found;
     }
-
     return null;
 }
 
@@ -791,12 +798,14 @@ export async function getSnapshotById(snapshotId) {
 export async function getPresetList() {
     await ensureStore();
     const keys = await getKeys();
-    const result = [];
+    if (!keys || keys.length === 0) return [];
 
-    for (const key of keys) {
-        const parsed = parseKey(key);
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const result = [];
+    for (let i = 0; i < keys.length; i++) {
+        const parsed = parseKey(keys[i]);
         if (!parsed) continue;
-        const list = await _store.getItem(key);
+        const list = lists[i];
         if (Array.isArray(list) && list.length > 0) {
             result.push({
                 apiId: parsed.apiId,
@@ -807,7 +816,6 @@ export async function getPresetList() {
             });
         }
     }
-
     return result.sort((a, b) => b.latest - a.latest);
 }
 
@@ -1004,8 +1012,10 @@ export async function cleanCorruptSnapshots() {
     let cleaned = 0;
     let scanned = 0;
 
-    for (const key of keys) {
-        const list = (await _store.getItem(key)) || [];
+    // 性能优化：并行读取，但写入仍按顺序避免并发冲突
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    for (let i = 0; i < keys.length; i++) {
+        const list = lists[i] || [];
         scanned += list.length;
         const filtered = list.filter(s => {
             if (!s || !s.preset || typeof s.preset !== 'object') return false;
@@ -1016,9 +1026,9 @@ export async function cleanCorruptSnapshots() {
         if (removed > 0) {
             cleaned += removed;
             if (filtered.length === 0) {
-                await _store.removeItem(key);
+                await _store.removeItem(keys[i]);
             } else {
-                await _store.setItem(key, filtered);
+                await _store.setItem(keys[i], filtered);
             }
         }
     }
@@ -1037,13 +1047,15 @@ export async function trimOldSnapshots(keepPerPreset = null) {
     const keys = await getKeys(true);
     let trimmed = 0;
 
-    for (const key of keys) {
-        const list = (await _store.getItem(key)) || [];
+    // 性能优化：并行读取
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    for (let i = 0; i < keys.length; i++) {
+        const list = lists[i] || [];
         if (list.length > keep) {
             const before = list.length;
             trimListWithPinned(list, keep);
             trimmed += before - list.length;
-            await _store.setItem(key, list);
+            await _store.setItem(keys[i], list);
         }
     }
 
@@ -1063,16 +1075,18 @@ export async function trimByAge(maxDays) {
     const keys = await getKeys(true);
     let trimmed = 0;
 
-    for (const key of keys) {
-        const list = (await _store.getItem(key)) || [];
+    // 性能优化：并行读取
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    for (let i = 0; i < keys.length; i++) {
+        const list = lists[i] || [];
         // pinned 永远不被按年龄裁剪
         const filtered = list.filter(s => s.pinned || s.timestamp >= cutoff);
         if (filtered.length !== list.length) {
             trimmed += list.length - filtered.length;
             if (filtered.length === 0) {
-                await _store.removeItem(key);
+                await _store.removeItem(keys[i]);
             } else {
-                await _store.setItem(key, filtered);
+                await _store.setItem(keys[i], filtered);
             }
         }
     }
@@ -1096,12 +1110,17 @@ export async function getStats() {
     }
 
     const keys = await getKeys();
+    if (!keys || keys.length === 0) {
+        return { snapshotCount: 0, presetCount: 0, totalSize: 0, totalSizeFormatted: '0 B' };
+    }
+
+    // 性能优化：并行获取
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
     let snapshotCount = 0;
     let totalSize = 0;
     let presetCount = 0;
 
-    for (const key of keys) {
-        const list = await _store.getItem(key);
+    for (const list of lists) {
         if (Array.isArray(list) && list.length > 0) {
             presetCount++;
             snapshotCount += list.length;
@@ -1129,10 +1148,13 @@ export async function exportAll() {
     await ensureStore();
     const keys = await getKeys();
     const data = {};
+    if (!keys || keys.length === 0) {
+        return { version: 1, exportedAt: Date.now(), data };
+    }
 
-    for (const key of keys) {
-        const list = await _store.getItem(key);
-        if (list) data[key] = list;
+    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    for (let i = 0; i < keys.length; i++) {
+        if (lists[i]) data[keys[i]] = lists[i];
     }
 
     return {
@@ -1165,11 +1187,21 @@ export async function importAll(payload, mode = 'merge') {
     const max = getSettings().maxHistoryPerPreset;
     let imported = 0;
 
-    for (const [key, list] of Object.entries(payload.data)) {
-        if (!Array.isArray(list)) continue;
+    // 性能优化：merge 模式下并行读取已有列表
+    const entries = Object.entries(payload.data).filter(([_, v]) => Array.isArray(v));
+    const existingMap = new Map();
+    if (mode === 'merge' && entries.length > 0) {
+        const existingLists = await Promise.all(
+            entries.map(([k]) => _store.getItem(k).catch(() => null))
+        );
+        for (let i = 0; i < entries.length; i++) {
+            existingMap.set(entries[i][0], Array.isArray(existingLists[i]) ? existingLists[i] : []);
+        }
+    }
 
+    for (const [key, list] of entries) {
         if (mode === 'merge') {
-            const existing = (await _store.getItem(key)) || [];
+            const existing = existingMap.get(key) || [];
             const existingIds = new Set(existing.map(s => s.id));
             const merged = [...existing];
             for (const snap of list) {

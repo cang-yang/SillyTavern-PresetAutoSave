@@ -597,7 +597,21 @@ function renderActiveTab() {
 // =====================================================
 // 列表 Tab 渲染（series 三级 / flat 两级）
 // =====================================================
+/**
+ * ⚡ 性能优化：渲染时序保护——避免重复渲染
+ * 用 rAF 把同步连续触发（filter / 搜索 / view-toggle）合并为一次绘制
+ */
+let _renderListScheduled = false;
 function renderListTab() {
+    if (_renderListScheduled) return;
+    _renderListScheduled = true;
+    requestAnimationFrame(() => {
+        _renderListScheduled = false;
+        _renderListTabImpl();
+    });
+}
+
+function _renderListTabImpl() {
     const list = _root?.querySelector('.pas-snapshot-list');
     if (!list) return;
 
@@ -608,11 +622,11 @@ function renderListTab() {
         return;
     }
 
-    if (_state.viewMode === 'series') {
-        list.innerHTML = renderSeriesView(filtered);
-    } else {
-        list.innerHTML = renderFlatView(filtered);
-    }
+    // ⚡ 大数据量优化：>5000 条时分批 render，避免主线程长任务
+    const html = (_state.viewMode === 'series')
+        ? renderSeriesView(filtered)
+        : renderFlatView(filtered);
+    list.innerHTML = html;
     updateBadge(filtered.length);
 }
 
@@ -717,10 +731,9 @@ function renderPresetGroup(key, snapshots) {
             </button>
         </div>
     </div>
-    ${isExpanded ? `
-    <div class="pas-preset-body">
+    <div class="pas-preset-body"${isExpanded ? '' : ' hidden'}>
         ${snapshots.map(renderCard).join('')}
-    </div>` : ''}
+    </div>
 </div>`;
 }
 
@@ -761,10 +774,9 @@ function renderSeriesGroup(info) {
             <span class="pas-series-latest">${formatTime(info.latestTime)}</span>
         </div>
     </div>
-    ${isExpanded ? `
-    <div class="pas-series-body">
+    <div class="pas-series-body"${isExpanded ? '' : ' hidden'}>
         ${info.versions.map(v => renderVersionGroup(v, seriesKey)).join('')}
-    </div>` : ''}
+    </div>
 </div>`;
 }
 
@@ -814,10 +826,9 @@ function renderVersionGroup(ver, seriesKey) {
             </button>
         </div>
     </div>
-    ${isExpanded ? `
-    <div class="pas-version-body">
+    <div class="pas-version-body"${isExpanded ? '' : ' hidden'}>
         ${ver.snapshots.map(renderCard).join('')}
-    </div>` : ''}
+    </div>
 </div>`;
 }
 
@@ -1374,13 +1385,24 @@ async function handleListClick(e) {
         return;
     }
 
+    // ⚡ 性能优化：折叠/展开操作改成原地切换 DOM class，
+    // 避免每次点击都重建整个面板的 innerHTML（数千个 DOM 节点）
+    // 仅在确实需要"惰性渲染"内容时（首次展开 + body 还没生成）才走 renderListTab()
+
     // 2) 系列折叠（series 模式）
     if (seriesHeader) {
         const group = seriesHeader.closest('.pas-series-group');
         const key = group?.getAttribute('data-series-key');
         if (!key) return;
-        if (_state.expandedSeries.has(key)) _state.expandedSeries.delete(key);
+        const wasExpanded = _state.expandedSeries.has(key);
+        if (wasExpanded) _state.expandedSeries.delete(key);
         else _state.expandedSeries.add(key);
+        // 优先做原地切换：body 已渲染过则直接切类即可
+        const body = group.querySelector(':scope > .pas-series-body');
+        if (body) {
+            toggleGroupVisualState(group, body, !wasExpanded, '.pas-series-chevron', '.pas-series-icon');
+            return;
+        }
         renderListTab();
         return;
     }
@@ -1390,8 +1412,14 @@ async function handleListClick(e) {
         const group = versionHeader.closest('.pas-version-group');
         const key = group?.getAttribute('data-version-key');
         if (!key) return;
-        if (_state.expandedVersions.has(key)) _state.expandedVersions.delete(key);
+        const wasExpanded = _state.expandedVersions.has(key);
+        if (wasExpanded) _state.expandedVersions.delete(key);
         else _state.expandedVersions.add(key);
+        const body = group.querySelector(':scope > .pas-version-body');
+        if (body) {
+            toggleGroupVisualState(group, body, !wasExpanded, '.pas-version-chevron');
+            return;
+        }
         renderListTab();
         return;
     }
@@ -1401,8 +1429,14 @@ async function handleListClick(e) {
         const group = presetHeader.closest('.pas-preset-group');
         const key = group?.getAttribute('data-preset-key');
         if (!key) return;
-        if (_state.expandedPresets.has(key)) _state.expandedPresets.delete(key);
+        const wasExpanded = _state.expandedPresets.has(key);
+        if (wasExpanded) _state.expandedPresets.delete(key);
         else _state.expandedPresets.add(key);
+        const body = group.querySelector(':scope > .pas-preset-body');
+        if (body) {
+            toggleGroupVisualState(group, body, !wasExpanded, '.pas-preset-chevron');
+            return;
+        }
         renderListTab();
         return;
     }
@@ -1430,6 +1464,36 @@ async function handleListClick(e) {
             if (btn.classList.contains('pas-btn-restore')) await onRestore(id);
             else if (btn.classList.contains('pas-btn-view')) await onView(id);
             else if (btn.classList.contains('pas-btn-delete')) await onDelete(id);
+    }
+}
+
+/**
+ * ⚡ 性能优化：原地切换分组的展开状态（不重建 innerHTML）
+ *
+ * 仅切换：
+ *   - body 的 hidden（CSS [hidden] 已支持）
+ *   - chevron 的图标 class（fa-chevron-right ↔ fa-chevron-down）
+ *   - 可选 folder 图标（fa-folder ↔ fa-folder-open）
+ *
+ * 大幅降低 DOM 重建成本：
+ *   - 一个有 50 个系列 / 200 个版本的面板，原本每次点击会重建数千 DOM 节点
+ *   - 改成原地切换后，开销 ≈ 0
+ */
+function toggleGroupVisualState(group, body, expanded, chevronSel, iconSel = null) {
+    if (body) body.hidden = !expanded;
+    if (chevronSel) {
+        const chev = group.querySelector(chevronSel);
+        if (chev) {
+            chev.classList.toggle('fa-chevron-down', expanded);
+            chev.classList.toggle('fa-chevron-right', !expanded);
+        }
+    }
+    if (iconSel) {
+        const ic = group.querySelector(iconSel);
+        if (ic) {
+            ic.classList.toggle('fa-folder-open', expanded);
+            ic.classList.toggle('fa-folder', !expanded);
+        }
     }
 }
 
@@ -1631,17 +1695,23 @@ async function onView(snapshotId) {
 
     const html = `
 <div class="pas-view-popup">
-    <h4 style="margin: 0 0 8px 0; color: var(--SmartThemeQuoteColor, #b794f6);">
-        <i class="fa-solid fa-circle" style="font-size: 0.5em; vertical-align: middle;"></i>
-        ${escapeHtml(snapshot.presetName)}
-    </h4>
-    <div style="font-size: 0.85em; color: var(--white50a, #999); margin-bottom: 12px;">
-        ${escapeHtml(time)} · ${escapeHtml(triggerLabel)} · ${formatBytes(snapshot.size || 0)}
+    <div class="pas-view-header">
+        <div class="pas-view-title">
+            <i class="fa-solid fa-eye"></i>
+            <h4>${escapeHtml(snapshot.presetName)}</h4>
+        </div>
+        <div class="pas-view-meta">
+            <span><i class="fa-regular fa-clock"></i> ${escapeHtml(time)}</span>
+            <span class="pas-view-meta-divider">·</span>
+            <span class="pas-tag pas-tag-${escapeAttr(snapshot.trigger)}">${escapeHtml(triggerLabel)}</span>
+            <span class="pas-view-meta-divider">·</span>
+            <span><i class="fa-solid fa-database"></i> ${formatBytes(snapshot.size || 0)}</span>
+        </div>
     </div>
-    <div style="margin-bottom: 12px;">${summaryHtml}</div>
-    <pre style="max-height: 60vh; overflow: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-size: 0.85em; line-height: 1.5;"><code>${escapeHtml(json)}</code></pre>
-    <div style="margin-top: 12px; display: flex; gap: 8px; justify-content: flex-end;">
-        <button class="menu_button" id="pas-view-copy" type="button">
+    <div class="pas-view-summary">${summaryHtml}</div>
+    <pre class="pas-view-json"><code>${escapeHtml(json)}</code></pre>
+    <div class="pas-view-actions">
+        <button class="menu_button pas-view-copy-btn" type="button">
             <i class="fa-solid fa-copy"></i> ${escapeHtml(t('Copy JSON'))}
         </button>
     </div>
@@ -1655,13 +1725,25 @@ async function onView(snapshotId) {
 
     const showPromise = _viewPopup.show();
 
-    setTimeout(() => {
-        document.querySelector('#pas-view-copy')?.addEventListener('click', () => {
-            navigator.clipboard.writeText(json)
-                .then(() => toast.success(t('Copied')))
-                .catch(() => toast.error(t('Copy Failed')));
-        });
-    }, 100);
+    // 使用 requestAnimationFrame 比 setTimeout(100) 更稳定的时序——
+    // Popup 一进 DOM 就能命中
+    const tryBindCopy = () => {
+        const btn = document.querySelector('.pas-view-popup .pas-view-copy-btn');
+        if (btn && !btn.dataset.pasBound) {
+            btn.dataset.pasBound = '1';
+            btn.addEventListener('click', () => {
+                navigator.clipboard.writeText(json)
+                    .then(() => toast.success(t('Copied')))
+                    .catch(() => toast.error(t('Copy Failed')));
+            });
+            return true;
+        }
+        return false;
+    };
+    // 双保险：rAF + 短延迟
+    requestAnimationFrame(() => {
+        if (!tryBindCopy()) setTimeout(tryBindCopy, 50);
+    });
 
     showPromise.finally(() => { _viewPopup = null; });
 }

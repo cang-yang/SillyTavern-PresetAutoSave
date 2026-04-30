@@ -517,7 +517,21 @@ export async function confirmSafe(title, message) {
             logger.warn('Popup.confirm failed, fallback to native:', e);
         }
     }
-    return window.confirm(`${title}\n\n${message}`);
+    // Fallback: native confirm 不支持 HTML，去掉所有标签防止显示原始 markup
+    const stripHtml = (s) => String(s || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#039;/g, "'")
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    return window.confirm(`${stripHtml(title)}\n\n${stripHtml(message)}`);
 }
 
 /**
