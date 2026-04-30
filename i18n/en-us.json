@@ -317,5 +317,25 @@
     "Grouping Manage Save": "Save assignments",
     "Grouping Manage Saved": "Assignments saved",
     "Grouping Move To Series": "Move to series",
-    "Grouping Empty Series": "No groupable presets yet"
+    "Grouping Empty Series": "No groupable presets yet",
+
+    "Takeover Group": "Preset Takeover",
+    "Takeover Enabled": "Take over native preset dropdown",
+    "Takeover Enabled Desc": "Merge multiple versions of the same series into a single \"series name\" entry in the native dropdown for a clean, organized list. Disabling restores the original list immediately.",
+    "Takeover Default Strategy": "Default version strategy",
+    "Takeover Default Strategy Desc": "When no default is set for a series, automatically use the latest version.",
+    "Takeover Strategy Latest": "Auto: latest version",
+    "Takeover Strategy Manual": "Manual only (no redirection if unset)",
+    "Set As Default Version": "Set as the default applied version for this series",
+    "Unset Default Version": "Clear the default applied version for this series",
+    "Default Apply Tag": "Default",
+    "Default Apply Tag Title": "Selecting this series in the native dropdown will automatically apply this version",
+    "Default Apply Set": "Set \"{{name}}\" as default for series \"{{series}}\"",
+    "Default Apply Cleared": "Cleared default for series \"{{series}}\"",
+    "Apply This Version": "Apply this version",
+    "Applied Version": "Applied: {{name}}",
+    "Apply Version Failed": "Failed to apply \"{{name}}\"",
+    "No Snapshots Yet": "No snapshots",
+    "No Snapshots Yet Title": "This version has no snapshots yet (will be created automatically when modified)",
+    "No Snapshots Yet Hint": "No history snapshots for this version yet. Modify any parameter to create the first snapshot."
 }

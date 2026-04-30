@@ -285,6 +285,50 @@ export function compareVersion(va, vb) {
 }
 
 // =====================================================
+// 代表版本挑选（用于"接管原生下拉"和"二级面板默认应用"）
+// =====================================================
+/**
+ * 从一组同系列版本中挑选"最新版本"
+ *   - 按 compareVersion 倒序排列后取第一项
+ *   - 输入数组应至少有 version 字段
+ * @param {Array<{version: string}>} items
+ * @returns {Object|null}
+ */
+export function pickLatestVersion(items) {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    let best = items[0];
+    for (let i = 1; i < items.length; i++) {
+        if (compareVersion(items[i].version, best.version) > 0) {
+            best = items[i];
+        }
+    }
+    return best;
+}
+
+/**
+ * 为某个系列挑选"代表版本"
+ *   - 优先级 1：用户在 settings.seriesDefaultApply 中显式指定
+ *   - 优先级 2：版本号最大者
+ *
+ * @param {string} seriesKey 系列名
+ * @param {Array<{version: string, presetName: string}>} items 同系列所有版本
+ * @param {Object<string, string>} [seriesDefaultApply] { [seriesKey]: presetName }
+ * @returns {Object|null} 选中的 item（即 items 中的某一项）
+ */
+export function pickRepresentativeVersion(seriesKey, items, seriesDefaultApply = null) {
+    if (!Array.isArray(items) || items.length === 0) return null;
+
+    if (seriesDefaultApply && Object.hasOwn(seriesDefaultApply, seriesKey)) {
+        const target = String(seriesDefaultApply[seriesKey] || '').trim();
+        if (target) {
+            const found = items.find(it => it.presetName === target);
+            if (found) return found;
+        }
+    }
+    return pickLatestVersion(items);
+}
+
+// =====================================================
 // 把一组预设名按"系列"聚类（用于"扫描向导"）
 // =====================================================
 /**

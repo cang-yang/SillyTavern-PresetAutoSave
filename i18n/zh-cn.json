@@ -317,5 +317,25 @@
     "Grouping Manage Save": "保存归属设置",
     "Grouping Manage Saved": "已保存归属设置",
     "Grouping Move To Series": "移到该系列",
-    "Grouping Empty Series": "暂无可分组的预设"
+    "Grouping Empty Series": "暂无可分组的预设",
+
+    "Takeover Group": "预设接管",
+    "Takeover Enabled": "接管原生预设下拉",
+    "Takeover Enabled Desc": "把同系列的多个版本在原生下拉中合并为一个「系列名」，让列表干净整洁。关闭后下拉立即恢复原状。",
+    "Takeover Default Strategy": "代表版本策略",
+    "Takeover Default Strategy Desc": "在没有为某系列指定默认版本时，自动使用最新版本作为默认。",
+    "Takeover Strategy Latest": "自动使用最新版本",
+    "Takeover Strategy Manual": "仅使用手动指定（无指定则不重定向）",
+    "Set As Default Version": "设为该系列的默认应用版本",
+    "Unset Default Version": "取消该系列的默认应用版本",
+    "Default Apply Tag": "默认",
+    "Default Apply Tag Title": "在原生下拉里选中此系列时会自动应用这个版本",
+    "Default Apply Set": "已设「{{name}}」为「{{series}}」的默认应用版本",
+    "Default Apply Cleared": "已取消「{{series}}」的默认应用设置",
+    "Apply This Version": "应用此版本",
+    "Applied Version": "已应用：{{name}}",
+    "Apply Version Failed": "应用「{{name}}」失败",
+    "No Snapshots Yet": "无快照",
+    "No Snapshots Yet Title": "此版本尚未创建任何快照（修改后会自动产生）",
+    "No Snapshots Yet Hint": "此版本暂无任何历史快照。修改任意参数后会自动创建第一条快照。"
 }

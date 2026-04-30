@@ -46,6 +46,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     groupingExcluded: {},           // { [presetName]: true } 用户标记为"不分组"
     groupingDefaultExpand: 'current', // 'current' | 'all' | 'none' 系列默认展开策略
 
+    // 预设接管（核心特性：用一级系列名替换原生预设下拉）
+    takeoverEnabled: true,          // 是否启用接管（关闭后原生下拉恢复原状）
+    takeoverDefaultStrategy: 'latest', // 'latest' | 'manual' 选中代表版本的默认策略
+    seriesDefaultApply: {},         // { [seriesKey]: presetName } 用户为每个系列指定的"默认应用版本"
+    takeoverHideMode: 'hide',       // 'hide' | 'collapse' 非代表 option 的处理方式（保留扩展）
+
     // 高级
     debugMode: false,               // 启用详细日志
     fallbackPolling: false,         // 兜底轮询（默认关闭，仅当事件触发不可靠时启用）
@@ -72,6 +78,10 @@ const VALIDATORS = {
     groupingManualOverrides: (v) => sanitizeStringMap(v),
     groupingExcluded: (v) => sanitizeBoolMap(v),
     groupingDefaultExpand: (v) => (v === 'all' || v === 'none' || v === 'current') ? v : 'current',
+    takeoverEnabled: (v) => Boolean(v),
+    takeoverDefaultStrategy: (v) => (v === 'manual' ? 'manual' : 'latest'),
+    seriesDefaultApply: (v) => sanitizeStringMap(v),
+    takeoverHideMode: (v) => (v === 'collapse' ? 'collapse' : 'hide'),
     debugMode: (v) => Boolean(v),
     fallbackPolling: (v) => Boolean(v),
 };

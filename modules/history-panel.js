@@ -35,10 +35,13 @@ import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js'
 import { showDiffPopup } from './diff-viewer.js';
 import {
     parsePresetName,
+    getSeriesInfo,
     groupSnapshotsBySeries,
     groupNamesBySeries,
     clearParseCache,
+    pickRepresentativeVersion,
 } from './preset-grouping.js';
+import { refreshTakeover } from './preset-takeover.js';
 
 // =====================================================
 // 状态
@@ -655,11 +658,68 @@ function renderSeriesView(filtered) {
         excluded: settings.groupingExcluded,
     });
 
-    // 没有任何系列分组（全部都被 excluded）→ 兜底渲染 flat
-    if (seriesMap.size === 0) return renderFlatView(filtered);
+    // ⭐ 核心改造：把"原生预设列表"中存在但还没快照的预设也合并进来
+    //   这样面板"列表" tab 永远展示完整的系列分组，
+    //   即使某个版本还从来没修改过。
+    try {
+        const allNames = (getAllPresetNames() || []).map(o => (o && (o.name || o.preset_name)) || o).filter(s => typeof s === 'string' && s);
+        const overrides = settings.groupingManualOverrides || {};
+        const excluded = settings.groupingExcluded || {};
+        const currentApi = getCurrentApiId() || 'openai';
 
-    // 系列按"最新时间"倒序
-    const seriesList = Array.from(seriesMap.values()).sort((a, b) => b.latestTime - a.latestTime);
+        for (const presetName of allNames) {
+            if (excluded[presetName]) continue;
+            const info = getSeriesInfo(presetName, overrides, excluded);
+            if (info.excluded) continue;
+            const seriesKey = info.series || presetName;
+
+            let series = seriesMap.get(seriesKey);
+            if (!series) {
+                series = {
+                    series: seriesKey,
+                    versions: [],
+                    latestTime: 0,
+                    totalSize: 0,
+                    snapshotCount: 0,
+                    versionCount: 0,
+                };
+                seriesMap.set(seriesKey, series);
+            }
+
+            // 该系列中是否已存在 (apiId, presetName) 的版本？
+            const exists = series.versions.some(v => v.apiId === currentApi && v.presetName === presetName);
+            if (!exists) {
+                series.versions.push({
+                    apiId: currentApi,
+                    presetName,
+                    version: info.version,
+                    duplicate: info.duplicate,
+                    kind: info.kind,
+                    manualOverride: info.manualOverride,
+                    snapshots: [],
+                    latestTime: 0,
+                    totalSize: 0,
+                    snapshotCount: 0,
+                });
+                series.versionCount = series.versions.length;
+            }
+        }
+    } catch (e) {
+        logger.debug('renderSeriesView merge native list failed:', e);
+    }
+
+    if (seriesMap.size === 0) {
+        return `<div class="pas-empty-state pas-empty-state-grouping">
+            <i class="fa-solid fa-folder-tree"></i>
+            <div class="pas-empty-state-text">${escapeHtml(t('Grouping Empty Series'))}</div>
+        </div>`;
+    }
+
+    // 系列按"最新时间"倒序，无快照的系列按系列名 A→Z 排在最后
+    const seriesList = Array.from(seriesMap.values()).sort((a, b) => {
+        if (a.latestTime !== b.latestTime) return b.latestTime - a.latestTime;
+        return a.series.localeCompare(b.series);
+    });
     return seriesList.map(renderSeriesGroup).join('');
 }
 
@@ -788,9 +848,16 @@ function renderVersionGroup(ver, seriesKey) {
     const isExpanded = _state.expandedVersions.has(versionKey);
     const safeKey = escapeAttr(versionKey);
     const safeSeries = escapeAttr(seriesKey);
+    const safePresetName = escapeAttr(ver.presetName);
     const currentName = getSelectedPresetName();
     const currentApi = getCurrentApiId();
     const isCurrent = (ver.presetName === currentName && ver.apiId === currentApi);
+    const isEmpty = (ver.snapshotCount || 0) === 0;
+
+    // 是否为该系列的"默认应用版本"（接管后选中代表项时实际应用的版本）
+    const settings = getSettings();
+    const seriesDefaults = settings.seriesDefaultApply || {};
+    const isDefaultApply = seriesDefaults[seriesKey] === ver.presetName;
 
     const versionLabel = ver.version
         ? escapeHtml(ver.version)
@@ -801,9 +868,27 @@ function renderVersionGroup(ver, seriesKey) {
     const manualHtml = ver.manualOverride
         ? `<span class="pas-tag pas-tag-manual-override" title="${escapeAttr(t('Grouping Manual Tag Title'))}">${escapeHtml(t('Grouping Manual Tag'))}</span>`
         : '';
+    const defaultApplyHtml = isDefaultApply
+        ? `<span class="pas-tag pas-tag-default-apply" title="${escapeAttr(t('Default Apply Tag Title'))}"><i class="fa-solid fa-thumbtack"></i> ${escapeHtml(t('Default Apply Tag'))}</span>`
+        : '';
+    const emptyHtml = isEmpty
+        ? `<span class="pas-tag pas-tag-empty" title="${escapeAttr(t('No Snapshots Yet Title'))}">${escapeHtml(t('No Snapshots Yet'))}</span>`
+        : '';
+
+    // 设为默认按钮：图钉图标，点亮表示当前生效
+    const defaultBtnTitle = isDefaultApply ? t('Unset Default Version') : t('Set As Default Version');
+    const defaultBtnCls = isDefaultApply ? 'pas-btn-default-on' : 'pas-btn-default-off';
+    const defaultBtn = `<button class="pas-btn-action pas-btn-set-default ${defaultBtnCls}" data-action="set-default" data-preset-name="${safePresetName}" data-series-key="${safeSeries}" title="${escapeAttr(defaultBtnTitle)}" type="button" aria-label="${escapeAttr(defaultBtnTitle)}">
+        <i class="fa-solid fa-thumbtack"></i>
+    </button>`;
+
+    // 应用版本按钮：直接在面板里切换到该具体版本
+    const applyBtn = `<button class="pas-btn-action pas-btn-apply-version" data-action="apply-version" data-preset-name="${safePresetName}" title="${escapeAttr(t('Apply This Version'))}" type="button" aria-label="${escapeAttr(t('Apply This Version'))}">
+        <i class="fa-solid fa-circle-check"></i>
+    </button>`;
 
     return `
-<div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}">
+<div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isDefaultApply ? 'pas-version-default-apply' : ''} ${isEmpty ? 'pas-version-empty' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
     <div class="pas-version-header" data-action="toggle-version">
         <div class="pas-version-header-main">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-version-chevron"></i>
@@ -812,7 +897,9 @@ function renderVersionGroup(ver, seriesKey) {
             ${dupHtml}
             <span class="pas-version-rawname" title="${escapeAttr(ver.presetName)}">${escapeHtml(ver.presetName)}</span>
             ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
+            ${defaultApplyHtml}
             ${manualHtml}
+            ${emptyHtml}
             <span class="pas-version-api">${escapeHtml(ver.apiId)}</span>
         </div>
         <div class="pas-version-header-meta">
@@ -820,14 +907,16 @@ function renderVersionGroup(ver, seriesKey) {
             <span class="pas-divider">·</span>
             <span class="pas-version-size">${formatBytes(ver.totalSize)}</span>
             <span class="pas-divider">·</span>
-            <span class="pas-version-latest">${formatTime(ver.latestTime)}</span>
+            <span class="pas-version-latest">${ver.latestTime ? formatTime(ver.latestTime) : '—'}</span>
+            ${applyBtn}
+            ${defaultBtn}
             <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
                 <i class="fa-solid fa-trash"></i>
             </button>
         </div>
     </div>
     <div class="pas-version-body"${isExpanded ? '' : ' hidden'}>
-        ${ver.snapshots.map(renderCard).join('')}
+        ${ver.snapshots.length > 0 ? ver.snapshots.map(renderCard).join('') : `<div class="pas-version-empty-hint">${escapeHtml(t('No Snapshots Yet Hint'))}</div>`}
     </div>
 </div>`;
 }
@@ -1372,6 +1461,8 @@ function renderEmptyState() {
 // =====================================================
 async function handleListClick(e) {
     const clearBtn = e.target.closest('.pas-btn-clear-preset');
+    const setDefaultBtn = e.target.closest('.pas-btn-set-default');
+    const applyVersionBtn = e.target.closest('.pas-btn-apply-version');
     const seriesHeader = e.target.closest('.pas-series-header');
     const versionHeader = e.target.closest('.pas-version-header');
     const presetHeader = e.target.closest('.pas-preset-header');
@@ -1382,6 +1473,29 @@ async function handleListClick(e) {
         e.stopPropagation();
         const key = clearBtn.getAttribute('data-preset-key');
         await onClearPreset(key);
+        return;
+    }
+
+    // 1.1) "设为默认应用版本"按钮（图钉）
+    if (setDefaultBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const presetName = setDefaultBtn.getAttribute('data-preset-name');
+        const seriesKey = setDefaultBtn.getAttribute('data-series-key');
+        if (presetName && seriesKey) {
+            await onToggleSeriesDefault(seriesKey, presetName);
+        }
+        return;
+    }
+
+    // 1.2) "应用此版本"按钮（圆勾）
+    if (applyVersionBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const presetName = applyVersionBtn.getAttribute('data-preset-name');
+        if (presetName) {
+            await onApplyVersionDirect(presetName);
+        }
         return;
     }
 
@@ -1775,6 +1889,57 @@ async function onClearPreset(key) {
     await clearPresetHistory(apiId, presetName);
     toast.success(t('Cleared'));
     await refreshData();
+}
+
+/**
+ * 切换"系列默认应用版本"
+ *   - 如果当前 presetName 已经是该 seriesKey 的默认 → 取消（删除映射）
+ *   - 否则设为该系列的默认版本
+ *   - 切换后立即调用 refreshTakeover() 让原生下拉重新生效
+ */
+async function onToggleSeriesDefault(seriesKey, presetName) {
+    if (!seriesKey || !presetName) return;
+    const settings = getSettings();
+    const map = { ...(settings.seriesDefaultApply || {}) };
+    const wasDefault = map[seriesKey] === presetName;
+
+    if (wasDefault) {
+        delete map[seriesKey];
+    } else {
+        map[seriesKey] = presetName;
+    }
+
+    updateSetting('seriesDefaultApply', map);
+    try { refreshTakeover(); } catch (_) {}
+
+    if (wasDefault) {
+        toast.info(t('Default Apply Cleared', { series: seriesKey }));
+    } else {
+        toast.success(t('Default Apply Set', { series: seriesKey, name: presetName }));
+    }
+
+    // 仅重渲列表 Tab，避免抢焦点
+    renderListTab();
+}
+
+/**
+ * 直接应用某个版本（面板里的"应用"按钮）
+ *   - 调用 ST 的 selectPresetSafe，让 ST 走完整的预设切换流程
+ *   - 这条路径绕过接管的"代表 option 重定向"，明确指向某个具体预设
+ */
+async function onApplyVersionDirect(presetName) {
+    if (!presetName) return;
+    try {
+        // 切换前先把"未保存修改"自动备份（享受 switchGuard 的能力）
+        await saveNow().catch(() => {});
+    } catch (_) {}
+
+    const ok = selectPresetSafe(presetName);
+    if (ok) {
+        toast.success(t('Applied Version', { name: presetName }));
+    } else {
+        toast.error(t('Apply Version Failed', { name: presetName }));
+    }
 }
 
 // =====================================================
@@ -2319,6 +2484,14 @@ function renderSettingsTab() {
             { value: 'current', label: t('Grouping Default Expand Current') },
             { value: 'all',     label: t('Grouping Default Expand All') },
             { value: 'none',    label: t('Grouping Default Expand None') },
+        ]),
+    ])}
+
+    ${group(t('Takeover Group'), [
+        toggle('takeoverEnabled', t('Takeover Enabled'), t('Takeover Enabled Desc'), s.takeoverEnabled),
+        select('takeoverDefaultStrategy', t('Takeover Default Strategy'), t('Takeover Default Strategy Desc'), s.takeoverDefaultStrategy, [
+            { value: 'latest', label: t('Takeover Strategy Latest') },
+            { value: 'manual', label: t('Takeover Strategy Manual') },
         ]),
     ])}
 

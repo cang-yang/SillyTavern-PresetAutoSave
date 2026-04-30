@@ -18,6 +18,11 @@ import {
     showGroupingFirstScanWizard,
     teardownHistoryPanel,
 } from './modules/history-panel.js';
+import {
+    initPresetTakeover,
+    teardown as teardownTakeover,
+    refreshTakeover,
+} from './modules/preset-takeover.js';
 import { getSettings } from './modules/settings.js';
 import { runGroupingSelfTest } from './modules/preset-grouping.js';
 
@@ -43,6 +48,7 @@ export async function onActivate() {
 export async function onDelete() {
     logger.info('Cleaning up');
     try {
+        teardownTakeover();
         teardownAutoSave();
         teardownUI();
         teardownHistoryPanel();
@@ -59,6 +65,7 @@ export function onEnable() {
 export function onDisable() {
     logger.info('Disabled');
     try {
+        teardownTakeover();
         teardownAutoSave();
         teardownUI();
         teardownHistoryPanel();
@@ -98,6 +105,24 @@ export function onDisable() {
             logger.success('UI ready ✓');
         } catch (e) {
             logger.error('APP_INITIALIZED phase error:', e);
+        }
+    });
+
+    // ============ 阶段 1.5: 接管原生预设下拉 ============
+    // 必须在 APP_INITIALIZED 之后（settings/store/UI 都就绪），但要尽早接管
+    // 不影响 APP_READY 流程，因此用一个独立的 listener
+    eventSource.on(event_types.APP_INITIALIZED, async () => {
+        try {
+            // 微延迟以确保上面那个 listener 中的 init 都完成
+            setTimeout(async () => {
+                try {
+                    await initPresetTakeover();
+                } catch (e) {
+                    logger.error('initPresetTakeover failed:', e);
+                }
+            }, 200);
+        } catch (e) {
+            logger.error('Schedule takeover failed:', e);
         }
     });
 
@@ -142,6 +167,7 @@ export function onDisable() {
             version: VERSION,
             ENV,
             showHistoryPanel,
+            refreshTakeover,
             logger,
         };
         logger.debug('Debug interface available at window.__pas');

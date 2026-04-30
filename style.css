@@ -2125,3 +2125,123 @@
     .pas-preset-header-meta { flex-wrap: wrap; }
     .pas-log-time { min-width: 76px; }
 }
+
+/* =========================================================
+ * 预设接管：版本卡的"默认应用"标记
+ * ========================================================= */
+
+/* "默认应用" 标签 */
+.pas-tag-default-apply {
+    background: rgba(34, 211, 238, 0.16);
+    color: #22d3ee;
+    border: 1px solid rgba(34, 211, 238, 0.32);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.pas-tag-default-apply i {
+    font-size: 0.86em;
+    transform: rotate(-30deg);
+}
+
+/* "无快照" 标签 */
+.pas-tag-empty {
+    background: var(--pas-surface-1);
+    color: var(--pas-fg-faint);
+    border: 1px dashed var(--pas-border);
+    font-style: normal;
+}
+
+/* 整个版本卡为"默认应用"时的视觉强化 */
+.pas-version-default-apply > .pas-version-header {
+    background: linear-gradient(90deg,
+        rgba(34, 211, 238, 0.08) 0%,
+        rgba(34, 211, 238, 0.02) 60%,
+        transparent 100%);
+    border-left: 3px solid var(--pas-c-info, #22d3ee);
+    padding-left: 9px;
+}
+
+/* 整个版本卡为"无快照"时的视觉淡化（保留信息但弱化） */
+.pas-version-empty > .pas-version-header {
+    opacity: 0.78;
+}
+.pas-version-empty .pas-version-header:hover {
+    opacity: 1;
+}
+
+/* 二级版本卡空内容时的占位提示 */
+.pas-version-empty-hint {
+    padding: 16px 18px;
+    color: var(--pas-fg-faint);
+    font-size: 0.88em;
+    font-style: italic;
+    text-align: center;
+    border-radius: var(--pas-radius-sm);
+    background: var(--pas-surface-0);
+    margin: 6px;
+}
+
+/* "设为默认" 图钉按钮 */
+.pas-btn-set-default {
+    color: var(--pas-fg-muted);
+    transition:
+        color var(--pas-dur) var(--pas-ease-fast),
+        background var(--pas-dur) var(--pas-ease-fast),
+        transform var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-btn-set-default i {
+    transform: rotate(-30deg);
+    transition: transform var(--pas-dur) var(--pas-ease);
+}
+.pas-btn-set-default:hover {
+    color: var(--pas-c-info, #22d3ee);
+    background: rgba(34, 211, 238, 0.08);
+}
+.pas-btn-set-default.pas-btn-default-on {
+    color: var(--pas-c-info, #22d3ee);
+    background: rgba(34, 211, 238, 0.12);
+}
+.pas-btn-set-default.pas-btn-default-on i {
+    transform: rotate(0deg);
+}
+.pas-btn-set-default.pas-btn-default-on:hover {
+    background: rgba(34, 211, 238, 0.2);
+}
+
+/* "应用版本" 圆勾按钮 */
+.pas-btn-apply-version {
+    color: var(--pas-fg-muted);
+    transition:
+        color var(--pas-dur) var(--pas-ease-fast),
+        background var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-btn-apply-version:hover {
+    color: var(--pas-c-add, #22c55e);
+    background: rgba(34, 197, 94, 0.1);
+}
+
+/* 系列空状态（接管开启但无任何系列） */
+.pas-empty-state-grouping {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--pas-fg-faint);
+}
+.pas-empty-state-grouping i {
+    font-size: 36px;
+    margin-bottom: 10px;
+    color: var(--pas-fg-faint);
+    opacity: 0.5;
+}
+.pas-empty-state-grouping .pas-empty-state-text {
+    font-size: 0.92em;
+}
+
+/* prefers-reduced-motion 适配 */
+@media (prefers-reduced-motion: reduce) {
+    .pas-btn-set-default,
+    .pas-btn-set-default i,
+    .pas-btn-apply-version {
+        transition: none;
+    }
+}
