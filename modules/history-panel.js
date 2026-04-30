@@ -222,7 +222,7 @@ async function loadData() {
         _state.expandedVersions.add(presetKey(curApi, curName));
     }
 
-    if (_state.viewMode === 'series' && curName) {
+    if (_state.viewMode === 'series') {
         const overrides = settings.groupingManualOverrides;
         const excluded = settings.groupingExcluded;
         const expandMode = settings.groupingDefaultExpand || 'current';
@@ -231,11 +231,12 @@ async function loadData() {
         if (expandMode === 'all') {
             for (const k of seriesMap.keys()) _state.expandedSeries.add(k);
         } else if (expandMode === 'current') {
-            // 找到当前预设所在系列
+            // ⭐ 改进：current 模式不只展开当前系列，
+            //   还展开所有"多版本系列"（让用户能立刻看到分组结果，而不是空荡荡的列表）
             for (const [k, info] of seriesMap.entries()) {
-                if (info.versions.some(v => v.apiId === curApi && v.presetName === curName)) {
+                const isCurrent = curName && info.versions.some(v => v.apiId === curApi && v.presetName === curName);
+                if (isCurrent || (info.versions && info.versions.length > 1)) {
                     _state.expandedSeries.add(k);
-                    break;
                 }
             }
         }
@@ -260,8 +261,8 @@ function buildPanelHTML() {
         <div class="pas-panel-title">
             <i class="fa-solid fa-clock-rotate-left"></i>
             <h3>${escapeHtml(t('Preset history records'))}</h3>
+            <div class="pas-panel-stats" id="pas-panel-stats"></div>
         </div>
-        <div class="pas-panel-stats" id="pas-panel-stats"></div>
     </div>
 
     <div class="pas-panel-tabs">
@@ -863,10 +864,9 @@ function renderPresetGroup(key, snapshots) {
 }
 
 /**
- * 系列卡（一级）
- *   - 标题左侧：箭头 + 图标 + 系列名 + 版本数
- *   - 标题右侧：快照总数 / 总大小 / 最新时间
- *   - 展开后渲染版本列表
+ * 系列卡（一级）—— 重构：上下双排布局，避免标题与元信息互相挤压
+ *   第 1 排（标题排）：箭头 + 图标 + 系列名（占满剩余空间） + 「当前」徽章 + 版本数胶囊
+ *   第 2 排（元信息排，缩进对齐）：快照数 / 大小 / 最新时间
  */
 function renderSeriesGroup(info) {
     const seriesKey = info.series;
@@ -876,43 +876,26 @@ function renderSeriesGroup(info) {
     const currentApi = getCurrentApiId();
     const isCurrent = info.versions.some(v => v.apiId === currentApi && v.presetName === currentName);
 
-    // ⭐ 副标题：显示该系列在原生下拉里"代表"的真实预设名（用户能直观看到这个文件夹对应哪个）
-    //    优先级：用户指定的默认应用 > 当前选中（在该系列内时）> 第一个版本
-    const settings = getSettings();
-    const seriesDefaults = settings.seriesDefaultApply || {};
-    let representativeName = seriesDefaults[seriesKey] || '';
-    if (!representativeName && isCurrent) representativeName = currentName;
-    if (!representativeName && info.versions.length > 0) {
-        // 尽量挑非归档的（在 ST 里实际存在）
-        const live = info.versions.find(v => !v.archived);
-        representativeName = (live || info.versions[0]).presetName;
-    }
-    const subtitleHtml = representativeName && representativeName !== seriesKey
-        ? `<span class="pas-series-subtitle" title="${escapeAttr(representativeName)}">→ ${escapeHtml(representativeName)}</span>`
-        : '';
-
     return `
 <div class="pas-series-group ${isCurrent ? 'pas-series-current' : ''}" data-series-key="${safeKey}">
     <div class="pas-series-header" data-action="toggle-series">
-        <div class="pas-series-header-main">
+        <div class="pas-series-header-row pas-series-header-row-title">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
             <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"></i>
             <span class="pas-series-name" title="${escapeAttr(seriesKey)}">${escapeHtml(seriesKey)}</span>
-            ${subtitleHtml}
-            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
-        </div>
-        <div class="pas-series-header-meta">
-            <span class="pas-series-versions" title="${escapeAttr(t('Grouping Series Header Versions', { count: info.versionCount }))}">
+            <span class="pas-series-version-pill" title="${escapeAttr(t('Grouping Series Header Versions', { count: info.versionCount }))}">
                 <i class="fa-solid fa-code-branch"></i> ${info.versionCount}
             </span>
-            <span class="pas-divider">·</span>
+            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
+        </div>
+        <div class="pas-series-header-row pas-series-header-row-meta">
             <span class="pas-series-snapshots" title="${escapeAttr(t('Grouping Series Header Snapshots', { count: info.snapshotCount }))}">
                 <i class="fa-solid fa-camera"></i> ${info.snapshotCount}
             </span>
             <span class="pas-divider">·</span>
             <span class="pas-series-size">${formatBytes(info.totalSize)}</span>
             <span class="pas-divider">·</span>
-            <span class="pas-series-latest">${formatTime(info.latestTime)}</span>
+            <span class="pas-series-latest">${info.latestTime ? formatTime(info.latestTime) : '—'}</span>
         </div>
     </div>
     <div class="pas-series-body"${isExpanded ? '' : ' hidden'}>
@@ -922,7 +905,14 @@ function renderSeriesGroup(info) {
 }
 
 /**
- * 版本卡（二级）：每个 (apiId+presetName) 对应一个版本
+ * 版本卡（二级）—— 重构 v2：以"完整原始预设名"为主标题
+ *
+ * 布局（上下三排）：
+ *   第 1 排（标题排）：箭头 + 图标 + **完整预设名**（占满主区） + 版本号小胶囊（如有）
+ *   第 2 排（标签排）：当前 / 默认 / 手动归类 / 归档 / 重名警告 等所有标签徽章
+ *   第 3 排（元信息 + 操作排）：快照数 / 大小 / 最新时间 ······· [应用] [设默认] [清空]
+ *
+ * 这样无论预设名多长、标签多少都不会与右侧操作按钮重叠。
  */
 function renderVersionGroup(ver, seriesKey) {
     const versionKey = presetKey(ver.apiId, ver.presetName);
@@ -935,70 +925,71 @@ function renderVersionGroup(ver, seriesKey) {
     const isCurrent = (ver.presetName === currentName && ver.apiId === currentApi);
     const isEmpty = (ver.snapshotCount || 0) === 0;
 
-    // 是否为该系列的"默认应用版本"（接管后选中代表项时实际应用的版本）
     const settings = getSettings();
     const seriesDefaults = settings.seriesDefaultApply || {};
     const isDefaultApply = seriesDefaults[seriesKey] === ver.presetName;
 
-    const versionLabel = ver.version
-        ? escapeHtml(ver.version)
-        : `<span class="pas-version-untitled">${escapeHtml(t('Grouping Untitled Version'))}</span>`;
+    // 版本号胶囊：仅在解析出版本号时才显示（去掉了"未识别版本"占位）
+    const versionPillHtml = ver.version
+        ? `<span class="pas-version-pill" title="${escapeAttr(t('Version Label Title', { version: ver.version }))}">${escapeHtml(ver.version)}</span>`
+        : '';
     const dupHtml = ver.duplicate
-        ? `<span class="pas-version-duplicate" title="${escapeAttr(ver.duplicate)}">${escapeHtml(ver.duplicate)}</span>`
-        : '';
-    const manualHtml = ver.manualOverride
-        ? `<span class="pas-tag pas-tag-manual-override" title="${escapeAttr(t('Grouping Manual Tag Title'))}">${escapeHtml(t('Grouping Manual Tag'))}</span>`
-        : '';
-    const defaultApplyHtml = isDefaultApply
-        ? `<span class="pas-tag pas-tag-default-apply" title="${escapeAttr(t('Default Apply Tag Title'))}"><i class="fa-solid fa-thumbtack"></i> ${escapeHtml(t('Default Apply Tag'))}</span>`
-        : '';
-    const emptyHtml = isEmpty
-        ? `<span class="pas-tag pas-tag-empty" title="${escapeAttr(t('No Snapshots Yet Title'))}">${escapeHtml(t('No Snapshots Yet'))}</span>`
-        : '';
-    // 数据接管模式下，已被归档（从 ST 删除）的版本显示一个特殊角标
-    const archivedHtml = ver.archived
-        ? `<span class="pas-tag pas-tag-archived" title="${escapeAttr(t('Archived Version Title'))}"><i class="fa-solid fa-box-archive"></i> ${escapeHtml(t('Archived Version'))}</span>`
+        ? `<span class="pas-version-pill pas-version-pill-dup" title="${escapeAttr(t('Duplicate Version Title'))}"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(ver.duplicate)}</span>`
         : '';
 
-    // 设为默认按钮：图钉图标，点亮表示当前生效
+    // 标签徽章
+    const tagsHtml = [
+        isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : '',
+        isDefaultApply ? `<span class="pas-tag pas-tag-default-apply" title="${escapeAttr(t('Default Apply Tag Title'))}"><i class="fa-solid fa-thumbtack"></i> ${escapeHtml(t('Default Apply Tag'))}</span>` : '',
+        ver.manualOverride ? `<span class="pas-tag pas-tag-manual-override" title="${escapeAttr(t('Grouping Manual Tag Title'))}">${escapeHtml(t('Grouping Manual Tag'))}</span>` : '',
+        ver.archived ? `<span class="pas-tag pas-tag-archived" title="${escapeAttr(t('Archived Version Title'))}"><i class="fa-solid fa-box-archive"></i> ${escapeHtml(t('Archived Version'))}</span>` : '',
+        isEmpty ? `<span class="pas-tag pas-tag-empty" title="${escapeAttr(t('No Snapshots Yet Title'))}">${escapeHtml(t('No Snapshots Yet'))}</span>` : '',
+    ].filter(Boolean).join('');
+    const tagsRowHtml = tagsHtml
+        ? `<div class="pas-version-header-row pas-version-header-row-tags">${tagsHtml}</div>`
+        : '';
+
+    // 设为默认按钮
     const defaultBtnTitle = isDefaultApply ? t('Unset Default Version') : t('Set As Default Version');
     const defaultBtnCls = isDefaultApply ? 'pas-btn-default-on' : 'pas-btn-default-off';
     const defaultBtn = `<button class="pas-btn-action pas-btn-set-default ${defaultBtnCls}" data-action="set-default" data-preset-name="${safePresetName}" data-series-key="${safeSeries}" title="${escapeAttr(defaultBtnTitle)}" type="button" aria-label="${escapeAttr(defaultBtnTitle)}">
         <i class="fa-solid fa-thumbtack"></i>
     </button>`;
 
-    // 应用版本按钮：直接在面板里切换到该具体版本
-    const applyBtn = `<button class="pas-btn-action pas-btn-apply-version" data-action="apply-version" data-preset-name="${safePresetName}" title="${escapeAttr(t('Apply This Version'))}" type="button" aria-label="${escapeAttr(t('Apply This Version'))}">
-        <i class="fa-solid fa-circle-check"></i>
-    </button>`;
+    // 应用版本按钮（已归档版本不可应用）
+    const applyBtn = ver.archived
+        ? ''
+        : `<button class="pas-btn-action pas-btn-apply-version" data-action="apply-version" data-preset-name="${safePresetName}" title="${escapeAttr(t('Apply This Version'))}" type="button" aria-label="${escapeAttr(t('Apply This Version'))}">
+            <i class="fa-solid fa-circle-check"></i>
+        </button>`;
 
     return `
-<div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isDefaultApply ? 'pas-version-default-apply' : ''} ${isEmpty ? 'pas-version-empty' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
+<div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isDefaultApply ? 'pas-version-default-apply' : ''} ${isEmpty ? 'pas-version-empty' : ''} ${ver.archived ? 'pas-version-archived' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
     <div class="pas-version-header" data-action="toggle-version">
-        <div class="pas-version-header-main">
+        <div class="pas-version-header-row pas-version-header-row-title">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-version-chevron"></i>
             <i class="fa-solid fa-code-branch pas-version-icon"></i>
-            <span class="pas-version-label">${versionLabel}</span>
-            ${dupHtml}
             <span class="pas-version-rawname" title="${escapeAttr(ver.presetName)}">${escapeHtml(ver.presetName)}</span>
-            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
-            ${defaultApplyHtml}
-            ${manualHtml}
-            ${archivedHtml}
-            ${emptyHtml}
+            ${versionPillHtml}
+            ${dupHtml}
             <span class="pas-version-api">${escapeHtml(ver.apiId)}</span>
         </div>
-        <div class="pas-version-header-meta">
-            <span class="pas-version-count">${ver.snapshotCount}</span>
-            <span class="pas-divider">·</span>
-            <span class="pas-version-size">${formatBytes(ver.totalSize)}</span>
-            <span class="pas-divider">·</span>
-            <span class="pas-version-latest">${ver.latestTime ? formatTime(ver.latestTime) : '—'}</span>
-            ${applyBtn}
-            ${defaultBtn}
-            <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
-                <i class="fa-solid fa-trash"></i>
-            </button>
+        ${tagsRowHtml}
+        <div class="pas-version-header-row pas-version-header-row-meta">
+            <span class="pas-version-meta-stats">
+                <span class="pas-version-count" title="${escapeAttr(t('Snapshots Count'))}"><i class="fa-solid fa-camera"></i> ${ver.snapshotCount}</span>
+                <span class="pas-divider">·</span>
+                <span class="pas-version-size" title="${escapeAttr(t('Total Size'))}">${formatBytes(ver.totalSize)}</span>
+                <span class="pas-divider">·</span>
+                <span class="pas-version-latest" title="${escapeAttr(t('Latest Time'))}">${ver.latestTime ? formatTime(ver.latestTime) : '—'}</span>
+            </span>
+            <span class="pas-version-meta-actions">
+                ${applyBtn}
+                ${defaultBtn}
+                <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </span>
         </div>
     </div>
     <div class="pas-version-body"${isExpanded ? '' : ' hidden'}>
@@ -2012,6 +2003,11 @@ async function onToggleSeriesDefault(seriesKey, presetName) {
  * 直接应用某个版本（面板里的"应用"按钮）
  *   - 调用 ST 的 selectPresetSafe，让 ST 走完整的预设切换流程
  *   - 这条路径绕过接管的"代表 option 重定向"，明确指向某个具体预设
+ *
+ * 注意：DOM 接管模式下，被合并的版本对应的 option 已被摘除。
+ *   ST 的 findPreset() 用的是内部 preset 列表（不是 DOM），所以查询能成功。
+ *   但 selectPreset() 写回 select.value 时，如果 option 不在 DOM 里会失败 —
+ *   所以要先用 refreshTakeover 触发一次接管刷新，让"目标版本"成为代表。
  */
 async function onApplyVersionDirect(presetName) {
     if (!presetName) return;
@@ -2020,7 +2016,33 @@ async function onApplyVersionDirect(presetName) {
         await saveNow().catch(() => {});
     } catch (_) {}
 
-    const ok = selectPresetSafe(presetName);
+    let ok = false;
+    try {
+        ok = selectPresetSafe(presetName);
+    } catch (e) {
+        logger.warn('selectPresetSafe threw:', e);
+        ok = false;
+    }
+
+    // 如果失败，可能是接管模式下 option 被摘除：
+    //   把目标设为该系列的"默认应用"，再触发刷新让它成为代表，然后重试
+    if (!ok) {
+        try {
+            const settings = getSettings();
+            // 推断目标系列
+            const info = parsePresetName(presetName);
+            const seriesKey = info.series || presetName;
+            const map = { ...(settings.seriesDefaultApply || {}) };
+            map[seriesKey] = presetName;
+            updateSetting('seriesDefaultApply', map);
+            // 等接管刷新落地（防抖窗口 220ms + 接管 + 浏览器渲染）
+            await new Promise(r => setTimeout(r, 380));
+            ok = selectPresetSafe(presetName);
+        } catch (e) {
+            logger.warn('apply-version retry failed:', e);
+        }
+    }
+
     if (ok) {
         toast.success(t('Applied Version', { name: presetName }));
     } else {
@@ -2910,11 +2932,20 @@ async function onSnapshotNow() {
 }
 
 // =====================================================
-// 状态更新
+// 状态更新（防御性：_root 在 await 期间可能已被关闭）
 // =====================================================
 async function updateStats() {
     if (!_root) return;
-    const stats = await getStats();
+    let stats;
+    try {
+        stats = await getStats();
+    } catch (e) {
+        logger.debug('updateStats getStats failed:', e);
+        return;
+    }
+    // ⚡ 关键：await 之后必须再次检查 _root，
+    //    用户在 stats 读取期间关闭面板会导致 _root === null → querySelector 抛 TypeError
+    if (!_root || !_root.isConnected) return;
 
     const headerStats = _root.querySelector('#pas-panel-stats');
     if (headerStats) {
@@ -2935,7 +2966,8 @@ async function updateStats() {
 }
 
 function updateBadge(count) {
-    const badge = _root?.querySelector('#pas-list-badge');
+    if (!_root || !_root.isConnected) return;
+    const badge = _root.querySelector('#pas-list-badge');
     if (badge) badge.textContent = String(count);
 }
 

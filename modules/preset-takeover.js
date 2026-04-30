@@ -58,7 +58,6 @@ const SERIES_KEY_DATA_ATTR = 'data-pas-series-key';    // 该代表 option 对�
 // =====================================================
 let _initialized = false;
 let _takeoverActive = false;
-let _refreshScheduled = false;
 
 // 每个 select（按 apiId 索引）的"被摘除的非代表 option 列表"
 //   _detachedOptions[apiId] = [{ option: HTMLOptionElement, prevSibling: HTMLElement | null }]
@@ -81,6 +80,15 @@ let _selfMutating = false;
 // 我们正在以"代表项策略"切换预设（用于 change 拦截避免递归）
 let _selfChangingValue = false;
 
+// ⚡ 防抖与去重缓存
+let _refreshTimer = null;          // 当前调度中的 timer id（用于取消）
+const _selectFingerprints = new WeakMap();  // select → 上一次接管时计算的指纹
+let _lastSettingsFingerprint = '';          // 上一次接管时关联的设置指纹
+let _lastRefreshTs = 0;             // 上一次实际执行 refresh 的时间
+let _refreshSuppressUntil = 0;      // 在该时间点之前禁止再次 refresh（防 ST 事件风暴）
+const REFRESH_DEBOUNCE_MS = 220;    // 防抖窗口（合并 ST 连续触发的多次事件）
+const REFRESH_MIN_INTERVAL_MS = 350; // 真正执行 refresh 的最小间隔
+
 // =====================================================
 // 初始化
 // =====================================================
@@ -99,7 +107,7 @@ export async function initPresetTakeover() {
         logger.warn('[Takeover] archive store init failed (data mode unavailable):', e);
     }
 
-    // 监听设置变化
+    // 监听设置变化（仅响应"接管相关"的字段）
     _settingUnsubscribe = onSettingChange(({ key, newValue, oldValue }) => {
         if (
             key === 'takeoverEnabled'
@@ -107,8 +115,8 @@ export async function initPresetTakeover() {
             || key === 'groupingManualOverrides'
             || key === 'groupingExcluded'
             || key === 'groupingEnabled'
+            || key === 'enabled'
         ) {
-            logger.debug(`[Takeover] setting changed: ${key} → schedule refresh`);
             scheduleRefresh();
         }
 
@@ -131,13 +139,14 @@ export async function initPresetTakeover() {
     });
 
     // 监听 ST 事件：原生重新渲染预设下拉时重做 takeover
+    // ⚡ 关键：SETTINGS_UPDATED 在 ST 内部高频触发（每次 settings 更新都发），
+    //     这是导致 refresh 风暴的根本原因之一 —— 用 throttle 单独处理它
     const events = [
         'OAI_PRESET_CHANGED_AFTER',
         'PRESET_CHANGED',
         'CHATCOMPLETION_SOURCE_CHANGED',
         'MAIN_API_CHANGED',
         'APP_READY',
-        'SETTINGS_UPDATED',
     ];
     let boundEventCount = 0;
     for (const evtName of events) {
@@ -152,17 +161,34 @@ export async function initPresetTakeover() {
             logger.debug(`[Takeover] failed to bind ${evtName}`, e);
         }
     }
-    logger.debug(`[Takeover] bound ${boundEventCount}/${events.length} ST events`);
+
+    // SETTINGS_UPDATED：单独 throttle 到至少 2 秒间隔
+    // 因为 ST 自己保存设置（自动保存）会触发，频率非常高，对接管来说没意义
+    let _lastSettingsEvtTs = 0;
+    try {
+        const evt = getEventType('SETTINGS_UPDATED', 'settings_updated');
+        const unsub = on(evt, () => {
+            const now = Date.now();
+            if (now - _lastSettingsEvtTs < 2000) return;
+            _lastSettingsEvtTs = now;
+            scheduleRefresh();
+        });
+        if (typeof unsub === 'function') {
+            _eventUnsubscribers.push(unsub);
+            boundEventCount++;
+        }
+    } catch (_) {}
+
+    logger.debug(`[Takeover] bound ${boundEventCount} ST events`);
 
     setupDocObserver();
 
     _initialized = true;
 
-    // 立即应用一次（同步 + 微延迟双保险）
+    // 立即应用一次 + 800ms 兜底（让 ST 完成首次渲染）
+    // 注意：不再 4 次密集 refresh —— 那是导致刷新风暴的主因之一
     refresh();
-    setTimeout(() => refresh(), 100);
-    setTimeout(() => refresh(), 500);
-    setTimeout(() => refresh(), 1500);
+    setTimeout(() => refresh(), 800);
 
     // 启动种子：让"未修改的存量预设"立即出现在三级面板里
     // 不阻塞主流程：发起异步种子，悄悄完成
@@ -170,36 +196,87 @@ export async function initPresetTakeover() {
         seedSnapshotsIfNeeded().catch(e =>
             logger.warn('[Takeover] seed snapshots failed:', e)
         );
-    }, 2500);
+    }, 3000);
 
     logger.success('[Takeover] Ready ✓');
 }
 
 // =====================================================
-// 调度刷新（防抖）
+// 调度刷新（强防抖 + 最小间隔节流）
+// 关键：之前 50ms 触发完全不足以挡 ST 自己事件风暴的速度
+// 现在 220ms 防抖 + 350ms 最小间隔，所有连续事件合并到 1 次
 // =====================================================
 function scheduleRefresh() {
-    if (_refreshScheduled) return;
-    _refreshScheduled = true;
-    // 用 rAF + 50ms 微延迟：rAF 让浏览器先完成上一帧；50ms 让 ST 的连续事件合并
-    requestAnimationFrame(() => {
-        setTimeout(() => {
-            _refreshScheduled = false;
-            try {
-                refresh();
-            } catch (e) {
-                logger.error('Preset takeover refresh failed:', e);
-            }
-        }, 50);
-    });
+    const now = Date.now();
+    // 在最小间隔窗口内：直接合并到下一次（不再开新 timer）
+    if (_refreshTimer) {
+        return;
+    }
+    // 计算到下次允许执行的最早时间
+    const earliest = Math.max(now + REFRESH_DEBOUNCE_MS,
+                               _lastRefreshTs + REFRESH_MIN_INTERVAL_MS);
+    const wait = Math.max(0, earliest - now);
+    _refreshTimer = setTimeout(() => {
+        _refreshTimer = null;
+        if (Date.now() < _refreshSuppressUntil) {
+            return; // 抑制窗口内：忽略本次（如刚做完接管，避免立即又触发）
+        }
+        try {
+            refresh();
+        } catch (e) {
+            logger.error('Preset takeover refresh failed:', e);
+        }
+    }, wait);
+}
+
+/**
+ * 计算单个 select 的内容指纹（用于幂等判断：内容没变就不再 reapply）
+ * 用 length + 头/尾 option value + 第一/中间/末尾 textContent 组合
+ */
+function computeSelectFingerprint(select) {
+    if (!select) return '';
+    const opts = select.options;
+    const len = opts ? opts.length : 0;
+    if (len === 0) return `${select.id || ''}::0`;
+    const firstV = opts[0]?.value || '';
+    const lastV = opts[len - 1]?.value || '';
+    const midV = opts[Math.floor(len / 2)]?.value || '';
+    return `${select.id || select.getAttribute('data-preset-manager-for') || ''}::${len}::${firstV}::${midV}::${lastV}::${select.value}`;
+}
+
+/**
+ * 计算与接管相关的设置指纹
+ */
+function computeSettingsFingerprint() {
+    try {
+        const s = getSettings();
+        return [
+            s.enabled ? 1 : 0,
+            s.groupingEnabled ? 1 : 0,
+            s.takeoverEnabled ? 1 : 0,
+            s.takeoverMode || 'dom',
+            // overrides 的键集合
+            Object.keys(s.groupingManualOverrides || {}).sort().join('|'),
+            Object.keys(s.groupingExcluded || {}).sort().join('|'),
+            Object.keys(s.seriesDefaultApply || {}).sort().join('|'),
+        ].join('#');
+    } catch (_) {
+        return '';
+    }
 }
 
 /**
  * 主刷新逻辑：根据当前 settings 决定开 / 关，并作用到所有 select
+ *
+ * ⚡ 性能关键：用指纹机制做幂等判断
+ *   每个 select 在接管后会缓存（settings 指纹 + DOM 指纹）；
+ *   如果再次 refresh 时两者都未变 → 直接跳过，不再读写 DOM
+ *   这从根本上消除"refresh → DOM 变 → ST 事件 → refresh"的死循环
  */
 function refresh() {
     const s = getSettings();
     const shouldActive = !!(s.enabled && s.groupingEnabled && s.takeoverEnabled);
+    _lastRefreshTs = Date.now();
 
     if (!shouldActive) {
         if (_takeoverActive) {
@@ -210,8 +287,9 @@ function refresh() {
             }
             restoreAllDom();
             _takeoverActive = false;
+            _lastSettingsFingerprint = '';
         } else {
-            logger.debug(`[Takeover] inactive (enabled=${s.enabled} grouping=${s.groupingEnabled} takeover=${s.takeoverEnabled})`);
+            // 状态稳定：不打 debug log（避免被 logger 订阅再次触发面板渲染）
         }
         return;
     }
@@ -232,15 +310,29 @@ function refresh() {
     }
 
     if (!selects || selects.length === 0) {
-        logger.debug('[Takeover] no select[data-preset-manager-for] found in DOM yet');
+        // 没找到 select：不刷屏 log
         return;
     }
+
+    // 计算当前 settings 指纹
+    const settingsFp = computeSettingsFingerprint();
+    const settingsChanged = settingsFp !== _lastSettingsFingerprint;
 
     let appliedCount = 0;
     let totalSeries = 0;
     let totalDetached = 0;
+    let skippedCount = 0;
     for (const select of selects) {
         if (!select || !select.isConnected) continue;
+
+        // ⚡ 幂等跳过：select 自身指纹未变 + settings 未变 → 不重做
+        const selFp = computeSelectFingerprint(select);
+        const lastSelFp = _selectFingerprints.get(select);
+        if (!settingsChanged && lastSelFp === selFp && select.hasAttribute(TAKEOVER_DATA_ATTR)) {
+            skippedCount++;
+            continue;
+        }
+
         try {
             const stat = applyTakeoverToSelect(select);
             appliedCount++;
@@ -248,20 +340,26 @@ function refresh() {
                 totalSeries += stat.seriesCount || 0;
                 totalDetached += stat.detachedCount || 0;
             }
+            // 接管完成后重新计算指纹并缓存
+            _selectFingerprints.set(select, computeSelectFingerprint(select));
         } catch (e) {
             logger.warn('[Takeover] failed for select:', e);
         }
     }
 
+    _lastSettingsFingerprint = settingsFp;
+    // 抑制 800ms 内的下次 refresh（让 DOM 写完 + ST 事件平息）
+    _refreshSuppressUntil = Date.now() + 800;
+
     if (appliedCount > 0) {
         if (!_takeoverActive) {
             logger.success(`[Takeover] activated · ${appliedCount} select(s) · ${totalSeries} series · ${totalDetached} option(s) merged`);
         } else {
-            logger.debug(`[Takeover] refreshed · ${appliedCount} select(s) · ${totalSeries} series · ${totalDetached} merged`);
+            logger.debug(`[Takeover] refreshed · ${appliedCount} select(s) · ${totalSeries} series · ${totalDetached} merged${skippedCount > 0 ? ` · skipped ${skippedCount}` : ''}`);
         }
     }
 
-    _takeoverActive = appliedCount > 0;
+    if (appliedCount > 0) _takeoverActive = true;
 }
 
 // =====================================================
@@ -542,10 +640,21 @@ function setupSelectObserver(select) {
     if (!_selectObserver) {
         _selectObserver = new MutationObserver((mutations) => {
             if (_selfMutating) return;
-            // 只关心 childList 变化
+            if (Date.now() < _refreshSuppressUntil) return; // ⚡ 抑制窗口内忽略
+            // 只关心"实质性"的 childList 变化（option 节点的增删）
             let needRefresh = false;
             for (const m of mutations) {
-                if (m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length)) {
+                if (m.type !== 'childList') continue;
+                // 过滤：仅 attributes/text 变化（如 select.value 改变引起的 selected 属性）
+                if (!m.addedNodes.length && !m.removedNodes.length) continue;
+                // 过滤：被增删的节点不是 OPTION
+                const hasOption = (nodes) => {
+                    for (const n of nodes) {
+                        if (n && n.nodeType === 1 && n.tagName === 'OPTION') return true;
+                    }
+                    return false;
+                };
+                if (hasOption(m.addedNodes) || hasOption(m.removedNodes)) {
                     needRefresh = true;
                     break;
                 }
@@ -565,16 +674,15 @@ function setupDocObserver() {
     if (_docObserver) return;
     _docObserver = new MutationObserver((mutations) => {
         if (_selfMutating) return;
-        // 简单策略：只要有节点新增 → 调度一次刷新
+        if (Date.now() < _refreshSuppressUntil) return;
+        // 只在新加入的节点里包含 select 时才刷新
         for (const m of mutations) {
-            if (m.type === 'childList' && m.addedNodes.length) {
-                // 只在新加入的节点里包含 select 时才刷新
-                for (const n of m.addedNodes) {
-                    if (!(n instanceof Element)) continue;
-                    if (n.matches?.(SELECT_SELECTOR) || n.querySelector?.(SELECT_SELECTOR)) {
-                        scheduleRefresh();
-                        return;
-                    }
+            if (m.type !== 'childList' || !m.addedNodes.length) continue;
+            for (const n of m.addedNodes) {
+                if (!(n instanceof Element)) continue;
+                if (n.matches?.(SELECT_SELECTOR) || n.querySelector?.(SELECT_SELECTOR)) {
+                    scheduleRefresh();
+                    return;
                 }
             }
         }
@@ -683,6 +791,11 @@ export function getSeriesDefaultApply(seriesKey) {
 export function teardown() {
     try { restoreAllDom(); } catch (_) {}
 
+    if (_refreshTimer) {
+        clearTimeout(_refreshTimer);
+        _refreshTimer = null;
+    }
+
     if (_selectObserver) {
         try { _selectObserver.disconnect(); } catch (_) {}
         _selectObserver = null;
@@ -714,6 +827,8 @@ export function teardown() {
     } catch (_) {}
 
     _detachedOptions.clear();
+    _lastSettingsFingerprint = '';
+    _refreshSuppressUntil = 0;
     _takeoverActive = false;
     _initialized = false;
     logger.info('Preset takeover torn down');

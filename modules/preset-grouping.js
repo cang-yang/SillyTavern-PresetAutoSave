@@ -723,12 +723,28 @@ export function getSeriesInfo(presetName, overrides = null, excluded = null) {
 }
 
 /**
- * 系列名归一化键：用于"系列归并"时不区分大小写、不区分前后空白
- *  - "mur 鹿鹿 API" 与 "Mur 鹿鹿 API" 应视为同一个系列
- *  - 但用户看到的"显示名"会保留首次出现时的大小写
+ * 系列名归一化键：用于"系列归并"时彻底消除噪声差异
+ *  - 大小写：mur ≡ Mur ≡ MUR
+ *  - 前后空白：" mur" ≡ "mur "
+ *  - 内部空白：多个空格 / Tab 折叠为单个空格
+ *  - CJK 与 ASCII 之间的空格可有可无："mur鹿鹿 API" ≡ "mur 鹿鹿 API" ≡ "mur鹿鹿API"
+ *  - 半角标点 / 全角标点统一
+ *  - 但用户看到的"显示名"会保留首次出现时的原始形式
  */
 export function normalizeSeriesKey(seriesKey) {
-    return String(seriesKey || '').trim().toLowerCase();
+    let s = String(seriesKey || '').trim().toLowerCase();
+    // 全角字符已在 parsePresetName 阶段统一过，这里再兜底一次
+    s = s.replace(/[\u3000]/g, ' ');                    // 全角空格 → 半角
+    s = s.replace(/[‐‑‒–—―−]/g, '-');                    // 各类破折号 → 短横线
+    s = s.replace(/\s+/g, ' ');                          // 折叠多空格
+    // ⭐ 关键：CJK 与 ASCII（包括数字）相邻处的空格"可有可无"
+    //   "mur鹿鹿 API" ≡ "mur 鹿鹿 API"：在 CJK 前后的 ASCII 间消除空格差异
+    //   方法：把所有 ASCII↔CJK 边界的空格都删掉，再 trim
+    s = s.replace(/([a-z0-9])\s+([\u4e00-\u9fa5])/g, '$1$2');
+    s = s.replace(/([\u4e00-\u9fa5])\s+([a-z0-9])/g, '$1$2');
+    // 中文之间的空格也消除（"鹿鹿 反重力" 与 "鹿鹿反重力" 视为同一）
+    s = s.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+    return s.trim();
 }
 
 // =====================================================

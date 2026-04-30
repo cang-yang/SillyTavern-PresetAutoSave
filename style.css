@@ -233,20 +233,23 @@
     contain: layout style;
 }
 
-/* --- 头部 --- */
+/* --- 头部（重构：stats 嵌入 title 中部，避免长内容与右上关闭按钮挤压） --- */
 .pas-panel-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
     padding: 4px 4px 12px 4px;
-    flex-wrap: wrap;
     gap: 10px;
     border-bottom: 1px solid var(--pas-border);
+    /* 留出右侧 60px 给 popup 内置的关闭按钮（叉号），永不耦合 */
+    padding-right: 60px;
 }
 .pas-panel-title {
     display: flex;
     align-items: center;
     gap: 12px;
+    flex: 1;
+    min-width: 0;
+    flex-wrap: wrap;
 }
 .pas-panel-title h3 {
     margin: 0;
@@ -254,6 +257,7 @@
     font-size: 1.18em;
     font-weight: 600;
     letter-spacing: 0.2px;
+    flex-shrink: 0;
 }
 .pas-panel-title i {
     color: var(--pas-accent);
@@ -270,16 +274,23 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
 }
 .pas-panel-stats {
     color: var(--pas-fg-muted);
-    font-size: 0.82em;
-    padding: 4px 10px;
+    font-size: 0.78em;
+    padding: 3px 9px;
     background: var(--pas-surface-3);
     border: 1px solid var(--pas-border);
     border-radius: var(--pas-radius-sm);
     font-family: 'SF Mono', Consolas, monospace;
     letter-spacing: 0.2px;
+    /* 长文本内截断，避免推走标题/挤压关闭按钮 */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+    min-width: 0;
 }
 
 /* --- Tab 切换 --- */
@@ -709,7 +720,8 @@
 .pas-preset-body[hidden] { display: none; }
 
 /* =========================================================
- * 系列卡（一级）
+ * 系列卡（一级）—— 重构 v2：上下双排清晰布局
+ * 设计：标题排和元信息排上下分离，避免长系列名 / 大量徽章互相挤压
  * ========================================================= */
 .pas-series-group {
     margin-bottom: 8px;
@@ -721,7 +733,7 @@
     transition: border-color var(--pas-dur) var(--pas-ease-fast);
     /* ⚡ 性能：长列表中跳过未展开的子内容布局 */
     content-visibility: auto;
-    contain-intrinsic-size: 0 56px;
+    contain-intrinsic-size: 0 80px;
 }
 .pas-series-group:hover {
     border-color: var(--pas-border-strong);
@@ -735,90 +747,93 @@
 }
 .pas-series-header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 14px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 9px 12px 8px 12px;
     cursor: pointer;
     user-select: none;
-    gap: 10px;
-    min-height: 44px;
     transition: background var(--pas-dur) var(--pas-ease-fast);
-}
-.pas-series-header:hover {
-    background: rgba(255, 255, 255, 0.03);
 }
 .pas-series-header:hover {
     background: var(--pas-surface-1);
 }
-.pas-series-header-main {
+
+/* 标题排：箭头 + 图标 + 系列名 + 版本数胶囊 + 当前徽章 */
+.pas-series-header-row {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: 8px;
     min-width: 0;
-    flex: 1 1 auto;
-    overflow: hidden;  /* 防止内部子元素溢出影响外部 */
+}
+.pas-series-header-row-title {
+    font-size: 1em;
+}
+.pas-series-header-row-meta {
+    font-size: 0.76em;
+    color: var(--pas-fg-faint);
+    padding-left: 26px;  /* 与标题文字对齐（chevron + icon 缩进） */
 }
 .pas-series-chevron {
     font-size: 0.75em;
-    width: 14px;
+    width: 10px;
     color: var(--pas-fg-muted);
-    transition: color var(--pas-dur) var(--pas-ease-fast);
     flex-shrink: 0;
 }
 .pas-series-icon {
     color: rgba(192, 132, 252, 0.85);
     font-size: 1em;
     flex-shrink: 0;
-    transition: color var(--pas-dur) var(--pas-ease-fast);
+    width: 16px;
+    text-align: center;
 }
 .pas-series-current .pas-series-icon {
     color: var(--pas-c-pin);
 }
 .pas-series-name {
     font-weight: 600;
-    font-size: 1.05em;
+    font-size: 1em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--pas-fg);
     letter-spacing: 0.2px;
-    flex: 1 1 auto;     /* 允许系列名占据剩余空间，确保始终能看到 */
-    min-width: 80px;    /* 系列名永远至少有 80px 宽 */
+    flex: 1 1 auto;
+    min-width: 60px;
 }
-.pas-series-header-meta {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.78em;
-    color: var(--pas-fg-faint);
-    flex-shrink: 0;
-    flex-wrap: nowrap;     /* 不换行，避免一级面板高度突变 */
-    justify-content: flex-end;
-    overflow: hidden;       /* 避免溢出影响标题列 */
-    max-width: 50%;         /* 元数据区不超过 50% 宽度，留给系列名 */
-}
-.pas-series-versions,
-.pas-series-snapshots {
+.pas-series-version-pill {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     padding: 1px 8px;
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(192, 132, 252, 0.14);
+    border: 1px solid rgba(192, 132, 252, 0.30);
+    color: rgba(216, 180, 254, 0.95);
     border-radius: 10px;
-    font-weight: 500;
+    font-size: 0.78em;
+    font-weight: 600;
     font-family: 'SF Mono', Consolas, monospace;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
-.pas-series-versions i,
-.pas-series-snapshots i {
+.pas-series-current .pas-series-version-pill {
+    background: rgba(245, 158, 11, 0.16);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: rgba(252, 211, 77, 1);
+}
+.pas-series-version-pill i {
     font-size: 0.85em;
     opacity: 0.75;
 }
-.pas-series-current .pas-series-versions {
-    background: rgba(245, 158, 11, 0.15);
-    color: rgba(245, 158, 11, 0.95);
+.pas-series-snapshots {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: 'SF Mono', Consolas, monospace;
 }
+.pas-series-snapshots i { opacity: 0.6; }
 .pas-series-size,
 .pas-series-latest { font-family: 'SF Mono', Consolas, monospace; }
+.pas-series-header-row-meta .pas-divider { opacity: 0.35; }
 
 .pas-series-body {
     padding: 6px 8px 8px 8px;
@@ -831,7 +846,10 @@
 .pas-series-body[hidden] { display: none; }
 
 /* =========================================================
- * 版本卡（二级，嵌套在系列卡内）
+ * 版本卡（二级，嵌套在系列卡内）—— 重构 v2：上下三排布局
+ * 第 1 排：箭头 + 图标 + 完整预设名 + 版本号小胶囊 + API 标签
+ * 第 2 排：标签徽章（当前/默认/手动/归档/无快照）—— 仅在有标签时显示
+ * 第 3 排：左侧元信息（数量/大小/时间） + 右侧操作按钮（应用/默认/清空）
  * ========================================================= */
 .pas-version-group {
     background: var(--pas-surface-2);
@@ -851,30 +869,38 @@
         rgba(245, 158, 11, 0.07) 0%,
         var(--pas-surface-2) 100%);
 }
+.pas-version-group.pas-version-archived {
+    border-left-color: rgba(160, 160, 160, 0.65);
+    background: rgba(255, 255, 255, 0.015);
+}
 .pas-version-header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 7px 11px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 11px 7px 11px;
     cursor: pointer;
     user-select: none;
-    gap: 8px;
     transition: background var(--pas-dur) var(--pas-ease-fast);
 }
 .pas-version-header:hover {
     background: var(--pas-surface-1);
 }
-.pas-version-header-main {
+
+/* 共用：3 排都是 flex row */
+.pas-version-header-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
-    flex: 1;
-    flex-wrap: wrap;
+}
+
+/* 第 1 排：标题 */
+.pas-version-header-row-title {
+    font-size: 0.95em;
 }
 .pas-version-chevron {
     font-size: 0.7em;
-    width: 12px;
+    width: 10px;
     color: var(--pas-fg-muted);
     flex-shrink: 0;
 }
@@ -882,75 +908,104 @@
     color: rgba(96, 165, 250, 0.85);
     font-size: 0.9em;
     flex-shrink: 0;
+    width: 14px;
+    text-align: center;
 }
 .pas-version-current .pas-version-icon {
     color: var(--pas-c-pin);
 }
-.pas-version-label {
-    font-weight: 600;
-    color: rgba(96, 165, 250, 1);
-    font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.92em;
-    padding: 0 6px;
-    background: rgba(96, 165, 250, 0.12);
-    border-radius: 5px;
-    border: 1px solid rgba(96, 165, 250, 0.22);
-    line-height: 1.5;
-}
-.pas-version-untitled {
-    color: var(--pas-fg-faint);
-    font-style: italic;
-    font-weight: 400;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--pas-border);
-}
-.pas-version-duplicate {
-    color: var(--pas-fg-muted);
-    font-size: 0.85em;
-    font-family: 'SF Mono', Consolas, monospace;
-    opacity: 0.7;
-}
 .pas-version-rawname {
-    color: var(--pas-fg-muted);
-    font-size: 0.85em;
+    color: var(--pas-fg);
+    font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 280px;
+    flex: 1 1 auto;
+    min-width: 60px;
+}
+.pas-version-pill {
+    font-weight: 600;
+    color: rgba(96, 165, 250, 1);
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 0.78em;
+    padding: 1px 7px;
+    background: rgba(96, 165, 250, 0.12);
+    border-radius: 5px;
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    line-height: 1.5;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+.pas-version-pill-dup {
+    color: rgba(251, 191, 36, 1);
+    background: rgba(251, 191, 36, 0.10);
+    border-color: rgba(251, 191, 36, 0.30);
+}
+.pas-version-pill-dup i {
+    font-size: 0.85em;
 }
 .pas-version-api {
-    font-size: 0.7em;
-    padding: 0 6px;
+    font-size: 0.65em;
+    padding: 1px 5px;
     background: rgba(255, 255, 255, 0.05);
     color: var(--pas-fg-faint);
     border-radius: 4px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-family: 'SF Mono', Consolas, monospace;
-}
-.pas-version-header-meta {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75em;
-    color: var(--pas-fg-faint);
     flex-shrink: 0;
 }
-.pas-version-count {
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 9px;
-    padding: 1px 7px;
-    font-weight: 600;
-    min-width: 18px;
-    text-align: center;
+
+/* 第 2 排：标签徽章 */
+.pas-version-header-row-tags {
+    flex-wrap: wrap;
+    padding-left: 24px;  /* 与标题对齐：chevron + icon 缩进 */
+    gap: 5px;
+}
+.pas-version-header-row-tags:empty {
+    display: none;  /* 没标签时不占空间 */
+}
+
+/* 第 3 排：元信息 + 操作按钮 */
+.pas-version-header-row-meta {
+    justify-content: space-between;
+    padding-left: 24px;
+    font-size: 0.74em;
+    color: var(--pas-fg-faint);
+}
+.pas-version-meta-stats {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-family: 'SF Mono', Consolas, monospace;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pas-version-meta-stats i {
+    opacity: 0.55;
+    margin-right: 2px;
+}
+.pas-version-meta-stats .pas-divider { opacity: 0.35; }
+.pas-version-count {
+    color: var(--pas-fg-muted);
+    font-weight: 600;
 }
 .pas-version-current .pas-version-count {
-    background: var(--pas-c-pin);
-    color: white;
+    color: var(--pas-c-pin);
 }
-.pas-version-size,
-.pas-version-latest { font-family: 'SF Mono', Consolas, monospace; }
+.pas-version-meta-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+}
+.pas-version-meta-actions .pas-btn-action {
+    width: 24px;
+    height: 24px;
+}
 
 .pas-version-body {
     padding: 6px 8px 8px 8px;

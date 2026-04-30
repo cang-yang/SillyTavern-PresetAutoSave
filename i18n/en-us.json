@@ -363,5 +363,12 @@
     "Seed Snapshots Done": "Created initial snapshots for {{added}} presets ({{total}} total)",
 
     "Archived Version": "Archived",
-    "Archived Version Title": "In data takeover mode, this version has been deleted from SillyTavern and archived locally. It will be auto-restored when uninstalling the extension."
+    "Archived Version Title": "In data takeover mode, this version has been deleted from SillyTavern and archived locally. It will be auto-restored when uninstalling the extension.",
+
+    "Versions Unit": "versions",
+    "Total Size": "Total size",
+    "Latest Time": "Latest time",
+    "Snapshots Count": "Snapshot count",
+    "Version Label Title": "Parsed version: {{version}}",
+    "Duplicate Version Title": "Multiple presets with the same version number (duplicate warning)"
 }

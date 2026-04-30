@@ -363,5 +363,12 @@
     "Seed Snapshots Done": "已为 {{added}} 个预设建立初始快照（共 {{total}} 个）",
 
     "Archived Version": "已归档",
-    "Archived Version Title": "数据接管模式下，这个版本已从 SillyTavern 删除并归档到插件本地。卸载插件时会自动恢复。"
+    "Archived Version Title": "数据接管模式下，这个版本已从 SillyTavern 删除并归档到插件本地。卸载插件时会自动恢复。",
+
+    "Versions Unit": "个版本",
+    "Total Size": "总大小",
+    "Latest Time": "最近时间",
+    "Snapshots Count": "快照数量",
+    "Version Label Title": "解析出的版本号：{{version}}",
+    "Duplicate Version Title": "存在多个相同版本号的预设（重名警告）"
 }
