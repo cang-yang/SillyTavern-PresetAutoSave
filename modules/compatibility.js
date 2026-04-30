@@ -54,7 +54,6 @@ export const ENV = {
 const _registeredListeners = []; // { eventName, handler } - 便于卸载
 let _lastSnapshotPath = null;    // 上一次 getPresetSnapshot 走的路径，用于日志降噪
 let _presetDataResolver = null;  // 外部注册的预设数据解析器（接管模块用于查找 detached 预设）
-let _oaiDiagLogged = false;      // oai_settings 诊断日志是否已输出过（只输出一次）
 
 /**
  * 注册外部的预设数据解析器
@@ -356,83 +355,86 @@ export function getPresetSnapshot(presetName) {
         }
     }
 
-    // 路径 2（针对特定预设）：用 findPreset 拿原始预设对象
-    //   findPreset 在 OpenAI/textgen/kobold 等都返回真实预设数据（不是当前生效的）
-    //   返回值可能是预设的 settings 对象，也可能是数组索引（OpenAI），或预设条目
+    // 路径 2（针对特定预设）：用 findPreset 拿选项值
+    //   ST 源码：findPreset(name) = $(select).find('option').filter(text===name).val()
+    //   返回值是 option.value（对 openai 是字符串索引 "15"，对其他可能是名字）
+    //   ⚠️ DOM 接管后 detached 的 option 不在 select 中 → findPreset 返回 undefined
+    //      所以这条路径只对 select 中仍存在的 option 有效
     if (typeof pm.findPreset === 'function') {
         const found = safeCall(() => pm.findPreset(name), null, 'findPreset');
-        // findPreset 在 OpenAI 返回数组索引（数字），其他 API 返回 settings 对象
-        if (typeof found === 'number' && apiId === 'openai') {
-            // 用索引去 oai_settings.preset_settings_openai 取
-            try {
-                const arr = window.oai_settings && window.oai_settings.preset_settings_openai;
-                if (Array.isArray(arr) && arr[found]) {
-                    return cloneDeepSafe(arr[found]);
-                }
-            } catch (_) {}
-        } else if (isUsable(found)) {
-            return cloneDeepSafe(found);
+        if (found !== undefined && found !== null) {
+            // 对 openai：found 是字符串形式的数组索引（如 "15"）
+            // 用 getPresetList 拿到 presets 数组，用索引取数据
+            const idx = parseInt(String(found), 10);
+            if (!isNaN(idx) && typeof pm.getPresetList === 'function') {
+                try {
+                    const { presets } = pm.getPresetList(apiId);
+                    if (Array.isArray(presets) && presets[idx] && isUsable(presets[idx])) {
+                        return cloneDeepSafe(presets[idx]);
+                    }
+                } catch (_) {}
+            }
+            // 对其他 API：found 可能直接就是可用的对象
+            if (isUsable(found)) {
+                return cloneDeepSafe(found);
+            }
         }
     }
 
-    // ⚡ 路径 2.5（B27 关键修复）：直接搜索 oai_settings.preset_settings_openai 数组
+    // ⚡ 路径 2.5（B28 关键修复）：通过 pm.getPresetList() 直接查内部数据数组
     //
-    //   根本原因：DOM 接管后 pm.findPreset(name) 搜索 <select>.options，
-    //   但被 detach 的 option 已不在 select 中 → findPreset 返回 undefined。
-    //   路径 1 (getPresetSettings) 对 openai 永远返回空对象 {}。
-    //   所以 31/32 个非当前预设全部走到这里。
+    //   根本原因（从 ST 源码确认）：
+    //     - findPreset(name) 搜索 $(select).find('option').text() === name → DOM 搜索
+    //     - DOM 接管后被 detach 的 option 不在 select 中 → findPreset 返回 undefined
+    //     - getPresetSettings(name) 对 openai 返回 oai_settings（当前设置），跟 name 无关
+    //     - oai_settings.preset_settings_openai 是字符串（当前预设名），不是数组！
     //
-    //   解决方案：完全绕过 DOM 和 PresetManager，
-    //   直接在 oai_settings.preset_settings_openai 数组里按 name 属性搜索。
-    //   这是权威数据源，不受 DOM 接管影响。
-    if (apiId === 'openai') {
+    //   正确方案（从 ST 源码 preset-manager.js getCompletionPresetByName 确认）：
+    //     pm.getPresetList(apiId) 返回：
+    //       - presets = openai_settings（预设数据数组，ES 模块内部变量）
+    //       - preset_names = openai_setting_names（{name: index} 映射）
+    //     然后用 preset_names[name] 查索引 → presets[index] 取数据
+    //     这完全绕过 DOM，不受接管影响！
+    if (typeof pm.getPresetList === 'function') {
         try {
-            const arr = window.oai_settings && window.oai_settings.preset_settings_openai;
-            if (Array.isArray(arr) && arr.length > 0) {
-                // 诊断：首次搜索失败时打印数组中的 name 列表（只打一次，避免刷屏）
-                let found = null;
-                const nameStripped = name.replace(/\.json$/i, '');  // 去掉 .json 后缀
+            const { presets, preset_names } = pm.getPresetList(apiId);
+            if (presets && preset_names) {
+                let presetData = null;
 
-                for (let i = 0; i < arr.length; i++) {
-                    const entry = arr[i];
-                    if (!entry || typeof entry !== 'object') continue;
-
-                    // 获取条目的标识名（可能在 name、preset_name 或其他字段）
-                    const entryName = entry.name ?? entry.preset_name ?? '';
-
-                    // 多策略匹配：精确 → 去 .json → 忽略大小写
-                    if (entryName === name
-                        || entryName === nameStripped
-                        || entryName.replace(/\.json$/i, '') === nameStripped) {
-                        found = entry;
-                        break;
+                if (Array.isArray(preset_names)) {
+                    // 键值 API（instruct / context / sysprompt / reasoning）
+                    // preset_names 是名字数组
+                    const idx = preset_names.indexOf(name);
+                    if (idx >= 0 && presets[idx]) {
+                        presetData = presets[idx];
+                    }
+                } else if (typeof preset_names === 'object') {
+                    // 非键值 API（openai / kobold / novel）
+                    // preset_names = {presetName: arrayIndex}
+                    const idx = preset_names[name];
+                    if (idx !== undefined && presets[idx]) {
+                        presetData = presets[idx];
                     }
                 }
-                if (found) {
-                    return cloneDeepSafe(found);
-                }
 
-                // 诊断日志：第一次查找失败时输出数组内容
-                if (!_oaiDiagLogged) {
-                    _oaiDiagLogged = true;
-                    const sampleNames = arr.slice(0, 40).map((e, i) => {
-                        if (!e || typeof e !== 'object') return `[${i}] <invalid>`;
-                        return `[${i}] name=${JSON.stringify(e.name)} preset_name=${JSON.stringify(e.preset_name)}`;
-                    });
-                    logger.warn(`[getPresetSnapshot] path 2.5 failed for "${name}". oai_settings.preset_settings_openai has ${arr.length} entries. Sample:\n${sampleNames.join('\n')}`);
-                }
-            } else {
-                if (!_oaiDiagLogged) {
-                    _oaiDiagLogged = true;
-                    logger.warn(`[getPresetSnapshot] path 2.5: oai_settings.preset_settings_openai is ${Array.isArray(arr) ? 'empty' : typeof arr}`);
+                if (isUsable(presetData)) {
+                    return cloneDeepSafe(presetData);
                 }
             }
         } catch (e) {
-            logger.warn('[getPresetSnapshot] path 2.5 error:', e);
+            logger.debug('[getPresetSnapshot] path 2.5 getPresetList error:', e);
         }
     }
 
-    // 路径 2.5b: 通过接管模块注册的回调解析器（非 OpenAI 的后备路径）
+    // 路径 2.5b：通过 getCompletionPresetByName（某些 ST 版本可能有此方法）
+    if (typeof pm.getCompletionPresetByName === 'function') {
+        const preset = safeCall(() => pm.getCompletionPresetByName(name), null, 'getCompletionPresetByName');
+        if (isUsable(preset)) {
+            return cloneDeepSafe(preset);
+        }
+    }
+
+    // 路径 2.5c: 通过接管模块注册的回调解析器（最后后备路径）
     if (_presetDataResolver) {
         const resolved = safeCall(() => _presetDataResolver(apiId, name), null, 'presetDataResolver');
         if (isUsable(resolved)) {
