@@ -85,6 +85,7 @@ let _isInternalSave = false;       // 内部保存中（防递归）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
 let _suspendUntil = 0;             // SETTINGS_UPDATED 风暴期间临时挂起，用 Date.now()
+let _suspendNoticeShown = false;   // 在挂起期内只 log 一次，避免日志爆量
 let _noChangeCount = 0;            // 连续无变化次数，用于日志降噪
 
 let _currentApiId = null;          // 当前跟踪的 API
@@ -108,6 +109,8 @@ const _stats = {
     saved: 0,
     skippedUnchanged: 0,
     aborted: 0,
+    switchGuardSaved: 0,    // switch_guard 真实保存次数（hash != lastSavedHash）
+    switchGuardSkipped: 0,  // switch_guard 静默跳过次数（hash 一致 / 不脏）
 };
 
 // =====================================================
@@ -601,22 +604,27 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified') {
     // 切换中 / 内部保存中 / 未启用 -> 静默忽略
     if (!_enabled) return;
     if (_ignoreInput) {
-        logger.debug(`scheduleAutoSave ignored (reason=${reason}, ignoreInput=true)`);
+        // 静默忽略：切换期间这条会爆量，没有诊断价值
         return;
     }
     if (_isInternalSave) {
-        logger.debug(`scheduleAutoSave ignored (reason=${reason}, isInternalSave=true)`);
+        // 静默忽略：保存进行中
         return;
     }
 
     const settings = getSettings();
     if (!settings.enabled) return;
 
-    // SETTINGS_UPDATED 风暴期间挂起
+    // SETTINGS_UPDATED 风暴期间挂起 —— 第一次报告即可，后续静默
     if (Date.now() < _suspendUntil) {
-        logger.debug(`scheduleAutoSave suspended (reason=${reason}, until=${_suspendUntil - Date.now()}ms)`);
+        if (!_suspendNoticeShown) {
+            _suspendNoticeShown = true;
+            logger.debug(`scheduleAutoSave suspended (reason=${reason}, ${_suspendUntil - Date.now()}ms)`);
+        }
         return;
     }
+    // 离开挂起窗口后重置
+    _suspendNoticeShown = false;
 
     const ms = delay ?? settings.debounceMs;
 
@@ -918,6 +926,12 @@ function bindPresetEvents() {
     }));
 
     // ----- OpenAI 专属切换前事件（最可靠的保护点）-----
+    //
+    // 设计理念：switch_guard 是"兜底保护"，不是"必须执行"。
+    //   1. 先看是否真的有未保存修改：用真实 hash 比较，而非 _dirty 标志
+    //      （_dirty 仅表示"有过 input 事件"，但内容可能已被普通自动保存兜底了）
+    //   2. 只有 hash != lastSavedHash 才需要 switch_guard 保存
+    //   3. 否则只设置 ignoreInput 跳过即可（高频切换场景几乎不写盘）
     const oaiBefore = getEventType('OAI_PRESET_CHANGED_BEFORE', 'oai_preset_changed_before');
     _eventUnsubscribers.push(on(oaiBefore, async () => {
         if (!getSettings().enableSwitchGuard) {
@@ -928,22 +942,50 @@ function bindPresetEvents() {
         try {
             setIgnoreInput(true);
 
-            // 关键修复：传入"切换前"我们记录的预设名作为显式 target，
-            // 因为此时 ST 内部 oai_settings.preset_settings_openai 可能已经
-            // 被改成新名字了（getSelectedPresetName 会返回新名字）。
-            // 只要 _currentPresetName 仍是旧名字，就用它作为保存目标。
-            if (_dirty || _debounceTimer) {
-                if (_currentPresetName && _currentApiId) {
-                    logger.info(`Switch guard: saving dirty preset "${_currentPresetName}" before switch`);
-                    cancelPendingSave();
-                    await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
-                        apiId: _currentApiId,
-                        presetName: _currentPresetName,
-                    });
-                } else {
-                    logger.warn('Switch guard skipped: no tracked preset to save');
-                }
+            // 第一步：基础前置检查
+            if (!_currentPresetName || !_currentApiId) {
+                logger.debug('Switch guard skipped: no tracked preset');
+                return;
             }
+            // 第二步：检查是否有真实变更
+            //   - 没有 _dirty 也没有 _debounceTimer => 完全空闲，无需保护
+            //   - 有 _dirty/_debounceTimer 才进一步算 hash
+            if (!_dirty && !_debounceTimer) {
+                _stats.switchGuardSkipped++;
+                logger.debug('Switch guard skipped: not dirty, no pending save');
+                return;
+            }
+            // 第三步：用真实 hash 判断"内容是否真变了"
+            //   防止自动保存已经把内容写盘但 _dirty 还没复位的边缘情况
+            //   （正常情况：doSave 完成后 _dirty=false，hash 相等就跳过）
+            const preset = getPresetSnapshot(_currentPresetName);
+            if (!preset) {
+                logger.warn('Switch guard: cannot read preset snapshot, falling back to save');
+                cancelPendingSave();
+                await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
+                    apiId: _currentApiId,
+                    presetName: _currentPresetName,
+                });
+                return;
+            }
+            const liveHash = hashPreset(preset);
+            if (_lastSavedHash && liveHash === _lastSavedHash) {
+                // 内容跟上次保存一致：取消未触发的 debounce，纯跳过
+                _stats.switchGuardSkipped++;
+                cancelPendingSave();
+                _dirty = false;
+                logger.debug(`Switch guard skipped: hash unchanged (${liveHash})`);
+                return;
+            }
+
+            // 第四步：真的有未保存修改，触发兜底保存
+            _stats.switchGuardSaved++;
+            logger.info(`Switch guard: saving dirty preset "${_currentPresetName}" before switch (${_lastSavedHash || 'null'} -> ${liveHash})`);
+            cancelPendingSave();
+            await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
+                apiId: _currentApiId,
+                presetName: _currentPresetName,
+            });
         } catch (e) {
             logger.error('Switch guard error:', e);
         }
@@ -1013,13 +1055,29 @@ const IGNORE_INPUT_AFTER_SWITCH_MS = 2500;
 
 /**
  * 切换完成后更新内部跟踪状态
+ *
+ * 注意：在 ST 中，OAI_PRESET_CHANGED_AFTER 之后通常还会触发通用 PRESET_CHANGED，
+ * 两者都会进入这里。如果两次结果一致，就跳过第二次（保持 idle）。
  */
 function updateTrackingAfterSwitch() {
-    _currentApiId = getCurrentApiId();
-    _currentPresetName = getSelectedPresetName();
-
+    const newApiId = getCurrentApiId();
+    const newPresetName = getSelectedPresetName();
     const newPreset = getPresetSnapshot();
-    _lastSavedHash = newPreset ? hashPreset(newPreset) : null;
+    const newHash = newPreset ? hashPreset(newPreset) : null;
+
+    // 去重：相同 (apiId, name, hash) 在短时间内重复进来直接 return
+    if (
+        newApiId === _currentApiId
+        && newPresetName === _currentPresetName
+        && newHash === _lastSavedHash
+        && !_dirty
+    ) {
+        return;
+    }
+
+    _currentApiId = newApiId;
+    _currentPresetName = newPresetName;
+    _lastSavedHash = newHash;
     _dirty = false;
     _setStatus('idle');
 

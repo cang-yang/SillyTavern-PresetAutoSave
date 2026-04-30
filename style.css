@@ -18,16 +18,16 @@
 .pas-view-popup,
 .pas-diff-popup {
     --pas-fg:        var(--SmartThemeBodyColor, #e2e8f0);
-    --pas-fg-muted:  rgba(255, 255, 255, 0.55);
-    --pas-fg-faint:  rgba(255, 255, 255, 0.36);
-    --pas-bg-1:      rgba(255, 255, 255, 0.025);   /* 卡片底色 */
-    --pas-bg-2:      rgba(255, 255, 255, 0.05);    /* hover */
-    --pas-bg-3:      rgba(0, 0, 0, 0.18);          /* 内嵌区 */
-    --pas-border:    var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.10));
-    --pas-border-strong: rgba(255, 255, 255, 0.16);
+    --pas-fg-muted:  rgba(255, 255, 255, 0.62);
+    --pas-fg-faint:  rgba(255, 255, 255, 0.38);
+    --pas-bg-1:      rgba(255, 255, 255, 0.035);   /* 卡片底色，比之前略亮 */
+    --pas-bg-2:      rgba(255, 255, 255, 0.07);    /* hover */
+    --pas-bg-3:      rgba(0, 0, 0, 0.22);          /* 内嵌区 */
+    --pas-border:    var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+    --pas-border-strong: rgba(255, 255, 255, 0.22);
     --pas-accent:    var(--SmartThemeQuoteColor, #b794f6);
-    --pas-radius:    6px;
-    --pas-radius-sm: 4px;
+    --pas-radius:    8px;
+    --pas-radius-sm: 6px;
 
     /* 语义色（去饱和 + 透明度，避免太刺眼） */
     --pas-c-add:    #4ade80;
@@ -206,58 +206,94 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-bottom: 2px;
+    padding: 6px 4px 12px 4px;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 10px;
+    border-bottom: 1px solid var(--pas-border);
+    margin-bottom: 4px;
 }
 .pas-panel-title {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 .pas-panel-title h3 {
     margin: 0;
     color: var(--pas-fg);
-    font-size: 1.15em;
+    font-size: 1.2em;
     font-weight: 600;
-    letter-spacing: 0.2px;
+    letter-spacing: 0.3px;
 }
 .pas-panel-title i {
     color: var(--pas-accent);
-    font-size: 1em;
+    font-size: 1.1em;
+    width: 30px;
+    height: 30px;
+    line-height: 30px;
+    text-align: center;
+    border-radius: 50%;
+    background: rgba(183, 148, 246, 0.10);
+    border: 1px solid rgba(183, 148, 246, 0.18);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 .pas-panel-stats {
     color: var(--pas-fg-faint);
     font-size: 0.82em;
+    padding: 3px 9px;
+    background: var(--pas-bg-3);
+    border: 1px solid var(--pas-border);
+    border-radius: 4px;
+    font-family: 'SF Mono', Consolas, monospace;
+    letter-spacing: 0.3px;
 }
 
 /* --- Tab 切换 --- */
 .pas-panel-tabs {
     display: flex;
-    gap: 0;
-    border-bottom: 1px solid var(--pas-border);
+    gap: 4px;
+    padding: 4px;
+    background: var(--pas-bg-3);
+    border-radius: var(--pas-radius);
+    border: 1px solid var(--pas-border);
 }
 .pas-tab {
     background: transparent;
     border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    padding: 8px 14px;
+    border-radius: var(--pas-radius-sm);
+    padding: 8px 16px;
     color: var(--pas-fg-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
     gap: 7px;
-    transition: color 0.15s ease, border-color 0.15s ease;
-    font-size: 0.92em;
+    transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+    font-size: 0.93em;
     font-family: inherit;
+    font-weight: 500;
+    flex: 1;
+    justify-content: center;
 }
 .pas-tab:hover {
     color: var(--pas-fg);
+    background: rgba(255, 255, 255, 0.04);
+}
+.pas-tab:active {
+    transform: scale(0.97);
 }
 .pas-tab-active {
-    color: var(--pas-accent);
-    border-bottom-color: var(--pas-accent);
+    color: var(--pas-fg);
+    background: linear-gradient(180deg,
+        rgba(255, 255, 255, 0.10) 0%,
+        rgba(255, 255, 255, 0.04) 100%);
+    box-shadow: 0 0 0 1px var(--pas-border-strong) inset,
+                0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.pas-tab-active:hover {
+    background: linear-gradient(180deg,
+        rgba(255, 255, 255, 0.13) 0%,
+        rgba(255, 255, 255, 0.05) 100%);
 }
 .pas-tab-badge {
     background: rgba(255, 255, 255, 0.10);
@@ -267,11 +303,44 @@
     font-size: 0.72em;
     min-width: 18px;
     text-align: center;
-    font-weight: 500;
+    font-weight: 600;
 }
 .pas-tab-active .pas-tab-badge {
     background: var(--pas-accent);
     color: white;
+}
+
+/* =========================================================
+ * 自定义放大的 X 关闭按钮
+ * 用 :has() 把规则限定在内含 PAS 弹窗的 popup 内；现代浏览器全支持。
+ * ========================================================= */
+.popup:has(.pas-panel) .popup-button-close,
+.popup:has(.pas-view-popup) .popup-button-close,
+.popup:has(.pas-diff-popup) .popup-button-close {
+    font-size: 28px !important;
+    width: 36px !important;
+    height: 36px !important;
+    line-height: 36px !important;
+    text-align: center;
+    border-radius: 50% !important;
+    transition: color 0.18s ease, background 0.18s ease, transform 0.2s ease, opacity 0.15s ease;
+    opacity: 0.78;
+    top: 8px;
+    right: 8px;
+    cursor: pointer;
+}
+.popup:has(.pas-panel) .popup-button-close:hover,
+.popup:has(.pas-view-popup) .popup-button-close:hover,
+.popup:has(.pas-diff-popup) .popup-button-close:hover {
+    color: var(--pas-c-del, #f87171) !important;
+    background: rgba(248, 113, 113, 0.14) !important;
+    opacity: 1;
+    transform: rotate(90deg) scale(1.05);
+}
+.popup:has(.pas-panel) .popup-button-close:active,
+.popup:has(.pas-view-popup) .popup-button-close:active,
+.popup:has(.pas-diff-popup) .popup-button-close:active {
+    transform: rotate(90deg) scale(0.95);
 }
 
 /* --- Diff 选择条（顶部状态栏） --- */
@@ -568,18 +637,32 @@
     display: flex;
     justify-content: space-between;
     align-items: stretch;
-    padding: 7px 10px;
+    padding: 9px 12px;
     background: var(--pas-bg-1);
     border: 1px solid var(--pas-border);
-    border-radius: var(--pas-radius-sm);
-    transition: border-color 0.15s ease, background 0.15s ease;
+    border-left: 3px solid var(--pas-border);   /* 关键：左侧色条，让卡片有"个性" */
+    border-radius: var(--pas-radius);
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
     gap: 10px;
     position: relative;
 }
 .pas-card:hover {
-    border-color: var(--pas-border-strong);
     background: var(--pas-bg-2);
+    border-color: var(--pas-border-strong);
+    transform: translateX(1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
 }
+
+/* 不同触发类型卡片左侧色条（让用户一眼区分类型） */
+.pas-card-trigger-auto         { border-left-color: rgba(96, 165, 250, 0.55); }
+.pas-card-trigger-switch_guard { border-left-color: rgba(74, 222, 128, 0.60); }
+.pas-card-trigger-manual       { border-left-color: rgba(192, 132, 252, 0.60); }
+.pas-card-trigger-current      { border-left-color: var(--pas-c-pin); }
+
+.pas-card:hover.pas-card-trigger-auto         { border-left-color: var(--pas-c-info); }
+.pas-card:hover.pas-card-trigger-switch_guard { border-left-color: var(--pas-c-add); }
+.pas-card:hover.pas-card-trigger-manual       { border-left-color: var(--pas-c-edit); }
+.pas-card:hover.pas-card-trigger-current      { border-left-color: var(--pas-c-pin); }
 
 /* 选中态：A / B（diff 对比） */
 .pas-card.pas-card-selected-a {
@@ -654,33 +737,49 @@
 .pas-card-size { font-family: 'Consolas', 'Monaco', monospace; }
 .pas-divider { opacity: 0.4; }
 
-/* --- 触发类型标签 --- */
+/* --- 触发类型标签（药丸式 tags） --- */
 .pas-tag {
-    padding: 0 7px;
-    border-radius: 9px;
-    font-size: 0.7em;
-    font-weight: 500;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.71em;
+    font-weight: 600;
     display: inline-flex;
     align-items: center;
-    height: 17px;
+    gap: 4px;
+    height: 18px;
     line-height: 1;
     white-space: nowrap;
-    letter-spacing: 0.2px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+}
+.pas-tag::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.85;
 }
 .pas-tag-current {
-    background: var(--pas-c-pin);
-    color: white;
+    background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
+    color: #1a1a1a;
+    border-color: rgba(245, 158, 11, 0.55);
+    text-shadow: 0 0 1px rgba(255, 255, 255, 0.4);
 }
 .pas-tag-auto {
-    background: rgba(96, 165, 250, 0.14);
+    background: rgba(96, 165, 250, 0.16);
+    border-color: rgba(96, 165, 250, 0.45);
     color: #93c5fd;
 }
 .pas-tag-switch_guard {
-    background: rgba(74, 222, 128, 0.14);
+    background: rgba(74, 222, 128, 0.16);
+    border-color: rgba(74, 222, 128, 0.45);
     color: #86efac;
 }
 .pas-tag-manual {
-    background: rgba(192, 132, 252, 0.14);
+    background: rgba(192, 132, 252, 0.16);
+    border-color: rgba(192, 132, 252, 0.45);
     color: #d8b4fe;
 }
 

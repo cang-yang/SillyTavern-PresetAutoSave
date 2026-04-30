@@ -253,6 +253,19 @@
     "Field assistant_impersonation": "Assistant impersonation",
     "Field user_name_prefix": "User name prefix",
     "Field char_name_prefix": "Character name prefix",
-    "Field image_inlining": "Image inlining",
-    "Field inline_image_quality": "Inline image quality"
+    "Field image_inlining": "Send inline media",
+    "Field inline_image_quality": "Inline image quality",
+    "Field enable_web_search": "Enable web search",
+    "Field send_if_empty": "Empty message filler",
+    "Field show_external_models": "Show external models",
+    "Field use_system_prompt": "Use system prompt",
+    "Field stream_fade_in": "Stream fade-in",
+    "Field smooth_streaming": "Smooth streaming",
+    "Field streaming_fps": "Streaming FPS",
+    "Field reasoning_max_additions": "Max reasoning additions",
+    "Field reasoning_auto_parse": "Auto-parse reasoning",
+    "Field reasoning_auto_expand": "Auto-expand reasoning",
+    "Field reasoning_show_hidden": "Show hidden reasoning time",
+    "Field reasoning_add_to_prompts": "Add reasoning to prompts",
+    "Field bypass_status_check": "Bypass API status check"
 }

@@ -76,12 +76,20 @@ export async function initUIInjector(onHistoryClick) {
     // MutationObserver 兜底
     setupObserver();
 
-    // 定时检查兜底（成本极低）
+    // 定时检查兜底：仅前 30 秒每 2 秒查一次，30 秒后熄灭
+    //   - MutationObserver 已经覆盖大多数情况
+    //   - 这个 interval 仅用来兜底"页面早期 ST 还在加载"的极端场景
+    //   - 30 秒后大概率早就注入完成；此后由 MutationObserver 接管
+    let _earlyInjectChecks = 0;
     _intervalId = setInterval(() => {
-        if (!hasInjected()) {
-            scheduleInject();
+        _earlyInjectChecks++;
+        if (hasInjected() || _earlyInjectChecks > 15) {
+            clearInterval(_intervalId);
+            _intervalId = null;
+            return;
         }
-    }, 5000);
+        scheduleInject();
+    }, 2000);
 
     _initialized = true;
     logger.success('UI injector ready');

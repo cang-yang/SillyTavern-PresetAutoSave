@@ -610,6 +610,7 @@ function renderCard(s) {
 
     const cardCls = [
         'pas-card',
+        `pas-card-trigger-${escapeAttr(s.trigger)}`,
         isPinned ? 'pas-card-pinned' : '',
         isA ? 'pas-card-selected-a' : '',
         isB ? 'pas-card-selected-b' : '',
@@ -718,6 +719,19 @@ const FIELD_LABEL_KEYS = Object.freeze({
     char_name_prefix: 'Field char_name_prefix',
     image_inlining: 'Field image_inlining',
     inline_image_quality: 'Field inline_image_quality',
+    enable_web_search: 'Field enable_web_search',
+    send_if_empty: 'Field send_if_empty',
+    show_external_models: 'Field show_external_models',
+    use_system_prompt: 'Field use_system_prompt',
+    stream_fade_in: 'Field stream_fade_in',
+    smooth_streaming: 'Field smooth_streaming',
+    streaming_fps: 'Field streaming_fps',
+    reasoning_max_additions: 'Field reasoning_max_additions',
+    reasoning_auto_parse: 'Field reasoning_auto_parse',
+    reasoning_auto_expand: 'Field reasoning_auto_expand',
+    reasoning_show_hidden: 'Field reasoning_show_hidden',
+    reasoning_add_to_prompts: 'Field reasoning_add_to_prompts',
+    bypass_status_check: 'Field bypass_status_check',
 });
 
 /**
