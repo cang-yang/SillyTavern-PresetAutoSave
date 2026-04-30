@@ -7,9 +7,12 @@
  */
 
 import { logger } from './modules/logger.js';
-import { initCompatibility, ENV, offAll } from './modules/compatibility.js';
+import {
+    initCompatibility, ENV, offAll,
+    savePresetSafe, getPresetManager,
+} from './modules/compatibility.js';
 import { initSettings } from './modules/settings.js';
-import { initHistoryStore } from './modules/history-store.js';
+import { initHistoryStore, getAllSnapshots } from './modules/history-store.js';
 import { initAutoSave, teardown as teardownAutoSave } from './modules/auto-save.js';
 import { initUIInjector, teardown as teardownUI } from './modules/ui-injector.js';
 import {
@@ -126,18 +129,33 @@ export async function onActivate() {
 }
 
 export async function onDelete() {
-    logger.info('Cleaning up + restoring archived presets to ST');
+    logger.info('Cleaning up: restoring all presets to ST (snapshots + archives)');
     try {
-        // 关键：卸载前必须把所有"被数据接管"归档的预设回写到 ST
-        //         否则用户卸载插件后，他的预设会消失
+        // 用户语义（B11）：
+        //   - 未修改过的预设（无快照）→ 保留 ST 中的原始数据，什么都不动
+        //   - 已修改的预设（有快照） → 把"最新快照数据"写回 ST，让用户卸载插件后
+        //                              拿到的是他在面板里编辑的最新版本
+        //   - 数据接管模式下被归档的预设 → restoreAllFromArchive 已处理（优先快照、回退归档）
+        //
+        // DOM 接管模式：select.options 中被 detach 的非代表 option 由 teardownTakeover 自动复原；
+        //                ST 内部 oai_settings.preset_names 始终完整 → 预设数据本身不会丢。
+
+        // 1) 数据接管的归档恢复（内部已实现"snapshot 优先 → archive fallback"）
         await restoreAllFromArchive().catch(e =>
             logger.error('Archive restore on onDelete failed:', e)
         );
+
+        // 2) 把所有"有快照的预设"的最新快照写回 ST
+        const r = await _writeBackLatestSnapshots();
+        logger.success(`onDelete: latest snapshot writeback · ${r.written || 0} written · ${r.skipped || 0} skipped`);
+
+        // 3) 拆下所有 DOM 接管标记，让原下拉恢复完整
         teardownTakeover();
         teardownAutoSave();
         teardownUI();
         teardownHistoryPanel();
         offAll();
+        logger.success('onDelete: cleanup complete');
     } catch (e) {
         logger.error('onDelete cleanup error:', e);
     }
@@ -147,13 +165,68 @@ export function onEnable() {
     logger.info('Enabled');
 }
 
+/**
+ * 把所有"有快照的预设"的最新快照写回 ST（onDisable / onDelete 共用）
+ * 用户语义：未修改的预设保留原始；已修改的预设以最新快照覆盖
+ */
+async function _writeBackLatestSnapshots() {
+    try {
+        const allSnaps = await getAllSnapshots();
+        if (!Array.isArray(allSnaps) || allSnaps.length === 0) return { written: 0, skipped: 0 };
+        const latestMap = new Map();
+        for (const s of allSnaps) {
+            if (!s || !s.presetName || !s.apiId) continue;
+            const k = `${s.apiId}::${s.presetName}`;
+            const cur = latestMap.get(k);
+            if (!cur || (s.timestamp || 0) > (cur.timestamp || 0)) {
+                latestMap.set(k, s);
+            }
+        }
+        let written = 0, skipped = 0;
+        for (const snap of latestMap.values()) {
+            if (!snap.preset || typeof snap.preset !== 'object') {
+                skipped++;
+                continue;
+            }
+            try {
+                const pm = getPresetManager(snap.apiId);
+                // 只在 ST 实际能找到这个预设时才覆盖；
+                //   找不到 = ST 自己也没有 → 不创建（用户没要求新建）
+                if (pm && typeof pm.findPreset === 'function') {
+                    const found = pm.findPreset(snap.presetName);
+                    if (found === undefined) { skipped++; continue; }
+                }
+                await savePresetSafe(snap.presetName, snap.preset, { apiId: snap.apiId, skipUpdate: true });
+                written++;
+            } catch (e) {
+                logger.debug(`writeback failed for ${snap.presetName}:`, e);
+                skipped++;
+            }
+        }
+        return { written, skipped };
+    } catch (e) {
+        logger.warn('writeBackLatestSnapshots step failed:', e);
+        return { written: 0, skipped: 0, error: String(e) };
+    }
+}
+
 export function onDisable() {
-    logger.info('Disabled - restoring archived presets to ST');
-    // onDisable 是同步钩子，但归档恢复必须异步
-    // 这里发起异步恢复，但不阻塞 disable 流程
-    Promise.resolve(restoreAllFromArchive()).catch(e =>
-        logger.error('Archive restore on onDisable failed:', e)
-    );
+    logger.info('Disabled - restoring presets to ST (snapshots + archives)');
+    // onDisable 是同步钩子，但还原必须异步
+    // 这里 fire-and-forget：先归档恢复，再快照写回
+    (async () => {
+        try {
+            await restoreAllFromArchive();
+        } catch (e) {
+            logger.error('Archive restore on onDisable failed:', e);
+        }
+        try {
+            const r = await _writeBackLatestSnapshots();
+            logger.info(`onDisable writeback: ${r.written || 0} written, ${r.skipped || 0} skipped`);
+        } catch (e) {
+            logger.error('Snapshot writeback on onDisable failed:', e);
+        }
+    })();
     try {
         teardownTakeover();
         teardownAutoSave();

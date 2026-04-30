@@ -716,21 +716,24 @@ export function refreshTakeover() {
 }
 
 /**
- * ⚡ 关键 API：返回**所有预设名**（含被接管摘除的非代表 option）
+ * ⚡ 关键 API：返回**指定 API 的所有预设名**（含被接管摘除的非代表 option）
  *
- * 修复用户报告的"展开后只看到一个版本"bug：
+ * 修复用户报告的"展开后只看到一个版本"bug + 跨 API 污染：
  *   - DOM 接管模式下，select.options 只剩"代表 option"
  *   - 被合并的版本（V1, V2 等）已被 detach
  *   - 历史面板用 getAllPresetNames() 拿到的是 ST 内部的 presets 数组
  *     —— 但**有些 ST 版本（如 OpenAI PresetManager）的 getAllPresets() 直接读 select.options**
  *     就会少返回那些被我们 detach 的预设。
  *
- * 这个 API 同时输出 select.options 里的 + _detachedOptions 里的，
- * 是面板拿到完整列表的最可靠途径。
+ * ⚠️ ST 在 DOM 中存在多个 select[data-preset-manager-for]：
+ *   openai, kobold, novel, textgenerationwebui, context, instruct, ...
+ *   如果不按 apiId 过滤，会把 KoboldAI/Llama/Default 等 textgen 官方预设
+ *   全部混入 OpenAI 视图，造成"乱七八糟数百个预设"的假象。
  *
+ * @param {string} [filterApiId] 仅返回该 apiId 的预设；不传 = 当前 API；'*' = 全部
  * @returns {Array<{apiId: string, presetName: string, detached: boolean}>}
  */
-export function listAllPresetsIncludingDetached() {
+export function listAllPresetsIncludingDetached(filterApiId) {
     const out = [];
     let selects;
     try {
@@ -738,12 +741,65 @@ export function listAllPresetsIncludingDetached() {
     } catch (_) {
         return out;
     }
+
+    // 默认：优先用 mainApi；mainApi 不可靠时退到"当前可见 select 的 apiId"
+    let target = filterApiId;
+    if (target === undefined || target === null) {
+        try { target = getCurrentApiId(); } catch (_) { target = 'openai'; }
+    }
+    const wantAll = (target === '*');
+
+    // 检查 select 是否"用户当前看得见"（用于 fallback）
+    const isVisibleInDom = (sel) => {
+        if (!sel || !sel.isConnected) return false;
+        try {
+            // ST 用 closest('.preset_settings, [data-api-block]') 隐藏其他 API 的下拉
+            //   或者直接 style="display: none" / 父级 hidden
+            // 用 offsetParent 判断（当 element 不可见或为 fixed 时为 null）
+            // 兜底：检查 element.checkVisibility?.() 或 getBoundingClientRect
+            if (typeof sel.checkVisibility === 'function') {
+                return sel.checkVisibility();
+            }
+            const r = sel.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) return false;
+            return true;
+        } catch (_) {
+            return true;
+        }
+    };
+
+    // ⚡ 关键：build api → matched select map
+    //   一个 apiId 可能对应多个 select（如 textgenerationwebui 的下拉重复出现），
+    //   只要至少一个 isVisible 就认它"参与" - 这样用户看到的下拉对应的预设都会被列出
+    const targetSelects = [];
+    for (const sel of selects) {
+        if (!sel || !sel.isConnected) continue;
+        const apiId = getApiIdOfSelect(sel);
+        if (wantAll) {
+            targetSelects.push({ apiId, sel });
+            continue;
+        }
+        if (apiId === target) {
+            targetSelects.push({ apiId, sel });
+        }
+    }
+
+    // 如果没有任何 select 匹配 target，且不是 '*'，说明 mainApi 与 DOM 不一致
+    //   退到"取当前可见的所有 select"，兜底用户实际看到的下拉
+    if (!wantAll && targetSelects.length === 0) {
+        for (const sel of selects) {
+            if (!sel || !sel.isConnected) continue;
+            if (isVisibleInDom(sel)) {
+                const apiId = getApiIdOfSelect(sel);
+                targetSelects.push({ apiId, sel });
+            }
+        }
+    }
+
     const seen = new Set();
-    for (const select of selects) {
-        if (!select || !select.isConnected) continue;
-        const apiId = getApiIdOfSelect(select);
+    for (const { apiId, sel } of targetSelects) {
         // 当前在 DOM 中的 option
-        for (const opt of select.options || []) {
+        for (const opt of sel.options || []) {
             const name = opt.value || opt.textContent;
             if (!name) continue;
             // 接管后代表 option 的 textContent 被改成了系列名 —— 用 data-pas-orig-text 取真实预设名

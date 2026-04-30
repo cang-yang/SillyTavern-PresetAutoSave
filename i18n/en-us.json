@@ -1,5 +1,7 @@
 {
     "Preset Auto Save": "Preset Auto Save",
+    "Showing API": "Showing",
+    "API Switcher Title": "Switch which API's presets to view (does not affect SillyTavern's active API)",
     "Preset history": "Preset history",
     "Preset history records": "Preset history records",
     "History": "History",

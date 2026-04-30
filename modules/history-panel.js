@@ -62,6 +62,11 @@ let _logUnsubscribe = null;
 let _logRefreshTimer = null;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
 
+// ⚡ 当前面板正在查看的 API（影响 renderSeriesView / renderFlatView 的过滤）
+//   '' 或 null 表示用 getCurrentApiId() 探测
+//   一个具体的 apiId（如 'openai' / 'textgenerationwebui' / 'kobold' / 'novel' / ...）表示用户手动指定
+let _currentApiFilter = '';
+
 const INITIAL_STATE = Object.freeze({
     tab: 'list',
     filter: 'all',
@@ -265,6 +270,11 @@ function buildPanelHTML() {
             <i class="fa-solid fa-clock-rotate-left"></i>
             <h3>${escapeHtml(t('Preset history records'))}</h3>
             <div class="pas-panel-stats" id="pas-panel-stats"></div>
+        </div>
+        <div class="pas-panel-api-switcher" id="pas-api-switcher" title="${escapeAttr(t('API Switcher Title'))}">
+            <i class="fa-solid fa-plug"></i>
+            <span class="pas-api-switcher-label">${escapeHtml(t('Showing API'))}</span>
+            <select class="pas-api-select" id="pas-api-select"></select>
         </div>
     </div>
 
@@ -573,6 +583,9 @@ function bindEvents() {
     $('.pas-btn-snap')?.addEventListener('click', onSnapshotNow);
     $('.pas-btn-purge')?.addEventListener('click', onPurgeCorrupt);
 
+    // ⚡ B12: API 切换器
+    initApiSwitcher();
+
     // 订阅日志（增量更新，节流）
     _logUnsubscribe = logger.subscribe(() => {
         if (_state.tab !== 'logs') {
@@ -584,6 +597,62 @@ function bindEvents() {
             _logRefreshTimer = null;
             renderLogTab();
         }, 200);
+    });
+}
+
+/**
+ * 初始化 API 切换器：
+ *   - 列出当前 ST 中存在 select[data-preset-manager-for] 的所有 apiId
+ *   - 默认选中"用户当前主 API"
+ *   - 切换时重渲染列表
+ */
+function initApiSwitcher() {
+    if (!_root) return;
+    const sel = _root.querySelector('#pas-api-select');
+    if (!sel) return;
+
+    // 收集 DOM 中所有可用的 apiId
+    const seenApi = new Set();
+    try {
+        document.querySelectorAll('select[data-preset-manager-for]').forEach(s => {
+            const raw = s.getAttribute('data-preset-manager-for') || '';
+            // 部分 select 是 "kobold,kobold_horde" 这种，多 apiId 用逗号分隔
+            raw.split(',').map(x => x.trim()).filter(Boolean).forEach(api => seenApi.add(api));
+        });
+    } catch (_) {}
+
+    // 也把"已有快照"的 apiId 加进来（保证用户能看到所有有数据的 API）
+    try {
+        for (const s of (_state.snapshots || [])) {
+            if (s && s.apiId) seenApi.add(s.apiId);
+        }
+    } catch (_) {}
+
+    // 也把归档里的 apiId 加进来
+    try {
+        for (const a of (_archivedCache || [])) {
+            if (a && a.apiId) seenApi.add(a.apiId);
+        }
+    } catch (_) {}
+
+    if (seenApi.size === 0) {
+        // 实在没找到任何 select，至少给个 'openai' 占位
+        seenApi.add('openai');
+    }
+
+    const apis = [...seenApi].sort();
+    const cur = (_currentApiFilter || getCurrentApiId() || 'openai');
+    // 如果当前 cur 不在列表里，加进去
+    if (!apis.includes(cur)) apis.unshift(cur);
+
+    sel.innerHTML = apis.map(id => `<option value="${escapeAttr(id)}"${id === cur ? ' selected' : ''}>${escapeHtml(id)}</option>`).join('');
+    _currentApiFilter = cur;
+
+    sel.addEventListener('change', (e) => {
+        _currentApiFilter = String(e.target.value || '').trim();
+        logger.info(`[Panel] API filter switched to: ${_currentApiFilter}`);
+        renderListTab();
+        updateStats();
     });
 }
 
@@ -671,7 +740,27 @@ function updateViewToggleUI() {
  */
 function renderSeriesView(filtered) {
     const settings = getSettings();
-    const seriesMap = groupSnapshotsBySeries(filtered, {
+
+    // ⚡ 关键修复 B9/B10：所有数据源都按"当前 API"过滤
+    //   ST 在 DOM 中存在多个 select[data-preset-manager-for]：
+    //     openai / kobold / novel / textgenerationwebui / context / instruct / sysprompt / reasoning ...
+    //   如果不过滤会出现：
+    //     1. 一级列表混入 KoboldAI / Llama / Lightning 等其他 API 的官方预设
+    //     2. 同名 Default 在 OPENAI/TEXTGENERATIONWEBUI/CONTEXT 三个 API 都存在 →
+    //        被合并到一个"Default"系列下，显示成 3 个版本
+    //   面板必须只显示用户当前正在使用的 API 的预设。
+    //
+    // ⚠️ 注意：getCurrentApiId() 返回 ctx.mainApi（'openai' / 'textgenerationwebui' / 'kobold' / 'novel'）
+    //         它不会返回 'context' / 'instruct' / 'sysprompt' / 'reasoning' 这些子 preset 类型，
+    //         所以面板看到的"当前 API"指的是用户的主要后端，与 ST 显示当前预设下拉的逻辑一致。
+    //
+    // ⚡ 优先用 _currentApiFilter（用户在面板顶部 API 切换器里手动选择的）
+    const currentApi = _currentApiFilter || getCurrentApiId() || 'openai';
+
+    // 1) 历史快照：按当前 API 过滤
+    const filteredByApi = (filtered || []).filter(s => !s || !s.apiId || s.apiId === currentApi);
+
+    const seriesMap = groupSnapshotsBySeries(filteredByApi, {
         overrides: settings.groupingManualOverrides,
         excluded: settings.groupingExcluded,
     });
@@ -701,23 +790,25 @@ function renderSeriesView(filtered) {
     try {
         const overrides = settings.groupingManualOverrides || {};
         const excluded = settings.groupingExcluded || {};
-        const currentApi = getCurrentApiId() || 'openai';
 
-        // 来源 1：ST 内部数据（getAllPresets）
+        // 来源 1：ST 内部数据（getAllPresets）—— ST 的 getAllPresets() 默认返回当前 API 的预设
         const fromST = (getAllPresetNames() || [])
             .map(o => (o && (o.name || o.preset_name)) || o)
             .filter(s => typeof s === 'string' && s)
             .map(name => ({ apiId: currentApi, presetName: name }));
 
         // 来源 2：DOM 实际数据（含被接管摘除的）
+        //   ⚠️ 必须传 currentApi —— 不传就会跨 API 污染，把 KoboldAI/Llama 等都拉进来
         let fromDOM = [];
-        try { fromDOM = listAllPresetsIncludingDetached() || []; } catch (_) {}
+        try { fromDOM = listAllPresetsIncludingDetached(currentApi) || []; } catch (_) {}
 
         // 合并去重：以 apiId::presetName 为 key
         const allEntries = new Map();
         for (const e of [...fromST, ...fromDOM]) {
-            const k = `${e.apiId}::${e.presetName}`;
-            if (!allEntries.has(k)) allEntries.set(k, e);
+            // 双重保险：再过滤一次 apiId
+            if (e.apiId && e.apiId !== currentApi) continue;
+            const k = `${e.apiId || currentApi}::${e.presetName}`;
+            if (!allEntries.has(k)) allEntries.set(k, { apiId: e.apiId || currentApi, presetName: e.presetName });
         }
 
         for (const { apiId, presetName } of allEntries.values()) {
@@ -763,12 +854,13 @@ function renderSeriesView(filtered) {
         logger.debug('renderSeriesView merge native list failed:', e);
     }
 
-    // ⭐ 把"已归档预设"也合并进来（数据接管模式下）
+    // ⭐ 把"已归档预设"也合并进来（数据接管模式下）—— 同样按当前 API 过滤
     if (_archivedCache && _archivedCache.length > 0) {
         try {
             const overrides = settings.groupingManualOverrides || {};
             const excluded = settings.groupingExcluded || {};
             for (const arch of _archivedCache) {
+                if (arch.apiId && arch.apiId !== currentApi) continue;
                 const presetName = arch.presetName;
                 if (!presetName || excluded[presetName]) continue;
                 const info = getSeriesInfo(presetName, overrides, excluded);
@@ -811,6 +903,13 @@ function renderSeriesView(filtered) {
         }
     }
 
+    // 防御性清理：删除 versions 为空的系列（理论不应该有）
+    for (const [k, s] of seriesMap) {
+        if (!s.versions || s.versions.length === 0) {
+            seriesMap.delete(k);
+        }
+    }
+
     if (seriesMap.size === 0) {
         return `<div class="pas-empty-state pas-empty-state-grouping">
             <i class="fa-solid fa-folder-tree"></i>
@@ -830,7 +929,10 @@ function renderSeriesView(filtered) {
  * 扁平视图：保留旧的"按预设分组"行为（兼容、调试用）
  */
 function renderFlatView(filtered) {
-    const grouped = groupSnapshotsByPreset(filtered);
+    // ⚡ B9：按当前 API 过滤，避免显示 KoboldAI / Llama 等其他 API 预设
+    const currentApi = _currentApiFilter || getCurrentApiId() || 'openai';
+    const filteredByApi = (filtered || []).filter(s => !s || !s.apiId || s.apiId === currentApi);
+    const grouped = groupSnapshotsByPreset(filteredByApi);
     const presetKeys = Object.keys(grouped).sort((a, b) => {
         const at = grouped[a][0]?.timestamp || 0;
         const bt = grouped[b][0]?.timestamp || 0;
