@@ -1171,17 +1171,22 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
             return { skipped: true };
         }
 
-        const allObjs = getAllPresetNames() || [];
-        const allNames = allObjs
-            .map(o => (typeof o === 'string') ? o : (o && (o.name || o.preset_name)))
-            .filter(s => typeof s === 'string' && s);
+        // ⚡ 关键修复：用 listAllPresetsIncludingDetached 而不是 getAllPresetNames
+        //   原因：接管模式下 pm.getAllPresets() 实际读 select.options，
+        //         但 select 已被接管修改 → 只剩 15 个代表，16 个真实版本被 detach
+        //         结果只为系列名建快照，所有真实预设版本（V1-0425、Izumi 0318 等）永远没有种子！
+        //   listAllPresetsIncludingDetached 同时取 DOM + _detachedOptions，能覆盖全部预设。
+        const fromDOM = listAllPresetsIncludingDetached(apiId) || [];
+        const allNames = fromDOM
+            .filter(e => e && e.apiId === apiId && typeof e.presetName === 'string' && e.presetName)
+            .map(e => e.presetName);
 
         if (allNames.length === 0) {
             logger.debug('[Seed] no presets in ST');
             return { skipped: true, total: 0 };
         }
 
-        logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots...`);
+        logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots (DOM+detached)...`);
         if (!silent) {
             try { toast.info(t('Seed Snapshots Start', { count: allNames.length })); } catch (_) {}
         }

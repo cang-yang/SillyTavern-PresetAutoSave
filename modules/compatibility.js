@@ -297,43 +297,64 @@ export function getPresetSnapshot(presetName) {
         return null;
     }
 
-    // 路径 1：官方 API
+    const isUsable = (obj) => obj && typeof obj === 'object' && Object.keys(obj).length > 0;
+    const currentName = getSelectedPresetName();
+    const isCurrentPreset = (name === currentName);
+
+    // 路径 1：官方 API（最稳定，针对特定预设）
     let raw = null;
     if (typeof pm.getPresetSettings === 'function') {
         raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
+        if (isUsable(raw)) {
+            return cloneDeepSafe(raw);
+        }
     }
 
-    const isUsable = (obj) => obj && typeof obj === 'object' && Object.keys(obj).length > 0;
-
-    if (isUsable(raw)) {
-        return cloneDeepSafe(raw);
+    // 路径 2（针对特定预设）：用 findPreset 拿原始预设对象
+    //   findPreset 在 OpenAI/textgen/kobold 等都返回真实预设数据（不是当前生效的）
+    //   返回值可能是预设的 settings 对象，也可能是数组索引（OpenAI），或预设条目
+    if (typeof pm.findPreset === 'function') {
+        const found = safeCall(() => pm.findPreset(name), null, 'findPreset');
+        // findPreset 在 OpenAI 返回数组索引（数字），其他 API 返回 settings 对象
+        if (typeof found === 'number' && apiId === 'openai') {
+            // 用索引去 oai_settings.preset_settings_openai 取
+            try {
+                const arr = window.oai_settings && window.oai_settings.preset_settings_openai;
+                if (Array.isArray(arr) && arr[found]) {
+                    return cloneDeepSafe(arr[found]);
+                }
+            } catch (_) {}
+        } else if (isUsable(found)) {
+            return cloneDeepSafe(found);
+        }
     }
 
-    // 路径 2（关键回退）：从 getPresetList(api).settings 拿实时设置对象
-    // ST 内部对 openai：settings === oai_settings（真实运行中的对象，包含所有用户改动）
-    if (typeof pm.getPresetList === 'function') {
+    // 路径 3（关键回退）：仅当查询的是"当前生效的预设"时，
+    //   才从 getPresetList(api).settings 拿实时设置对象。
+    //   对其他预设这条路径返回的是错的（永远是当前预设数据）！
+    if (isCurrentPreset && typeof pm.getPresetList === 'function') {
         const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList');
         const live = list && list.settings;
         if (isUsable(live)) {
-            // 这条日志在每次 polling 都会打，太吵 - 仅首次和切 API 时打
             if (_lastSnapshotPath !== `list:${apiId}`) {
-                logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (fallback)`);
+                logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (fallback for current preset only)`);
                 _lastSnapshotPath = `list:${apiId}`;
             }
             return cloneDeepSafe(live);
         }
     }
 
-    // 路径 3（再兜底）：直接从 window.oai_settings 读（仅 openai）
-    if (apiId === 'openai' && window.oai_settings && typeof window.oai_settings === 'object') {
+    // 路径 4（最后兜底）：仅当查询"当前预设"且是 openai 时，从 window.oai_settings 读
+    if (isCurrentPreset && apiId === 'openai' && window.oai_settings && typeof window.oai_settings === 'object') {
         if (_lastSnapshotPath !== 'oai') {
-            logger.debug('[getPresetSnapshot] using window.oai_settings (last fallback)');
+            logger.debug('[getPresetSnapshot] using window.oai_settings (last fallback for current preset)');
             _lastSnapshotPath = 'oai';
         }
         return cloneDeepSafe(window.oai_settings);
     }
 
-    logger.warn(`[getPresetSnapshot] failed: apiId=${apiId} name=${name} raw=${raw && typeof raw} keys=${raw ? Object.keys(raw).length : 'null'}`);
+    // 失败：log 详情
+    logger.warn(`[getPresetSnapshot] failed: apiId=${apiId} name="${name}" isCurrent=${isCurrentPreset} pm=${!!pm} findPreset=${typeof pm.findPreset}`);
     return null;
 }
 

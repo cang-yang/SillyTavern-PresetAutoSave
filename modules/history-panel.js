@@ -30,7 +30,7 @@ import {
     savePresetSafe, selectPresetSafe,
     getAllPresetNames,
     deletePresetSafe,
-    on as onEvent, getEventType,
+    on as onEvent, off as offEvent, getEventType,
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
@@ -61,6 +61,7 @@ let _viewPopup = null;
 let _logUnsubscribe = null;
 let _logRefreshTimer = null;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
+let _panelEventBindings = [];  // [{ event, handler }] 用于 popup 关闭时退订
 
 // ⚡ 当前面板正在查看的 API（影响 renderSeriesView / renderFlatView 的过滤）
 //   '' 或 null 表示用 getCurrentApiId() 探测
@@ -174,6 +175,11 @@ export async function showHistoryPanel() {
             clearTimeout(_logRefreshTimer);
             _logRefreshTimer = null;
         }
+        // 取消所有面板内的事件订阅（预设切换等）
+        for (const { event, handler } of _panelEventBindings) {
+            try { offEvent(event, handler); } catch (_) {}
+        }
+        _panelEventBindings = [];
         _popup = null;
         _root = null;
         // 关闭可能还开着的子弹窗
@@ -589,6 +595,37 @@ function bindEvents() {
             renderLogTab();
         }, 200);
     });
+
+    // ⚡ 订阅预设切换事件 → 实时更新"当前预设"金色高亮
+    //   不重新加载所有快照（避免性能问题），只重新渲染列表
+    let _panelRefreshTimer = null;
+    const onPresetChanged = () => {
+        if (_panelRefreshTimer) return;
+        _panelRefreshTimer = setTimeout(() => {
+            _panelRefreshTimer = null;
+            try {
+                if (_state.tab === 'list') renderListTab();
+                updateStats();
+            } catch (e) {
+                logger.debug('[Panel] preset-changed re-render failed:', e);
+            }
+        }, 80);
+    };
+
+    const presetChangeEvents = [
+        getEventType('OAI_PRESET_CHANGED_AFTER', 'oai_preset_changed_after'),
+        getEventType('PRESET_CHANGED', 'preset_changed'),
+        getEventType('CHATCOMPLETION_SOURCE_CHANGED', 'chatcompletion_source_changed'),
+        getEventType('MAIN_API_CHANGED', 'main_api_changed'),
+    ].filter(Boolean);
+    for (const ev of presetChangeEvents) {
+        try {
+            onEvent(ev, onPresetChanged);
+            _panelEventBindings.push({ event: ev, handler: onPresetChanged });
+        } catch (e) {
+            logger.debug(`[Panel] subscribe ${ev} failed:`, e);
+        }
+    }
 }
 
 // =====================================================
