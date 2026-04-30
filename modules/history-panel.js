@@ -2489,6 +2489,10 @@ function renderSettingsTab() {
 
     ${group(t('Takeover Group'), [
         toggle('takeoverEnabled', t('Takeover Enabled'), t('Takeover Enabled Desc'), s.takeoverEnabled),
+        select('takeoverMode', t('Takeover Mode'), t('Takeover Mode Desc'), s.takeoverMode, [
+            { value: 'dom',  label: t('Takeover Mode DOM') },
+            { value: 'data', label: t('Takeover Mode Data') },
+        ]),
         select('takeoverDefaultStrategy', t('Takeover Default Strategy'), t('Takeover Default Strategy Desc'), s.takeoverDefaultStrategy, [
             { value: 'latest', label: t('Takeover Strategy Latest') },
             { value: 'manual', label: t('Takeover Strategy Manual') },
@@ -2602,8 +2606,24 @@ function bindSettingsEvents(container) {
 
     // 下拉
     container.querySelectorAll('select[data-setting]').forEach(sel => {
-        sel.addEventListener('change', () => {
-            updateSetting(sel.getAttribute('data-setting'), sel.value);
+        sel.addEventListener('change', async () => {
+            const key = sel.getAttribute('data-setting');
+            const newValue = sel.value;
+
+            // 特殊：切换到"数据接管"模式需要明确确认
+            if (key === 'takeoverMode' && newValue === 'data' && !getSettings().takeoverDataConfirmed) {
+                const ok = await confirmSafe(
+                    t('Takeover Data Confirm Title'),
+                    t('Takeover Data Confirm Hint')
+                );
+                if (!ok) {
+                    sel.value = getSettings().takeoverMode || 'dom';
+                    return;
+                }
+                updateSetting('takeoverDataConfirmed', true);
+            }
+
+            updateSetting(key, newValue);
         });
     });
 

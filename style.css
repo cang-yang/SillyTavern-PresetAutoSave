@@ -737,11 +737,15 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 9px 12px;
+    padding: 10px 14px;
     cursor: pointer;
     user-select: none;
     gap: 10px;
+    min-height: 44px;
     transition: background var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-series-header:hover {
+    background: rgba(255, 255, 255, 0.03);
 }
 .pas-series-header:hover {
     background: var(--pas-surface-1);
@@ -751,7 +755,8 @@
     align-items: center;
     gap: 9px;
     min-width: 0;
-    flex: 1;
+    flex: 1 1 auto;
+    overflow: hidden;  /* 防止内部子元素溢出影响外部 */
 }
 .pas-series-chevron {
     font-size: 0.75em;
@@ -771,12 +776,14 @@
 }
 .pas-series-name {
     font-weight: 600;
-    font-size: 1.02em;
+    font-size: 1.05em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--pas-fg);
     letter-spacing: 0.2px;
+    flex: 1 1 auto;     /* 允许系列名占据剩余空间，确保始终能看到 */
+    min-width: 80px;    /* 系列名永远至少有 80px 宽 */
 }
 .pas-series-header-meta {
     display: flex;
@@ -785,8 +792,10 @@
     font-size: 0.78em;
     color: var(--pas-fg-faint);
     flex-shrink: 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;     /* 不换行，避免一级面板高度突变 */
     justify-content: flex-end;
+    overflow: hidden;       /* 避免溢出影响标题列 */
+    max-width: 50%;         /* 元数据区不超过 50% 宽度，留给系列名 */
 }
 .pas-series-versions,
 .pas-series-snapshots {
@@ -1315,19 +1324,22 @@
 
 /* --- 触发类型标签（药丸式 tags） --- */
 .pas-tag {
-    padding: 1px 8px;
+    padding: 1px 7px;
     border-radius: 10px;
-    font-size: 0.71em;
+    font-size: 0.7em;
     font-weight: 600;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    height: 18px;
+    height: 17px;
     line-height: 1;
     white-space: nowrap;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.3px;
     text-transform: uppercase;
     border: 1px solid transparent;
+    flex-shrink: 0;
+    vertical-align: middle;
+    box-sizing: border-box;
 }
 .pas-tag::before {
     content: "";
@@ -1336,12 +1348,18 @@
     border-radius: 50%;
     background: currentColor;
     opacity: 0.85;
+    flex-shrink: 0;
 }
+/* "当前预设" 标签 —— 改为柔和琥珀，避免遮挡上方元素 */
 .pas-tag-current {
-    background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
-    color: #1a1a1a;
-    border-color: rgba(245, 158, 11, 0.55);
-    text-shadow: 0 0 1px rgba(255, 255, 255, 0.4);
+    background: rgba(251, 191, 36, 0.16);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.42);
+    text-shadow: none;
+}
+.pas-tag-current::before {
+    background: #fbbf24;
+    opacity: 1;
 }
 .pas-tag-auto {
     background: rgba(96, 165, 250, 0.16);

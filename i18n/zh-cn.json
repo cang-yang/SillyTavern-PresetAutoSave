@@ -337,5 +337,12 @@
     "Apply Version Failed": "应用「{{name}}」失败",
     "No Snapshots Yet": "无快照",
     "No Snapshots Yet Title": "此版本尚未创建任何快照（修改后会自动产生）",
-    "No Snapshots Yet Hint": "此版本暂无任何历史快照。修改任意参数后会自动创建第一条快照。"
+    "No Snapshots Yet Hint": "此版本暂无任何历史快照。修改任意参数后会自动创建第一条快照。",
+
+    "Takeover Mode": "接管方式",
+    "Takeover Mode Desc": "DOM 接管：仅修改下拉显示，不动数据，安全可逆。\\n数据接管：直接从 ST 删除非代表预设并归档到本地，下拉永久干净，但卸载插件前必须先关闭以恢复。",
+    "Takeover Mode DOM": "DOM 接管（轻量·推荐）",
+    "Takeover Mode Data": "数据接管（一劳永逸·谨慎）",
+    "Takeover Data Confirm Title": "⚠ 启用「数据接管」",
+    "Takeover Data Confirm Hint": "<b>这将直接从 SillyTavern 中删除非代表预设</b>，把它们的数据归档到本地数据库。<br><br>📌 <b>好处</b>：原生预设下拉会永久干净，无需每次启动都重新接管。<br>📌 <b>影响</b>：SillyTavern 的预设列表里那些版本会真的消失。<br>📌 <b>恢复方式</b>：<br>　• 卸载插件时会自动恢复全部归档预设<br>　• 切换回「DOM 接管」时会自动恢复<br>　• 设置 Tab 中可手动恢复<br><br>请确认你已知道这些影响，确定继续吗？"
 }

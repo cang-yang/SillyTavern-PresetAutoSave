@@ -38,16 +38,22 @@ import { logger } from './logger.js';
  *   captureGroup - 0 = 整个 match 就是版本号；1 = m[1] 才是版本号
  */
 const _BUILTIN_VERSION_PATTERNS = [
-    // 1) V/v + 数字 + (短横 + 数字)+         例：V2-0427-3 / V1-0425
+    // 1) V/v + 数字 + (短横 + 数字)+         例：V2-0427-3 / V1-0425 / v1-0428-改 (中文后缀也兼容)
     {
-        re: /[Vv]\d+(?:-\d+)+\s*$/,
+        re: /[Vv]\d+(?:-\d+)+(?:[-_].*)?\s*$/,
         kind: 'v-dash',
         captureGroup: 0,
     },
-    // 2) 阶段词 + 空格 + 数字.数字...         例：Beta 0.40 / Alpha 1.2
+    // 2) 阶段词 + 空格 + 数字.数字...         例：Beta 0.40 / Alpha 1.2 / RC 1.0
     {
-        re: /\s+(?:Beta|Alpha|RC|Preview|Test|Dev|Stable|Release|Snapshot)\s+\d+(?:\.\d+)+\s*$/i,
+        re: /\s+(?:Beta|Alpha|RC|Preview|Test|Dev|Stable|Release|Snapshot|Final)\s+\d+(?:\.\d+)+\s*$/i,
         kind: 'phase',
+        captureGroup: 0,
+    },
+    // 2.5) 阶段词 + 数字（无小数）             例：Beta1 / RC2 / Alpha 3
+    {
+        re: /\s*(?:Beta|Alpha|RC|Preview|Test|Dev|Stable|Release|Final)\s*\d+\s*$/i,
+        kind: 'phase-int',
         captureGroup: 0,
     },
     // 3) v/V + 数字.数字(.数字...)            例：v1.2 / V2.0.1
@@ -57,24 +63,60 @@ const _BUILTIN_VERSION_PATTERNS = [
         captureGroup: 0,
     },
     // 4) 末尾纯数字.数字(.数字...)            例：北棱预设2.4
-    //    用普通捕获组替代 lookbehind：([^A-Za-z])(\d+\.\d+)$ → 版本在 m[2]
-    //    无前缀（开头就是数字）也允许，靠 |^ 保留
+    //    用普通捕获组替代 lookbehind
     {
         re: /(?:^|[^A-Za-z])(\d+(?:\.\d+)+)\s*$/,
         kind: 'dot',
         captureGroup: 1,
     },
-    // 5) 末尾 4 位数字（日期）                例：Izumi 0318
+    // 5) 末尾 8 位数字（完整日期）             例：preset 20250428
     {
-        re: /\s+(\d{4})\s*$/,
-        kind: 'date',
+        re: /[\s\-_]+(\d{8})\s*$/,
+        kind: 'date8',
         captureGroup: 1,
     },
-    // 6) 末尾 V/v + 数字（短）                例：预设V2 / 模型 v3
-    //    用普通捕获组替代 lookbehind：分隔符（空白/中文标点）+ Vn
+    // 6) 末尾 6 位数字（年月+日）              例：preset 250428
     {
-        re: /(?:[\s\u4e00-\u9fa5\u3000-\u303f])([Vv]\d+)\s*$/,
+        re: /[\s\-_]+(\d{6})\s*$/,
+        kind: 'date6',
+        captureGroup: 1,
+    },
+    // 7) 末尾 4 位数字（月+日）                例：Izumi 0318
+    {
+        re: /[\s\-_]+(\d{4})\s*$/,
+        kind: 'date4',
+        captureGroup: 1,
+    },
+    // 8) 末尾 V/v + 数字（短）                例：预设V2 / 模型 v3
+    //    用普通捕获组替代 lookbehind
+    {
+        re: /(?:[\s\-_·•\u4e00-\u9fa5\u3000-\u303f])([Vv]\d+)\s*$/,
         kind: 'v-num',
+        captureGroup: 1,
+    },
+    // 9) 末尾 #数字                            例：preset #5
+    {
+        re: /\s*#\s*(\d+)\s*$/,
+        kind: 'hash-num',
+        captureGroup: 1,
+    },
+    // 10) 末尾"修改/改/新版/旧版"等中文修饰    例：梦境思客 修改版 / 北棱预设 新版 / 北棱预设修改版
+    //     无前导分隔符也兼容
+    {
+        re: /[\s\-_]?(修改版|新版|旧版|测试版|稳定版|改良版|增强版|完整版|精简版|最终版|内部版|公测版|内测版|优化版|魔改版)\s*$/,
+        kind: 'cn-suffix',
+        captureGroup: 1,
+    },
+    // 11) 末尾"vX.Y" 中间夹连字符或下划线     例：preset_v1.2 / preset-v2.0
+    {
+        re: /[\-_]([Vv]\d+(?:\.\d+)+)\s*$/,
+        kind: 'sep-v-dot',
+        captureGroup: 1,
+    },
+    // 12) 末尾 _数字 / -数字（单独）          例：preset_2 / preset-3
+    {
+        re: /[\-_](\d+)\s*$/,
+        kind: 'sep-num',
         captureGroup: 1,
     },
 ];

@@ -48,9 +48,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
 
     // 预设接管（核心特性：用一级系列名替换原生预设下拉）
     takeoverEnabled: true,          // 是否启用接管（关闭后原生下拉恢复原状）
+    takeoverMode: 'dom',            // 'dom' | 'data' DOM 接管（轻量）/ 数据接管（一劳永逸）
     takeoverDefaultStrategy: 'latest', // 'latest' | 'manual' 选中代表版本的默认策略
     seriesDefaultApply: {},         // { [seriesKey]: presetName } 用户为每个系列指定的"默认应用版本"
     takeoverHideMode: 'hide',       // 'hide' | 'collapse' 非代表 option 的处理方式（保留扩展）
+    takeoverDataConfirmed: false,   // 用户是否已经接受过"数据接管"模式的危险提示
 
     // 高级
     debugMode: false,               // 启用详细日志
@@ -79,9 +81,11 @@ const VALIDATORS = {
     groupingExcluded: (v) => sanitizeBoolMap(v),
     groupingDefaultExpand: (v) => (v === 'all' || v === 'none' || v === 'current') ? v : 'current',
     takeoverEnabled: (v) => Boolean(v),
+    takeoverMode: (v) => (v === 'data' ? 'data' : 'dom'),
     takeoverDefaultStrategy: (v) => (v === 'manual' ? 'manual' : 'latest'),
     seriesDefaultApply: (v) => sanitizeStringMap(v),
     takeoverHideMode: (v) => (v === 'collapse' ? 'collapse' : 'hide'),
+    takeoverDataConfirmed: (v) => Boolean(v),
     debugMode: (v) => Boolean(v),
     fallbackPolling: (v) => Boolean(v),
 };

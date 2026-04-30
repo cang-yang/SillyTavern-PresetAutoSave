@@ -24,13 +24,24 @@
  */
 
 import { logger } from './logger.js';
-import { getSettings, onSettingChange } from './settings.js';
-import { on, getEventType, getCurrentApiId, selectPresetSafe } from './compatibility.js';
+import { getSettings, onSettingChange, updateSetting } from './settings.js';
+import {
+    on, getEventType, getCurrentApiId, selectPresetSafe,
+    getPresetManager, getPresetSnapshot, savePresetSafe, deletePresetSafe, getAllPresetNames,
+} from './compatibility.js';
 import {
     parsePresetName,
     getSeriesInfo,
     pickRepresentativeVersion,
 } from './preset-grouping.js';
+import {
+    initArchiveStore,
+    archivePreset,
+    listArchivedPresets,
+    removeArchivedPreset,
+    getArchiveCount,
+} from './archive-store.js';
+import { getSnapshots } from './history-store.js';
 
 // =====================================================
 // 常量
@@ -73,10 +84,22 @@ let _selfChangingValue = false;
 // 初始化
 // =====================================================
 export async function initPresetTakeover() {
-    if (_initialized) return;
+    if (_initialized) {
+        logger.debug('Takeover already initialized, skip');
+        return;
+    }
 
-    // 监听设置变化：开关 / 默认应用映射 / 手动覆盖 / 排除 都会影响接管
-    _settingUnsubscribe = onSettingChange(({ key }) => {
+    logger.info('[Takeover] Starting initialization...');
+
+    // 初始化归档存储（数据接管模式需要）
+    try {
+        await initArchiveStore();
+    } catch (e) {
+        logger.warn('[Takeover] archive store init failed (data mode unavailable):', e);
+    }
+
+    // 监听设置变化
+    _settingUnsubscribe = onSettingChange(({ key, newValue, oldValue }) => {
         if (
             key === 'takeoverEnabled'
             || key === 'seriesDefaultApply'
@@ -84,7 +107,25 @@ export async function initPresetTakeover() {
             || key === 'groupingExcluded'
             || key === 'groupingEnabled'
         ) {
+            logger.debug(`[Takeover] setting changed: ${key} → schedule refresh`);
             scheduleRefresh();
+        }
+
+        // 模式切换：dom ↔ data
+        if (key === 'takeoverMode') {
+            logger.info(`[Takeover] mode changed: ${oldValue} → ${newValue}`);
+            if (oldValue === 'data' && newValue === 'dom') {
+                // 从数据接管退回 DOM 接管 → 必须先把所有归档预设回写到 ST
+                restoreAllFromArchive().catch(e =>
+                    logger.error('[Takeover] failed to restore archives:', e)
+                );
+            } else if (oldValue === 'dom' && newValue === 'data') {
+                // 从 DOM 接管 → 数据接管：先还原 DOM，再做归档
+                if (_takeoverActive) restoreAllDom();
+                applyDataTakeover().catch(e =>
+                    logger.error('[Takeover] failed to apply data takeover:', e)
+                );
+            }
         }
     });
 
@@ -97,23 +138,32 @@ export async function initPresetTakeover() {
         'APP_READY',
         'SETTINGS_UPDATED',
     ];
+    let boundEventCount = 0;
     for (const evtName of events) {
         try {
             const evt = getEventType(evtName, evtName.toLowerCase());
             const unsub = on(evt, () => scheduleRefresh());
-            if (typeof unsub === 'function') _eventUnsubscribers.push(unsub);
+            if (typeof unsub === 'function') {
+                _eventUnsubscribers.push(unsub);
+                boundEventCount++;
+            }
         } catch (e) {
-            logger.debug(`takeover: failed to bind ${evtName}`, e);
+            logger.debug(`[Takeover] failed to bind ${evtName}`, e);
         }
     }
+    logger.debug(`[Takeover] bound ${boundEventCount}/${events.length} ST events`);
 
     setupDocObserver();
 
-    // 立即应用一次
-    scheduleRefresh();
-
     _initialized = true;
-    logger.success('Preset takeover ready');
+
+    // 立即应用一次（同步 + 微延迟双保险）
+    refresh();
+    setTimeout(() => refresh(), 100);
+    setTimeout(() => refresh(), 500);
+    setTimeout(() => refresh(), 1500);
+
+    logger.success('[Takeover] Ready ✓');
 }
 
 // =====================================================
@@ -143,12 +193,23 @@ function refresh() {
     const shouldActive = !!(s.enabled && s.groupingEnabled && s.takeoverEnabled);
 
     if (!shouldActive) {
-        // 需要关闭接管 → 还原所有 select
         if (_takeoverActive) {
-            restoreAll();
+            logger.info(`[Takeover] disabling (enabled=${s.enabled} grouping=${s.groupingEnabled} takeover=${s.takeoverEnabled}) → restore native dropdown`);
+            // 数据接管模式 → 必须先把归档恢复回 ST，再退出
+            if (s.takeoverMode === 'data') {
+                restoreAllFromArchive().catch(e => logger.error('[Takeover] data restore failed:', e));
+            }
+            restoreAllDom();
             _takeoverActive = false;
-            logger.info('Takeover disabled, restored native dropdown');
+        } else {
+            logger.debug(`[Takeover] inactive (enabled=${s.enabled} grouping=${s.groupingEnabled} takeover=${s.takeoverEnabled})`);
         }
+        return;
+    }
+
+    // 模式分流：数据接管单独走异步流程
+    if (s.takeoverMode === 'data') {
+        applyDataTakeover().catch(e => logger.error('[Takeover] data takeover failed:', e));
         return;
     }
 
@@ -156,21 +217,42 @@ function refresh() {
     let selects;
     try {
         selects = document.querySelectorAll(SELECT_SELECTOR);
-    } catch (_) {
+    } catch (e) {
+        logger.warn('[Takeover] querySelectorAll failed:', e);
         return;
     }
-    if (!selects || selects.length === 0) return;
 
+    if (!selects || selects.length === 0) {
+        logger.debug('[Takeover] no select[data-preset-manager-for] found in DOM yet');
+        return;
+    }
+
+    let appliedCount = 0;
+    let totalSeries = 0;
+    let totalDetached = 0;
     for (const select of selects) {
         if (!select || !select.isConnected) continue;
         try {
-            applyTakeoverToSelect(select);
+            const stat = applyTakeoverToSelect(select);
+            appliedCount++;
+            if (stat) {
+                totalSeries += stat.seriesCount || 0;
+                totalDetached += stat.detachedCount || 0;
+            }
         } catch (e) {
-            logger.warn('Failed to takeover select:', e);
+            logger.warn('[Takeover] failed for select:', e);
         }
     }
 
-    _takeoverActive = true;
+    if (appliedCount > 0) {
+        if (!_takeoverActive) {
+            logger.success(`[Takeover] activated · ${appliedCount} select(s) · ${totalSeries} series · ${totalDetached} option(s) merged`);
+        } else {
+            logger.debug(`[Takeover] refreshed · ${appliedCount} select(s) · ${totalSeries} series · ${totalDetached} merged`);
+        }
+    }
+
+    _takeoverActive = appliedCount > 0;
 }
 
 // =====================================================
@@ -304,7 +386,12 @@ function applyTakeoverToSelect(select) {
     // 6) 启动 select 子树 observer（监听 ST 重新渲染）
     setupSelectObserver(select);
 
-    logger.debug(`takeover applied to [${apiId}]: ${repAssignments.length} series, ${detachQueue.length} detached`);
+    logger.debug(`[Takeover] applied to [${apiId}]: ${repAssignments.length} series, ${detachQueue.length} detached`);
+    return {
+        apiId,
+        seriesCount: repAssignments.length,
+        detachedCount: detachQueue.length,
+    };
 }
 
 // =====================================================
@@ -420,7 +507,7 @@ function cleanupSelectAttributes(select) {
     select.removeAttribute(TAKEOVER_DATA_ATTR);
 }
 
-function restoreAll() {
+function restoreAllDom() {
     let selects;
     try {
         selects = document.querySelectorAll(`select[${TAKEOVER_DATA_ATTR}="1"]`);
@@ -585,7 +672,7 @@ export function getSeriesDefaultApply(seriesKey) {
 // 卸载
 // =====================================================
 export function teardown() {
-    try { restoreAll(); } catch (_) {}
+    try { restoreAllDom(); } catch (_) {}
 
     if (_selectObserver) {
         try { _selectObserver.disconnect(); } catch (_) {}
@@ -621,4 +708,251 @@ export function teardown() {
     _takeoverActive = false;
     _initialized = false;
     logger.info('Preset takeover torn down');
+}
+
+// =====================================================
+// 数据级接管：直接通过 PresetManager 删除非代表预设
+// 真正的"一劳永逸"模式：之后即使 ST 重启、用户禁用插件，状态也保持
+// 卸载插件时通过 restoreAllFromArchive() 还原
+// =====================================================
+
+// 防止数据接管时多次并发调用
+let _dataTakeoverRunning = false;
+
+/**
+ * 把所有同系列非代表预设：
+ *   1. 通过 getPresetSnapshot 读取完整数据
+ *   2. archivePreset 备份到 IndexedDB
+ *   3. 通过 deletePresetSafe 从 ST 中删除
+ *
+ * 完成后 ST 的预设列表只剩"系列代表"，原生下拉自然干净
+ * 用户卸载插件 / 切回 dom 模式时调用 restoreAllFromArchive 恢复
+ */
+async function applyDataTakeover() {
+    if (_dataTakeoverRunning) {
+        logger.debug('[Takeover-Data] already running, skip');
+        return;
+    }
+    _dataTakeoverRunning = true;
+    try {
+        const settings = getSettings();
+        if (!settings.takeoverDataConfirmed) {
+            logger.warn('[Takeover-Data] not confirmed by user yet (takeoverDataConfirmed=false), abort');
+            return;
+        }
+
+        const apiId = getCurrentApiId();
+        if (!apiId) {
+            logger.warn('[Takeover-Data] no current API id');
+            return;
+        }
+
+        const overrides = settings.groupingManualOverrides || {};
+        const excluded = settings.groupingExcluded || {};
+        const seriesDefaults = settings.seriesDefaultApply || {};
+
+        // 1) 拿到 ST 当前的全部预设列表
+        const allObjs = getAllPresetNames() || [];
+        const allNames = allObjs
+            .map(o => (typeof o === 'string') ? o : (o && (o.name || o.preset_name)))
+            .filter(s => typeof s === 'string' && s);
+
+        if (allNames.length === 0) {
+            logger.debug('[Takeover-Data] no presets in ST');
+            return;
+        }
+
+        // 2) 按系列分组
+        const seriesMap = new Map();
+        for (const name of allNames) {
+            if (excluded[name]) continue;
+            const info = getSeriesInfo(name, overrides, excluded);
+            if (info.excluded) continue;
+            const key = info.series || name;
+            if (!seriesMap.has(key)) seriesMap.set(key, []);
+            seriesMap.get(key).push({
+                presetName: name,
+                version: info.version,
+                duplicate: info.duplicate,
+            });
+        }
+
+        // 3) 对每个系列：保留代表，归档+删除其它
+        let archived = 0;
+        let deleted = 0;
+        let failed = 0;
+        const currentName = (typeof window !== 'undefined' && window.SillyTavern)
+            ? (() => {
+                try { return SillyTavern.getContext().getPresetManager?.(apiId)?.getSelectedPresetName?.() || ''; }
+                catch (_) { return ''; }
+            })()
+            : '';
+
+        for (const [seriesKey, items] of seriesMap) {
+            if (items.length <= 1) continue; // 单版本系列跳过
+
+            // 选代表：当前选中 > 用户配置默认 > 最新
+            let rep = items.find(it => it.presetName === currentName);
+            if (!rep) {
+                rep = pickRepresentativeVersion(seriesKey, items, seriesDefaults);
+            }
+            if (!rep) continue;
+
+            // 把非代表归档 + 删除
+            for (const it of items) {
+                if (it.presetName === rep.presetName) continue;
+                try {
+                    // 3.1) 读取完整数据
+                    const data = getPresetSnapshot(it.presetName);
+                    if (!data) {
+                        logger.warn(`[Takeover-Data] cannot read preset "${it.presetName}", skip`);
+                        failed++;
+                        continue;
+                    }
+                    // 3.2) 归档
+                    const ok = await archivePreset(apiId, it.presetName, data, seriesKey, 'takeover-merge');
+                    if (!ok) {
+                        logger.warn(`[Takeover-Data] archive failed for "${it.presetName}", skip delete`);
+                        failed++;
+                        continue;
+                    }
+                    archived++;
+                    // 3.3) 从 ST 删除
+                    const delOk = await deletePresetSafe(it.presetName, apiId);
+                    if (delOk) {
+                        deleted++;
+                    } else {
+                        logger.warn(`[Takeover-Data] delete failed for "${it.presetName}"`);
+                        failed++;
+                    }
+                } catch (e) {
+                    logger.error(`[Takeover-Data] error processing "${it.presetName}":`, e);
+                    failed++;
+                }
+            }
+        }
+
+        if (archived > 0 || deleted > 0) {
+            logger.success(`[Takeover-Data] complete: archived=${archived}, deleted=${deleted}, failed=${failed}`);
+        } else {
+            logger.debug('[Takeover-Data] nothing to do (no multi-version series)');
+        }
+        _takeoverActive = true;
+    } catch (e) {
+        logger.error('[Takeover-Data] applyDataTakeover failed:', e);
+    } finally {
+        _dataTakeoverRunning = false;
+    }
+}
+
+/**
+ * 从归档还原所有被数据接管的预设到 ST PresetManager
+ *
+ * 数据源优先级（每个被归档的预设独立判断）：
+ *   1. ⭐ 最新快照（history-store）：归档之后用户在面板里编辑过 → 用最新版
+ *   2. 归档原始数据（archive-store）：归档时的备份 → 兜底
+ *   3. 都没有 → 标记失败
+ *
+ * 这样无论是用户在面板里继续修改了某个版本，还是从未动过，
+ * 还原后都能拿到"最新最完整"的数据，绝不丢失任何用户修改。
+ *
+ * 调用时机：
+ *   - 用户从 'data' 切回 'dom' 模式
+ *   - 用户卸载插件（onDelete / onDisable）
+ *   - 用户在面板手动点"恢复全部归档"
+ */
+export async function restoreAllFromArchive() {
+    try {
+        const archives = await listArchivedPresets();
+        if (!archives || archives.length === 0) {
+            logger.debug('[Takeover-Data] no archives to restore');
+            return { restored: 0, failed: 0, fromSnapshot: 0, fromArchive: 0 };
+        }
+
+        let restored = 0;
+        let failed = 0;
+        let fromSnapshot = 0;
+        let fromArchive = 0;
+
+        for (const entry of archives) {
+            try {
+                if (!entry || !entry.apiId || !entry.presetName) {
+                    failed++;
+                    continue;
+                }
+
+                // ⭐ 优先选择最新快照（用户最近的修改）
+                let dataToRestore = null;
+                let sourceLabel = 'archive';
+
+                try {
+                    const snapshots = await getSnapshots(entry.apiId, entry.presetName);
+                    if (Array.isArray(snapshots) && snapshots.length > 0) {
+                        // history-store 内已经按时间倒序，第 0 条 = 最新
+                        const latestSnap = snapshots[0];
+                        if (latestSnap && latestSnap.preset && typeof latestSnap.preset === 'object') {
+                            dataToRestore = latestSnap.preset;
+                            sourceLabel = `snapshot(${latestSnap.id?.slice(0, 6) || '?'}, ts=${latestSnap.timestamp})`;
+                            fromSnapshot++;
+                        }
+                    }
+                } catch (e) {
+                    logger.debug(`[Takeover-Data] snapshot lookup failed for "${entry.presetName}":`, e);
+                }
+
+                // 回退到归档原始数据
+                if (!dataToRestore) {
+                    if (!entry.data || typeof entry.data !== 'object') {
+                        logger.warn(`[Takeover-Data] no data available for "${entry.presetName}"`);
+                        failed++;
+                        continue;
+                    }
+                    dataToRestore = entry.data;
+                    sourceLabel = 'archive';
+                    fromArchive++;
+                }
+
+                // 写回 ST PresetManager
+                const ok = await savePresetSafe(entry.presetName, dataToRestore, { apiId: entry.apiId });
+                if (ok) {
+                    await removeArchivedPreset(entry.apiId, entry.presetName);
+                    restored++;
+                    logger.debug(`[Takeover-Data] restored "${entry.presetName}" from ${sourceLabel}`);
+                } else {
+                    logger.warn(`[Takeover-Data] savePreset failed for "${entry.presetName}"`);
+                    failed++;
+                }
+            } catch (e) {
+                logger.error(`[Takeover-Data] restore error for "${entry?.presetName}":`, e);
+                failed++;
+            }
+        }
+
+        logger.success(
+            `[Takeover-Data] restore complete: ${restored} restored ` +
+            `(${fromSnapshot} from latest snapshot · ${fromArchive} from archive)` +
+            (failed > 0 ? ` · ${failed} failed` : '')
+        );
+        return { restored, failed, fromSnapshot, fromArchive };
+    } catch (e) {
+        logger.error('[Takeover-Data] restoreAllFromArchive failed:', e);
+        return { restored: 0, failed: -1, fromSnapshot: 0, fromArchive: 0 };
+    }
+}
+
+/**
+ * 公开 API：列出当前归档（用于面板查看）
+ */
+export async function getArchiveSummary() {
+    const archives = await listArchivedPresets();
+    return {
+        count: archives.length,
+        items: archives.map(a => ({
+            apiId: a.apiId,
+            presetName: a.presetName,
+            seriesKey: a.seriesKey,
+            archivedAt: a.archivedAt,
+            reason: a.reason,
+        })),
+    };
 }

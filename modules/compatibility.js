@@ -359,6 +359,27 @@ function cloneDeepSafe(obj) {
  * @param {object} [settings] 不指定则使用当前预设设置
  * @param {object} [options] { skipUpdate, apiId }
  */
+/**
+ * 安全删除预设
+ * @param {string} presetName 要删除的预设名
+ * @param {string} [apiId] API 标识（默认当前）
+ * @returns {Promise<boolean>} 是否成功
+ */
+export async function deletePresetSafe(presetName, apiId = null) {
+    const pm = apiId ? getPresetManager(apiId) : getPresetManager();
+    if (!pm || typeof pm.deletePreset !== 'function') {
+        logger.warn('deletePresetSafe: PresetManager.deletePreset unavailable');
+        return false;
+    }
+    try {
+        const ok = await pm.deletePreset(presetName);
+        return !!ok;
+    } catch (e) {
+        logger.warn(`deletePresetSafe(${presetName}) failed:`, e);
+        return false;
+    }
+}
+
 export async function savePresetSafe(presetName, settings = null, options = {}) {
     const pm = getPresetManager(options.apiId);
     if (!pm || typeof pm.savePreset !== 'function') {
