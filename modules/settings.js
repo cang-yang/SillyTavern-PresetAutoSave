@@ -220,16 +220,40 @@ export function updateSetting(key, value) {
 }
 
 /**
- * 批量更新
+ * 批量更新（只调用一次 persist，比逐个 updateSetting 高效）
  * @param {object} updates 键值对
  * @returns {string[]} 实际发生变化的key列表
  */
 export function batchUpdate(updates) {
+    if (!_initialized) {
+        logger.warn('batchUpdate called before init');
+        return [];
+    }
     const changed = [];
+    const notifications = [];
+
     for (const [key, value] of Object.entries(updates)) {
-        if (updateSetting(key, value)) {
-            changed.push(key);
+        if (!Object.hasOwn(DEFAULT_SETTINGS, key)) continue;
+        const validator = VALIDATORS[key];
+        const validated = validator ? validator(value) : value;
+        const oldValue = _settings[key];
+        if (oldValue === validated) continue;
+
+        _settings[key] = validated;
+        if (key === 'debugMode') logger.setDebugMode(validated);
+
+        changed.push(key);
+        notifications.push({ key, newValue: validated, oldValue });
+    }
+
+    if (changed.length > 0) {
+        // 一次性写入磁盘
+        persistSettings();
+        // 然后通知所有订阅者
+        for (const n of notifications) {
+            notifyListeners(n.key, n.newValue, n.oldValue);
         }
+        logger.debug(`batchUpdate: ${changed.length} setting(s) changed (${changed.join(', ')})`);
     }
     return changed;
 }

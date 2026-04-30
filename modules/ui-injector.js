@@ -295,10 +295,20 @@ function setupObserver() {
 
     let pending = false;
 
-    _observer = new MutationObserver(() => {
+    // ST 切换 API 时会一次性产生几十条 mutation；这里只做一次轻量检查
+    _observer = new MutationObserver((mutations) => {
         if (pending) return;
-        pending = true;
+        // 快速过滤：只关心新增/删除节点，且数量不为 0
+        let relevant = false;
+        for (const m of mutations) {
+            if (m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length)) {
+                relevant = true;
+                break;
+            }
+        }
+        if (!relevant) return;
 
+        pending = true;
         setTimeout(() => {
             pending = false;
             // 仅在按钮丢失时才重新注入（避免无意义的工作）

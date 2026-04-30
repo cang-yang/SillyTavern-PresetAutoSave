@@ -95,21 +95,33 @@ function levelStyle(level) {
 }
 
 /**
+ * 单条日志最大长度（防止意外 log 巨型对象拖垮内存）
+ * 1000 条 × 4KB ≈ 4MB（合理上限）
+ */
+const MAX_ARG_LENGTH = 4096;
+const MAX_MESSAGE_LENGTH = 8192;
+
+/**
  * 把任意参数序列化为可读字符串（用于面板展示与导出）
  * - Error 对象保留 stack
  * - 普通对象 JSON.stringify（最多 2 层避免循环）
+ * - 单参数过长时截断并标注
  */
 function stringifyArg(arg) {
     if (arg === null) return 'null';
     if (arg === undefined) return 'undefined';
-    if (typeof arg === 'string') return arg;
+    if (typeof arg === 'string') {
+        return arg.length > MAX_ARG_LENGTH ? arg.slice(0, MAX_ARG_LENGTH) + `…(+${arg.length - MAX_ARG_LENGTH} chars)` : arg;
+    }
     if (typeof arg === 'number' || typeof arg === 'boolean') return String(arg);
     if (arg instanceof Error) {
-        return arg.stack || `${arg.name}: ${arg.message}`;
+        const s = arg.stack || `${arg.name}: ${arg.message}`;
+        return s.length > MAX_ARG_LENGTH ? s.slice(0, MAX_ARG_LENGTH) + '…(stack truncated)' : s;
     }
+    let result;
     try {
         const seen = new WeakSet();
-        return JSON.stringify(arg, (k, v) => {
+        result = JSON.stringify(arg, (k, v) => {
             if (typeof v === 'object' && v !== null) {
                 if (seen.has(v)) return '[Circular]';
                 seen.add(v);
@@ -119,13 +131,22 @@ function stringifyArg(arg) {
             return v;
         }, 0);
     } catch (_) {
-        try { return String(arg); } catch (_) { return '[Unserializable]'; }
+        try { result = String(arg); } catch (_) { return '[Unserializable]'; }
     }
+    if (typeof result === 'string' && result.length > MAX_ARG_LENGTH) {
+        return result.slice(0, MAX_ARG_LENGTH) + `…(+${result.length - MAX_ARG_LENGTH} chars truncated)`;
+    }
+    return result;
 }
 
 function formatArgs(args) {
     if (!Array.isArray(args) || args.length === 0) return '';
-    return args.map(stringifyArg).join(' ');
+    let msg = args.map(stringifyArg).join(' ');
+    // 整条消息再做一次封顶（防止多个大参数 join 后膨胀）
+    if (msg.length > MAX_MESSAGE_LENGTH) {
+        msg = msg.slice(0, MAX_MESSAGE_LENGTH) + `…(+${msg.length - MAX_MESSAGE_LENGTH} chars)`;
+    }
+    return msg;
 }
 
 function pushEntry(level, args) {

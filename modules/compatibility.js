@@ -52,6 +52,7 @@ export const ENV = {
 // 内部状态
 // =====================================================
 const _registeredListeners = []; // { eventName, handler } - 便于卸载
+let _lastSnapshotPath = null;    // 上一次 getPresetSnapshot 走的路径，用于日志降噪
 
 // =====================================================
 // 初始化探测
@@ -314,14 +315,21 @@ export function getPresetSnapshot(presetName) {
         const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList');
         const live = list && list.settings;
         if (isUsable(live)) {
-            logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (fallback)`);
+            // 这条日志在每次 polling 都会打，太吵 - 仅首次和切 API 时打
+            if (_lastSnapshotPath !== `list:${apiId}`) {
+                logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (fallback)`);
+                _lastSnapshotPath = `list:${apiId}`;
+            }
             return cloneDeepSafe(live);
         }
     }
 
     // 路径 3（再兜底）：直接从 window.oai_settings 读（仅 openai）
     if (apiId === 'openai' && window.oai_settings && typeof window.oai_settings === 'object') {
-        logger.debug('[getPresetSnapshot] using window.oai_settings (last fallback)');
+        if (_lastSnapshotPath !== 'oai') {
+            logger.debug('[getPresetSnapshot] using window.oai_settings (last fallback)');
+            _lastSnapshotPath = 'oai';
+        }
         return cloneDeepSafe(window.oai_settings);
     }
 

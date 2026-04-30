@@ -102,29 +102,74 @@ function generateId() {
 
 /**
  * 稳定的 JSON.stringify（key 排序，保证相同对象产生相同字符串）
+ *
+ * 性能优化：
+ *  - 对同一对象引用使用 WeakMap 缓存（保留 1 次循环周期）
+ *  - 处理循环引用（避免堆栈溢出）
+ *  - 处理 NaN/Infinity（JSON.stringify 默认输出 null，这里保持一致）
  */
+const _stringifyCache = new WeakMap();
+const _SEEN_DURING_CALL = new WeakSet();
+
 export function stableStringify(obj) {
     if (obj === null || obj === undefined) return 'null';
     if (typeof obj !== 'object') return JSON.stringify(obj);
-    if (Array.isArray(obj)) {
-        return '[' + obj.map(stableStringify).join(',') + ']';
+    // 缓存命中：同一对象引用未变化时直接返回（hashPreset 在同一 tick 多次调用时常见）
+    const cached = _stringifyCache.get(obj);
+    if (cached !== undefined) return cached;
+
+    const result = stableStringifyImpl(obj);
+    try { _stringifyCache.set(obj, result); } catch (_) { /* primitive - shouldn't happen */ }
+    return result;
+}
+
+function stableStringifyImpl(obj) {
+    if (obj === null || obj === undefined) return 'null';
+    if (typeof obj !== 'object') return JSON.stringify(obj);
+
+    // 防御循环引用
+    if (_SEEN_DURING_CALL.has(obj)) return '"[Circular]"';
+    _SEEN_DURING_CALL.add(obj);
+
+    try {
+        if (Array.isArray(obj)) {
+            const parts = new Array(obj.length);
+            for (let i = 0; i < obj.length; i++) {
+                parts[i] = stableStringifyImpl(obj[i]);
+            }
+            return '[' + parts.join(',') + ']';
+        }
+        const keys = Object.keys(obj).sort();
+        const parts = new Array(keys.length);
+        for (let i = 0; i < keys.length; i++) {
+            const k = keys[i];
+            parts[i] = JSON.stringify(k) + ':' + stableStringifyImpl(obj[k]);
+        }
+        return '{' + parts.join(',') + '}';
+    } finally {
+        _SEEN_DURING_CALL.delete(obj);
     }
-    const keys = Object.keys(obj).sort();
-    return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
 }
 
 /**
- * 计算预设内容哈希（FNV-1a 32-bit）
+ * FNV-1a 32-bit 哈希（直接对字符串）
  */
-export function hashPreset(obj) {
-    if (!obj) return '';
-    const str = stableStringify(obj);
+function fnv1aHash(str) {
     let hash = 0x811c9dc5;
     for (let i = 0; i < str.length; i++) {
         hash ^= str.charCodeAt(i);
         hash = (hash * 0x01000193) >>> 0;
     }
     return hash.toString(36);
+}
+
+/**
+ * 计算预设内容哈希（FNV-1a 32-bit）
+ * 现在直接复用 stableStringify 的缓存
+ */
+export function hashPreset(obj) {
+    if (!obj) return '';
+    return fnv1aHash(stableStringify(obj));
 }
 
 export function formatBytes(bytes) {
@@ -136,88 +181,100 @@ export function formatBytes(bytes) {
 }
 
 /**
- * 计算两份预设之间的修改摘要（人类可读）
- * 返回结构化数据，UI 层负责渲染
+ * 计算两份预设之间的修改摘要（结构化、人类可读）
  *
- * @param {object|null} prev - 上一份快照的 preset
+ * 摘要不包含 i18n 文案——只描述"发生了什么"，由 UI 层（history-panel）翻译。
+ * 这样旧快照在切换语言时也能正确显示。
+ *
+ * @param {object|null} prev - 上一份快照的 preset（可能为 null = 第一条快照）
  * @param {object|null} curr - 当前 preset
  * @returns {{
- *   tags: Array<{type:string, label:string, count?:number}>,  // 修改类型标签
- *   details: Array<{key:string, from:any, to:any}>,            // 字段级变更明细（最多保留 6 项）
- *   promptChange: {added:number, removed:number, modified:number, reordered:boolean}|null,
- *   isFirst: boolean
+ *   isFirst: boolean,
+ *   sections: Array<{
+ *       kind: 'prompt-add'|'prompt-del'|'prompt-edit'|'prompt-toggle-on'|'prompt-toggle-off'|'prompt-reorder'|'field',
+ *       items: Array<object>
+ *   }>,
+ *   counts: {
+ *       promptAdded: number, promptRemoved: number, promptModified: number,
+ *       promptReordered: number, promptToggledOn: number, promptToggledOff: number,
+ *       fieldChanged: number
+ *   }
  * }}
  */
 export function computeChangeSummary(prev, curr) {
     const result = {
-        tags: [],
-        details: [],
-        promptChange: null,
         isFirst: false,
+        sections: [],
+        counts: {
+            promptAdded: 0,
+            promptRemoved: 0,
+            promptModified: 0,
+            promptReordered: 0,
+            promptToggledOn: 0,
+            promptToggledOff: 0,
+            fieldChanged: 0,
+        },
     };
 
     if (!curr || typeof curr !== 'object') return result;
     if (!prev || typeof prev !== 'object') {
         result.isFirst = true;
-        result.tags.push({ type: 'first', label: 'Initial' });
         return result;
     }
 
-    // 1. Prompts 数组比较
     const prevPrompts = Array.isArray(prev.prompts) ? prev.prompts : [];
     const currPrompts = Array.isArray(curr.prompts) ? curr.prompts : [];
-    const promptDiff = comparePrompts(prevPrompts, currPrompts);
-    if (promptDiff.added || promptDiff.removed || promptDiff.modified) {
-        result.promptChange = promptDiff;
-        if (promptDiff.added) result.tags.push({ type: 'prompt-add', label: 'Prompt+', count: promptDiff.added });
-        if (promptDiff.removed) result.tags.push({ type: 'prompt-del', label: 'Prompt-', count: promptDiff.removed });
-        if (promptDiff.modified) result.tags.push({ type: 'prompt-edit', label: 'PromptEdit', count: promptDiff.modified });
+
+    // 1. Prompts 增删改（带 name + 改动字段明细）
+    const promptDiff = comparePromptsDetail(prevPrompts, currPrompts);
+    if (promptDiff.added.length > 0) {
+        result.sections.push({ kind: 'prompt-add', items: promptDiff.added });
+        result.counts.promptAdded = promptDiff.added.length;
+    }
+    if (promptDiff.removed.length > 0) {
+        result.sections.push({ kind: 'prompt-del', items: promptDiff.removed });
+        result.counts.promptRemoved = promptDiff.removed.length;
+    }
+    if (promptDiff.modified.length > 0) {
+        result.sections.push({ kind: 'prompt-edit', items: promptDiff.modified });
+        result.counts.promptModified = promptDiff.modified.length;
     }
 
-    // 2. Prompt order 比较（顺序变化）
+    // 2. 顺序调整（仅在 prompts 数组本身没增减时才单独显示）
     const prevOrder = extractOrder(prev.prompt_order);
     const currOrder = extractOrder(curr.prompt_order);
-    const orderChanged = prevOrder.length !== currOrder.length || prevOrder.some((id, i) => id !== currOrder[i]);
-    if (orderChanged) {
-        if (result.promptChange) {
-            result.promptChange.reordered = true;
-        } else {
-            result.promptChange = { added: 0, removed: 0, modified: 0, reordered: true };
-        }
-        // 只有当 prompts 数组没变化但顺序变了时才单独打标签
-        if (!result.tags.some(t => t.type.startsWith('prompt-'))) {
-            result.tags.push({ type: 'prompt-reorder', label: 'Reorder' });
-        }
+    const reorderCount = countReorderedPositions(prevOrder, currOrder);
+    if (reorderCount > 0) {
+        result.sections.push({ kind: 'prompt-reorder', items: [{ count: reorderCount }] });
+        result.counts.promptReordered = reorderCount;
     }
 
-    // 3. 启用状态变化（prompt_order 中的 enabled 字段）
-    const enabledDiff = compareEnabled(prev.prompt_order, curr.prompt_order);
-    if (enabledDiff.toggled > 0) {
-        result.tags.push({ type: 'prompt-toggle', label: 'Toggle', count: enabledDiff.toggled });
+    // 3. enabled 切换（按提示词名）
+    const enabledDiff = compareEnabledDetail(prev.prompt_order, curr.prompt_order, currPrompts, prevPrompts);
+    if (enabledDiff.toggledOn.length > 0) {
+        result.sections.push({ kind: 'prompt-toggle-on', items: enabledDiff.toggledOn });
+        result.counts.promptToggledOn = enabledDiff.toggledOn.length;
+    }
+    if (enabledDiff.toggledOff.length > 0) {
+        result.sections.push({ kind: 'prompt-toggle-off', items: enabledDiff.toggledOff });
+        result.counts.promptToggledOff = enabledDiff.toggledOff.length;
     }
 
-    // 4. 标量字段比较（temperature 之类）
+    // 4. 标量字段
     const scalarDiff = compareScalars(prev, curr);
     if (scalarDiff.length > 0) {
-        result.details = scalarDiff.slice(0, 6);
-        // 给整体打个 settings 标签（区别于 prompt 修改）
-        if (!result.tags.some(t => t.type === 'settings')) {
-            result.tags.push({ type: 'settings', label: 'Settings', count: scalarDiff.length });
-        }
-    }
-
-    // 没有任何检测到的修改，但 hash 已经不一样了 -> 给个 minor 标签
-    if (result.tags.length === 0) {
-        result.tags.push({ type: 'minor', label: 'Minor' });
+        // 留 12 项给 UI 决定显示几条（默认显示 5）
+        result.sections.push({ kind: 'field', items: scalarDiff.slice(0, 12) });
+        result.counts.fieldChanged = scalarDiff.length;
     }
 
     return result;
 }
 
 /**
- * 比较 prompts 数组（按 identifier 匹配）
+ * 详细比较 prompts，返回 added / removed / modified（含 name 与改动字段）
  */
-function comparePrompts(prev, curr) {
+function comparePromptsDetail(prev, curr) {
     const prevMap = new Map();
     for (const p of prev) {
         if (p && p.identifier) prevMap.set(p.identifier, p);
@@ -227,35 +284,83 @@ function comparePrompts(prev, curr) {
         if (p && p.identifier) currMap.set(p.identifier, p);
     }
 
-    let added = 0, removed = 0, modified = 0;
+    const added = [];
+    const removed = [];
+    const modified = [];
+
     for (const id of currMap.keys()) {
-        if (!prevMap.has(id)) added++;
-        else {
-            // 比较内容
-            const a = prevMap.get(id);
-            const b = currMap.get(id);
-            if (!shallowPromptEqual(a, b)) modified++;
+        const b = currMap.get(id);
+        if (!prevMap.has(id)) {
+            added.push({
+                identifier: id,
+                name: getPromptDisplayName(b),
+                marker: !!b?.marker,
+            });
+            continue;
+        }
+        const a = prevMap.get(id);
+        const fields = diffPromptFields(a, b);
+        if (fields.length > 0) {
+            modified.push({
+                identifier: id,
+                name: getPromptDisplayName(b) || getPromptDisplayName(a),
+                fields,
+            });
         }
     }
     for (const id of prevMap.keys()) {
-        if (!currMap.has(id)) removed++;
+        if (!currMap.has(id)) {
+            const a = prevMap.get(id);
+            removed.push({
+                identifier: id,
+                name: getPromptDisplayName(a),
+                marker: !!a?.marker,
+            });
+        }
     }
-    return { added, removed, modified, reordered: false };
-}
-
-function shallowPromptEqual(a, b) {
-    if (a === b) return true;
-    if (!a || !b) return false;
-    // 关键字段：name, content, role, system_prompt, marker, injection_position
-    const keys = ['name', 'content', 'role', 'system_prompt', 'marker', 'injection_position', 'injection_depth', 'forbid_overrides'];
-    for (const k of keys) {
-        if (a[k] !== b[k]) return false;
-    }
-    return true;
+    return { added, removed, modified };
 }
 
 /**
- * 提取 prompt_order 的 identifier 顺序（不含 enabled 状态）
+ * 取一个用于显示的提示词名：优先 name，回落到 identifier 截断
+ */
+function getPromptDisplayName(p) {
+    if (!p) return '';
+    if (typeof p.name === 'string' && p.name.trim()) return p.name.trim();
+    if (typeof p.identifier === 'string' && p.identifier) {
+        // identifier 通常是 UUID 或 main/jailbreak 等关键字
+        return p.identifier.length > 16 ? p.identifier.slice(0, 8) + '…' : p.identifier;
+    }
+    return '';
+}
+
+/**
+ * 比较两个 prompt 对象，返回改动了的字段列表
+ * 对 content 字段不存原值（太长），只记录长度差。
+ */
+function diffPromptFields(a, b) {
+    const watchKeys = ['name', 'content', 'role', 'system_prompt', 'marker', 'injection_position', 'injection_depth', 'forbid_overrides'];
+    const out = [];
+    for (const k of watchKeys) {
+        const av = a?.[k];
+        const bv = b?.[k];
+        if (av === bv) continue;
+        if (k === 'content') {
+            const fromLen = (typeof av === 'string') ? av.length : 0;
+            const toLen = (typeof bv === 'string') ? bv.length : 0;
+            if (fromLen !== toLen || av !== bv) {
+                out.push({ key: 'content', isContent: true, fromLen, toLen });
+            }
+            continue;
+        }
+        // 其他字段保留原值（短）
+        out.push({ key: k, from: av, to: bv });
+    }
+    return out;
+}
+
+/**
+ * 提取 prompt_order 的 identifier 顺序
  */
 function extractOrder(prompt_order) {
     if (!Array.isArray(prompt_order) || !prompt_order.length) return [];
@@ -265,33 +370,66 @@ function extractOrder(prompt_order) {
 }
 
 /**
- * 比较 enabled 切换数
+ * 计算"位置变了的条目"个数
+ * 长度变化时返回 0（认为属于增删，由 prompt-add/prompt-del 显示更准确）
  */
-function compareEnabled(prevOrder, currOrder) {
+function countReorderedPositions(prevOrder, currOrder) {
+    if (prevOrder.length !== currOrder.length) return 0;
+    let diff = 0;
+    for (let i = 0; i < prevOrder.length; i++) {
+        if (prevOrder[i] !== currOrder[i]) diff++;
+    }
+    return diff;
+}
+
+/**
+ * 详细比较 enabled 切换：按 identifier 匹配，输出启用/禁用各自的列表
+ * 同时附带 name 用于显示（从当前预设的 prompts 取，找不到再回落到旧的）
+ */
+function compareEnabledDetail(prevOrder, currOrder, currPrompts, prevPrompts) {
     const prevMap = new Map();
     if (Array.isArray(prevOrder) && prevOrder[0]?.order) {
         for (const o of prevOrder[0].order) {
             if (o?.identifier) prevMap.set(o.identifier, !!o.enabled);
         }
     }
-    let toggled = 0;
+
+    const nameMap = new Map();
+    for (const p of currPrompts) {
+        if (p?.identifier) nameMap.set(p.identifier, getPromptDisplayName(p));
+    }
+    for (const p of prevPrompts) {
+        if (p?.identifier && !nameMap.has(p.identifier)) {
+            nameMap.set(p.identifier, getPromptDisplayName(p));
+        }
+    }
+
+    const toggledOn = [];
+    const toggledOff = [];
     if (Array.isArray(currOrder) && currOrder[0]?.order) {
         for (const o of currOrder[0].order) {
             if (!o?.identifier) continue;
-            if (prevMap.has(o.identifier) && prevMap.get(o.identifier) !== !!o.enabled) {
-                toggled++;
-            }
+            if (!prevMap.has(o.identifier)) continue;
+            const wasEnabled = prevMap.get(o.identifier);
+            const isEnabled = !!o.enabled;
+            if (wasEnabled === isEnabled) continue;
+            const item = {
+                identifier: o.identifier,
+                name: nameMap.get(o.identifier) || '',
+            };
+            if (isEnabled) toggledOn.push(item);
+            else toggledOff.push(item);
         }
     }
-    return { toggled };
+    return { toggledOn, toggledOff };
 }
 
 /**
- * 字段级 diff（仅标量类型 + 数组长度）
+ * 标量字段比较 - 排除明显属于 prompt 范畴或内部用途的键
  */
 const SUMMARY_IGNORED_KEYS = new Set([
     'prompts', 'prompt_order', 'extensions',
-    // 噪音字段
+    // 噪音
     'preset_settings_openai', 'name',
     // 内部
     'bias_presets', 'bias_preset_selected',
@@ -306,25 +444,34 @@ function compareScalars(prev, curr) {
         const b = curr[k];
         if (deepEqualStrict(a, b)) continue;
 
-        // 仅记录人类可读类型
         const ta = typeof a, tb = typeof b;
         if ((ta === 'function') || (tb === 'function')) continue;
-        // 复杂对象只记录有/无变化，不展开
+
+        // 复杂对象/数组：只记录长度差异（避免输出 [object Object]）
         if (typeof a === 'object' || typeof b === 'object') {
-            // 数组：只记录长度变化
             if (Array.isArray(a) || Array.isArray(b)) {
                 const la = Array.isArray(a) ? a.length : 0;
                 const lb = Array.isArray(b) ? b.length : 0;
-                if (la !== lb) out.push({ key: k, from: `[${la}]`, to: `[${lb}]` });
+                if (la !== lb) {
+                    out.push({ key: k, kind: 'array-length', from: la, to: lb });
+                }
                 continue;
             }
-            out.push({ key: k, from: '(object)', to: '(object)' });
+            out.push({ key: k, kind: 'object' });
             continue;
         }
-        out.push({ key: k, from: a, to: b });
+        out.push({ key: k, kind: 'scalar', from: a, to: b });
     }
-    // 排序：把"用户最常关心的"放前面
-    const PRIORITY = ['temperature', 'top_p', 'top_k', 'frequency_penalty', 'presence_penalty', 'max_context_unlocked', 'openai_max_tokens', 'openai_max_context', 'reasoning_effort'];
+    // 排序：用户最关心的字段在前
+    const PRIORITY = [
+        'temperature', 'top_p', 'top_k', 'min_p', 'top_a', 'tfs',
+        'frequency_penalty', 'presence_penalty', 'repetition_penalty',
+        'reasoning_effort', 'show_thoughts',
+        'max_context_unlocked', 'openai_max_tokens', 'openai_max_context',
+        'stream_response', 'streaming',
+        'function_calling', 'request_images',
+        'continue_prefill', 'squash_system_messages', 'wrap_in_quotes',
+    ];
     out.sort((a, b) => {
         const ai = PRIORITY.indexOf(a.key);
         const bi = PRIORITY.indexOf(b.key);
@@ -352,14 +499,25 @@ async function ensureStore() {
     }
 }
 
+let _keysFetchPromise = null;  // 并发去重
+
 async function getKeys(forceRefresh = false) {
     const now = Date.now();
     if (!forceRefresh && _keysCache && (now - _keysCacheTime) < KEYS_CACHE_TTL) {
         return _keysCache;
     }
-    _keysCache = await _store.keys();
-    _keysCacheTime = now;
-    return _keysCache;
+    // 并发保护：多个调用者同时进来时，只发起一次后端查询
+    if (_keysFetchPromise) return _keysFetchPromise;
+    _keysFetchPromise = (async () => {
+        try {
+            _keysCache = await _store.keys();
+            _keysCacheTime = Date.now();
+            return _keysCache;
+        } finally {
+            _keysFetchPromise = null;
+        }
+    })();
+    return _keysFetchPromise;
 }
 
 function invalidateKeysCache() {
@@ -477,8 +635,27 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
     }
 
     await safeSetItem(key, list);
-    logger.debug(`Snapshot added: ${presetName} (total: ${list.length}/${max}) tags=${summary.tags.map(t => t.label).join(',')}`);
+    const desc = describeSummaryForLog(summary);
+    logger.debug(`Snapshot added: ${presetName} (total: ${list.length}/${max}) ${desc}`);
     return snapshot;
+}
+
+/**
+ * 把摘要转成单行日志友好的描述（开发者诊断用，不走 i18n）
+ */
+function describeSummaryForLog(summary) {
+    if (!summary) return 'changes=?';
+    if (summary.isFirst) return 'changes=initial';
+    const c = summary.counts;
+    const parts = [];
+    if (c.promptAdded) parts.push(`+${c.promptAdded}p`);
+    if (c.promptRemoved) parts.push(`-${c.promptRemoved}p`);
+    if (c.promptModified) parts.push(`~${c.promptModified}p`);
+    if (c.promptReordered) parts.push(`order×${c.promptReordered}`);
+    if (c.promptToggledOn) parts.push(`on×${c.promptToggledOn}`);
+    if (c.promptToggledOff) parts.push(`off×${c.promptToggledOff}`);
+    if (c.fieldChanged) parts.push(`f×${c.fieldChanged}`);
+    return parts.length ? `changes=${parts.join(',')}` : 'changes=minor';
 }
 
 /** 复用 hashPreset 但避免再次序列化 */

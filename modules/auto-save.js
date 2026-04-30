@@ -85,6 +85,7 @@ let _isInternalSave = false;       // 内部保存中（防递归）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
 let _suspendUntil = 0;             // SETTINGS_UPDATED 风暴期间临时挂起，用 Date.now()
+let _noChangeCount = 0;            // 连续无变化次数，用于日志降噪
 
 let _currentApiId = null;          // 当前跟踪的 API
 let _currentPresetName = null;     // 当前跟踪的预设名
@@ -110,11 +111,12 @@ const _stats = {
 // =====================================================
 export async function initAutoSave() {
     if (_initialized) {
-        logger.warn('AutoSave already initialized');
+        logger.warn('AutoSave already initialized, skipping duplicate init');
         return;
     }
 
     _initialized = true;
+    _noChangeCount = 0;
 
     // 记录当前预设
     _currentApiId = getCurrentApiId();
@@ -184,13 +186,41 @@ function applyEnabledState() {
 // 用于防止某些事件被跳过 / 未发出 SETTINGS_UPDATED 的 ST 版本
 // =====================================================
 const POLLING_INTERVAL_MS = 5000;
+const POLLING_INACTIVE_THRESHOLD_MS = 60_000;  // 60秒无操作后降为低频
+const POLLING_LOW_INTERVAL_MS = 30_000;        // 低频间隔 30 秒
+let _lastUserActivity = Date.now();
+let _pollingMode = 'normal';                   // 'normal' | 'low'
+
+function markUserActive() {
+    _lastUserActivity = Date.now();
+    if (_pollingMode === 'low' && _pollingTimer) {
+        // 切回正常频率
+        stopPolling();
+        startPolling();
+    }
+}
 
 function startPolling() {
     if (_pollingTimer) return;
+    const idle = Date.now() - _lastUserActivity > POLLING_INACTIVE_THRESHOLD_MS;
+    const interval = idle ? POLLING_LOW_INTERVAL_MS : POLLING_INTERVAL_MS;
+    _pollingMode = idle ? 'low' : 'normal';
+
     _pollingTimer = setInterval(() => {
         if (!_enabled || _ignoreInput || _isInternalSave) return;
         if (Date.now() < _suspendUntil) return;
-        if (_debounceTimer) return; // 已有挂起的保存，避免重复
+        if (_debounceTimer) return;
+        // 标签页不可见时跳过——节省后台 CPU
+        if (typeof document !== 'undefined' && document.hidden) return;
+
+        // 长时间无活动 → 降级到低频模式
+        const idleNow = Date.now() - _lastUserActivity > POLLING_INACTIVE_THRESHOLD_MS;
+        if (idleNow && _pollingMode === 'normal') {
+            stopPolling();
+            startPolling(); // 会以低频重启
+            return;
+        }
+
         try {
             const preset = getPresetSnapshot();
             if (!preset) return;
@@ -202,8 +232,8 @@ function startPolling() {
         } catch (e) {
             logger.warn('Polling check failed:', e);
         }
-    }, POLLING_INTERVAL_MS);
-    logger.debug(`Polling started (interval=${POLLING_INTERVAL_MS}ms)`);
+    }, interval);
+    logger.debug(`Polling started (interval=${interval}ms, mode=${_pollingMode})`);
 }
 
 function stopPolling() {
@@ -307,6 +337,7 @@ function onElementInput(event) {
     const el = event.target;
     const settings = getSettings();
 
+    markUserActive();
     _stats.triggeredByDOM++;
     logger.debug(`[DOM input] ${describeElement(el)}`);
 
@@ -341,6 +372,7 @@ function onElementChange(event) {
     const el = event.target;
     const settings = getSettings();
 
+    markUserActive();
     _stats.triggeredByDOM++;
     logger.debug(`[DOM change] ${describeElement(el)}`);
 
@@ -411,16 +443,19 @@ function bindPromptManagerListeners() {
     _pmClickHandler = handler;
 
     // MutationObserver：监听 prompt 列表的 DOM 变化（拖拽排序、删除条目）
+    // 性能：单次 prompt 操作可能触发 4-8 次 mutation，这里用 RAF 节流到一次 schedule
+    let _pmMutationPending = false;
     try {
         _promptObserver = new MutationObserver((mutations) => {
             if (!_enabled || _ignoreInput || _isInternalSave) return;
-            // 只关心 childList 变化（条目顺序变了/被增删）或属性变化（启用状态切换 class）
+            if (_pmMutationPending) return;
+
+            // 快速判断有没有我们关心的 mutation（不打日志，节省 IO）
+            let kind = null;
             for (const m of mutations) {
                 if (m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length)) {
-                    _stats.triggeredByPrompt++;
-                    logger.debug('[PromptManager] DOM mutation: childList');
-                    scheduleAutoSave(getSettings().debounceMs, 'prompt-mutation');
-                    return;
+                    kind = 'childList';
+                    break;
                 }
                 if (m.type === 'attributes' && m.attributeName === 'class') {
                     const target = m.target;
@@ -430,13 +465,25 @@ function bindPromptManagerListeners() {
                         target.classList.contains('completion_prompt_manager_prompt_visible') ||
                         target.classList.contains('completion_prompt_manager_prompt_invisible')
                     )) {
-                        _stats.triggeredByPrompt++;
-                        logger.debug('[PromptManager] DOM mutation: class change');
-                        scheduleAutoSave(getSettings().debounceMs, 'prompt-class');
-                        return;
+                        kind = 'class';
+                        break;
                     }
                 }
             }
+            if (!kind) return;
+
+            // 同一 tick 内的多个 mutation 节流为一次（合并 micro-task burst）
+            _pmMutationPending = true;
+            queueMicrotask(() => {
+                _pmMutationPending = false;
+                if (!_enabled || _ignoreInput || _isInternalSave) return;
+                _stats.triggeredByPrompt++;
+                logger.debug(`[PromptManager] DOM mutation (${kind})`);
+                scheduleAutoSave(
+                    getSettings().debounceMs,
+                    kind === 'class' ? 'prompt-class' : 'prompt-mutation'
+                );
+            });
         });
 
         const tryAttach = () => {
@@ -481,14 +528,23 @@ function unbindPromptManagerListeners() {
  * @param {string} [reason] 触发原因（用于日志诊断）
  */
 export function scheduleAutoSave(delay = null, reason = 'unspecified') {
-    if (!_enabled || _ignoreInput || _isInternalSave) return;
+    // 切换中 / 内部保存中 / 未启用 -> 静默忽略
+    if (!_enabled) return;
+    if (_ignoreInput) {
+        logger.debug(`scheduleAutoSave ignored (reason=${reason}, ignoreInput=true)`);
+        return;
+    }
+    if (_isInternalSave) {
+        logger.debug(`scheduleAutoSave ignored (reason=${reason}, isInternalSave=true)`);
+        return;
+    }
 
     const settings = getSettings();
     if (!settings.enabled) return;
 
     // SETTINGS_UPDATED 风暴期间挂起
     if (Date.now() < _suspendUntil) {
-        logger.debug(`scheduleAutoSave suspended (reason=${reason})`);
+        logger.debug(`scheduleAutoSave suspended (reason=${reason}, until=${_suspendUntil - Date.now()}ms)`);
         return;
     }
 
@@ -500,6 +556,13 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified') {
 
     _debounceTimer = setTimeout(() => {
         _debounceTimer = null;
+        // 二次防御：debounce 等待期间可能进入了切换状态
+        if (_ignoreInput || Date.now() < _suspendUntil) {
+            logger.debug(`Scheduled save aborted at fire-time (reason=${reason}, ignoreInput=${_ignoreInput}, suspended=${Date.now() < _suspendUntil})`);
+            _dirty = false;
+            _setStatus('idle');
+            return;
+        }
         doSave(TRIGGER.AUTO, reason).catch(e => logger.error('Scheduled save failed:', e));
     }, ms);
 }
@@ -525,15 +588,58 @@ export async function flushSave() {
 // =====================================================
 // 核心保存
 // =====================================================
+const SAVE_TIMEOUT_MS = 15_000;  // 单次保存最大允许时长，超时强制释放锁
+let _saveStartedAt = 0;
+let _saveTimeoutId = null;
+
 async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null) {
     if (_isInternalSave) {
+        // 自愈：检测是否长时间被卡住
+        const stuck = _saveStartedAt && (Date.now() - _saveStartedAt > SAVE_TIMEOUT_MS);
+        if (stuck) {
+            logger.warn(
+                `Save lock stuck for ${Date.now() - _saveStartedAt}ms, forcibly releasing`
+            );
+            _isInternalSave = false;
+            _saveStartedAt = 0;
+            if (_saveTimeoutId) {
+                clearTimeout(_saveTimeoutId);
+                _saveTimeoutId = null;
+            }
+            // 让本次也跳过；下次调度会重新触发
+            _stats.aborted++;
+            return null;
+        }
         logger.debug('Save skipped (internal save in progress)');
         _stats.aborted++;
         return null;
     }
 
+    // 入口防御：切换沉默期内只允许 explicitTarget 路径（switch-guard）
+    if (!explicitTarget && (_ignoreInput || Date.now() < _suspendUntil)) {
+        logger.debug(
+            `doSave aborted: in switch suspend window (reason=${reason}, ignoreInput=${_ignoreInput}, suspended=${Date.now() < _suspendUntil})`
+        );
+        _stats.aborted++;
+        return null;
+    }
+
     _isInternalSave = true;
+    _saveStartedAt = Date.now();
     _setStatus('saving');
+
+    // 超时保护：如果 15 秒内还没完成，强制重置锁防止永久卡死
+    _saveTimeoutId = setTimeout(() => {
+        if (_isInternalSave && Date.now() - _saveStartedAt >= SAVE_TIMEOUT_MS) {
+            logger.error(
+                `Save took >${SAVE_TIMEOUT_MS}ms (reason=${reason}), forcibly releasing lock`
+            );
+            _isInternalSave = false;
+            _saveStartedAt = 0;
+            _setStatus('error');
+            _stats.aborted++;
+        }
+    }, SAVE_TIMEOUT_MS);
 
     try {
         // 让出一个微任务，确保上层（PromptManager / oai_settings 同步）已完成
@@ -597,14 +703,20 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
 
         if (_lastSavedHash && newHash === _lastSavedHash) {
             // 与上次比较没变化（可能是 SETTINGS_UPDATED 重复触发）
-            logger.debug(
-                `[doSave] No change reason=${reason} hash=${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
-            );
+            // 仅在前 3 次相同 hash 内打日志，超出后采样降噪
+            _noChangeCount++;
+            if (_noChangeCount <= 3 || _noChangeCount % 20 === 0) {
+                logger.debug(
+                    `[doSave] No change reason=${reason} hash=${newHash} (×${_noChangeCount} consecutive)`
+                );
+            }
             _stats.skippedUnchanged++;
             _dirty = false;
             _setStatus('idle');
             return null;
         }
+        // 重置无变化计数器
+        _noChangeCount = 0;
 
         logger.debug(
             `[doSave] Snapshotting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
@@ -645,6 +757,11 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
         return null;
     } finally {
         _isInternalSave = false;
+        _saveStartedAt = 0;
+        if (_saveTimeoutId) {
+            clearTimeout(_saveTimeoutId);
+            _saveTimeoutId = null;
+        }
     }
 }
 
@@ -765,20 +882,27 @@ function bindPresetEvents() {
     // ----- OpenAI 切换后事件 -----
     const oaiAfter = getEventType('OAI_PRESET_CHANGED_AFTER', 'oai_preset_changed_after');
     _eventUnsubscribers.push(on(oaiAfter, () => {
-        // 切换会触发大量 SETTINGS_UPDATED，临时挂起 1.5s
-        _suspendUntil = Date.now() + 1500;
+        // 切换 → 大量 SETTINGS_UPDATED + DOM mutation
+        // 实测 ST 可能持续 2-3 秒触发各种事件，因此把窗口加大到 4 秒
+        _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
+        cancelPendingSave();
+        setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
+        // 1) 早一点把"跟踪状态"指向新预设（避免下一次 doSave 比较错对象）
         setTimeout(() => {
             updateTrackingAfterSwitch();
-            setIgnoreInput(false);
         }, 200);
+        // 2) 晚一点解锁 ignoreInput，避免切换尾部的 mutation 被当成用户输入
+        setTimeout(() => {
+            setIgnoreInput(false);
+        }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
 
     // ----- 通用预设切换事件（适用于所有 API）-----
     const presetChanged = getEventType('PRESET_CHANGED', 'preset_changed');
     _eventUnsubscribers.push(on(presetChanged, async (data) => {
         cancelPendingSave();
-        setIgnoreInput(true);
-        _suspendUntil = Date.now() + 1500;
+        setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
+        _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
 
         if (data) {
             if (data.apiId) _currentApiId = data.apiId;
@@ -787,23 +911,35 @@ function bindPresetEvents() {
 
         setTimeout(() => {
             updateTrackingAfterSwitch();
-            setIgnoreInput(false);
         }, 250);
+        setTimeout(() => {
+            setIgnoreInput(false);
+        }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
 
     // ----- 主 API 切换 -----
     const mainApiChanged = getEventType('MAIN_API_CHANGED', 'main_api_changed');
     _eventUnsubscribers.push(on(mainApiChanged, () => {
         cancelPendingSave();
-        setIgnoreInput(true);
-        _suspendUntil = Date.now() + 1500;
+        setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
+        _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
 
         setTimeout(() => {
             updateTrackingAfterSwitch();
-            setIgnoreInput(false);
         }, 250);
+        setTimeout(() => {
+            setIgnoreInput(false);
+        }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
 }
+
+// 切换预设后的"沉默期"窗口
+// _suspendUntil: scheduleAutoSave 期间内拒绝新调度
+// _ignoreInput:  DOM/MutationObserver 事件直接忽略
+// 之所以这么长，是因为 ST 切换预设时会触发大量 DOM 重绘 + SETTINGS_UPDATED 风暴，
+// 实测从切换瞬间到完全平静约需 2-3 秒
+const SUSPEND_AFTER_SWITCH_MS = 4000;
+const IGNORE_INPUT_AFTER_SWITCH_MS = 2500;
 
 /**
  * 切换完成后更新内部跟踪状态
