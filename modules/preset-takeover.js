@@ -384,19 +384,42 @@ function applyTakeoverToSelect(select) {
     const optionList = Array.from(select.options || []);
     if (optionList.length === 0) return;
 
+    // 防御过滤：剔除"纯数字 / 空"的 option（OpenAI 某些 ST 版本会把
+    //   oai_settings.preset_settings_openai 数组的索引 "0/1/2.../15..." 当成 value）
+    const isInvalidName = (n) => {
+        if (typeof n !== 'string') return true;
+        const s = n.trim();
+        if (!s) return true;
+        if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
+        return false;
+    };
+
     // 2) 按系列分组：seriesKey -> [{ option, presetName, version, parsed }]
     const seriesGroups = new Map();
     const standalone = [];  // 解析失败 / excluded 的项（保持原样）
     for (const option of optionList) {
+        // ⚡ 关键：强制用 textContent 作为预设名
+        //   ST 的 OpenAI PresetManager 用 oai_settings.preset_settings_openai 的"数组索引"作为 option.value
+        //   而真实预设名在 option.textContent 里。
+        //   其它 API（kobold/novel/textgen ...）则 value === textContent。
+        //   统一用 textContent 是最稳妥的。
+        const presetName = (option.textContent || '').trim();
         const value = option.value;
-        const presetName = option.textContent;
-        // ST 的预设下拉里：value === presetName（presetManager 用 name 作为 value）
-        // 占位项（如空 value）跳过接管
-        if (!value && !presetName) {
+
+        // 占位项（如空 textContent）跳过接管
+        if (!presetName && !value) {
             standalone.push(option);
             continue;
         }
+        // 用 textContent 作为真实名（如果空再退到 value，但这已极少见）
         const realName = presetName || value;
+
+        // ⛔ 数字 ID 形式：跳过（不接管、不分组）
+        if (isInvalidName(realName)) {
+            standalone.push(option);
+            continue;
+        }
+
         // excluded 的预设保持原样
         if (excluded[realName]) {
             standalone.push(option);
@@ -769,30 +792,45 @@ export function listAllPresetsIncludingDetached(filterApiId) {
         }
     }
 
+    // 防御过滤：剔除"纯数字 ID"和空名（OpenAI 某些版本的 PresetManager 内部
+    //   会把 oai_settings.preset_settings_openai 数组的索引误传到 select.value 里，
+    //   这时 option.value="15"/"17"/"18"... 就会成为伪预设名）
+    const isInvalidPresetName = (n) => {
+        if (typeof n !== 'string') return true;
+        const s = n.trim();
+        if (!s) return true;
+        if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
+        return false;
+    };
+
+    // ⚡ 关键：强制用 textContent 作为真实预设名
+    //   OpenAI PresetManager 用"数组索引"作 option.value，但 textContent 里是真实名
+    //   detached 选项的 textContent 还原成原始（接管时不动 detached 的 textContent）
+    //   代表 option 的 textContent 已被改写为系列名 → 用 ORIGINAL_TEXT_DATA_ATTR 取
     const seen = new Set();
     for (const { apiId, sel } of targetSelects) {
-        // 当前在 DOM 中的 option
         for (const opt of sel.options || []) {
-            const name = opt.value || opt.textContent;
-            if (!name) continue;
-            // 接管后代表 option 的 textContent 被改成了系列名 —— 用 data-pas-orig-text 取真实预设名
-            const realName = opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR) || name;
+            // 优先级：data-pas-orig-text > textContent > value
+            const realName = (opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR)
+                || opt.textContent
+                || opt.value
+                || '').trim();
+            if (isInvalidPresetName(realName)) continue;
             const key = `${apiId}::${realName}`;
             if (seen.has(key)) continue;
             seen.add(key);
             out.push({ apiId, presetName: realName, detached: false });
         }
-        // 被摘除的 option（不在 DOM 但存在于 _detachedOptions 表里）
         const detached = _detachedOptions.get(apiId) || [];
         for (const d of detached) {
             const opt = d.option;
             if (!opt) continue;
-            const name = opt.value || opt.textContent;
-            if (!name) continue;
-            const key = `${apiId}::${name}`;
+            const realName = (opt.textContent || opt.value || '').trim();
+            if (isInvalidPresetName(realName)) continue;
+            const key = `${apiId}::${realName}`;
             if (seen.has(key)) continue;
             seen.add(key);
-            out.push({ apiId, presetName: name, detached: true });
+            out.push({ apiId, presetName: realName, detached: true });
         }
     }
     return out;

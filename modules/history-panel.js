@@ -712,29 +712,37 @@ function renderSeriesView(filtered) {
         return rawKey;
     };
 
-    // ⭐ 把"完整原生预设列表"合并进来（包括接管模式下被摘除的非代表 option）
-    //   getAllPresetNames(currentApi) 在某些 ST 版本下可能不返回 detached options，
-    //   所以同时调用 listAllPresetsIncludingDetached(currentApi) 取并集。
-    //   ⚠️ 两者都严格传入 currentApi，绝不跨 API。
+    // ⭐ 唯一可信数据源：DOM 上的 select.options（用户实际看到的下拉）
+    //
+    // ⚠️ 不再使用 getAllPresetNames() —— 它返回的是 ST 内部 oai_settings.preset_settings_openai
+    //    在某些 ST 版本下，这个数组可能包含损坏对象（{name: 数字, ...}）或纯索引。
+    //    那些"数字垃圾"会被当成预设名出现在面板里（用户看到的"15/17/18/19..."）。
+    //
+    //    DOM 上的 select 是 ST 渲染给用户看的下拉，里面只有真实的预设名，
+    //    所以是绝对干净、可信的唯一数据源。
     try {
         const overrides = settings.groupingManualOverrides || {};
         const excluded = settings.groupingExcluded || {};
 
-        // 来源 1：ST 内部数据（getAllPresets）—— 显式传 currentApi
-        const fromST = (getAllPresetNames(currentApi) || [])
-            .map(o => (o && (o.name || o.preset_name)) || o)
-            .filter(s => typeof s === 'string' && s)
-            .map(name => ({ apiId: currentApi, presetName: name }));
-
-        // 来源 2：DOM 实际数据（含被接管摘除的）—— 严格 currentApi 过滤
+        // 唯一来源：DOM select.options（含被接管摘除的）—— 严格按 currentApi 过滤
         let fromDOM = [];
         try { fromDOM = listAllPresetsIncludingDetached(currentApi) || []; } catch (_) {}
 
+        // 进一步过滤：丢弃任何"看起来像数字 ID"的预设名（防御 ST 把数字 ID 误塞进 select）
+        const isPureNumberLike = (n) => {
+            if (typeof n !== 'string') return true;
+            const s = n.trim();
+            if (!s) return true;
+            // 纯数字（"15"、"17"）或带空格/标点（"  15  "）
+            if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
+            return false;
+        };
+
         // 合并去重：以 apiId::presetName 为 key
         const allEntries = new Map();
-        for (const e of [...fromST, ...fromDOM]) {
-            // 双重保险：丢弃任何不属于 currentApi 的条目
+        for (const e of fromDOM) {
             if (e.apiId && e.apiId !== currentApi) continue;
+            if (!e.presetName || isPureNumberLike(e.presetName)) continue;
             const k = `${currentApi}::${e.presetName}`;
             if (!allEntries.has(k)) allEntries.set(k, { apiId: currentApi, presetName: e.presetName });
         }

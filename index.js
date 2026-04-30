@@ -12,7 +12,7 @@ import {
     savePresetSafe, getPresetManager,
 } from './modules/compatibility.js';
 import { initSettings } from './modules/settings.js';
-import { initHistoryStore, getAllSnapshots } from './modules/history-store.js';
+import { initHistoryStore, getAllSnapshots, clearAll as clearAllSnapshots } from './modules/history-store.js';
 import { initAutoSave, teardown as teardownAutoSave } from './modules/auto-save.js';
 import { initUIInjector, teardown as teardownUI } from './modules/ui-injector.js';
 import {
@@ -28,7 +28,10 @@ import {
     listSeriesFromNativeSelects,
     restoreAllFromArchive,
     getArchiveSummary,
+    forceReseedSnapshots,
+    listAllPresetsIncludingDetached,
 } from './modules/preset-takeover.js';
+import { clearAllArchived } from './modules/archive-store.js';
 import { getSettings } from './modules/settings.js';
 import { runGroupingSelfTest, parsePresetName, groupNamesBySeries } from './modules/preset-grouping.js';
 
@@ -387,9 +390,24 @@ export function onDisable() {
                 // ⭐ 数据接管诊断：查看归档 + 手动恢复
                 listArchived: () => getArchiveSummary(),
                 restoreArchives: () => restoreAllFromArchive(),
+                // ⭐ 一键清空所有插件数据并重新种子（用户报告残留数据时使用）
+                fullReset: async () => {
+                    logger.warn('[fullReset] clearing all snapshots + archives, then re-seeding...');
+                    try { await clearAllSnapshots(); } catch (e) { logger.error('clear snapshots failed:', e); }
+                    try { await clearAllArchived(); } catch (e) { logger.error('clear archives failed:', e); }
+                    logger.info('[fullReset] data cleared, refreshing takeover and reseeding...');
+                    try { refreshTakeover(); } catch (e) { logger.error('refreshTakeover failed:', e); }
+                    try { await forceReseedSnapshots(); } catch (e) { logger.error('reseed failed:', e); }
+                    logger.success('[fullReset] complete · 请刷新页面或重新打开历史面板');
+                    return { ok: true };
+                },
+                // ⭐ 仅重新种子快照（不清数据）
+                reseed: () => forceReseedSnapshots(),
+                // ⭐ 显示当前面板看到的预设列表（用于诊断"乱七八糟数字"等问题）
+                listPanelPresets: () => listAllPresetsIncludingDetached(),
             },
         };
         logger.debug('Debug interface available at window.__pas');
-        logger.info('Tip: window.__pas.debug.forceInit() 强制启动 · window.__pas.debug.listAllOptions() 查看下拉 · window.__pas.debug.listArchived() 查看归档');
+        logger.info('Tip: window.__pas.debug.fullReset() 一键清空+重新种子（推荐残留数据时使用） · window.__pas.debug.listPanelPresets() 查看面板能看到的预设 · window.__pas.debug.forceInit() 强制启动');
     }
 })();
