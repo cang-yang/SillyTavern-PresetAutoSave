@@ -344,5 +344,24 @@
     "Takeover Mode DOM": "DOM takeover (lightweight · recommended)",
     "Takeover Mode Data": "Data takeover (permanent · use caution)",
     "Takeover Data Confirm Title": "⚠ Enable Data Takeover",
-    "Takeover Data Confirm Hint": "<b>This will directly delete non-representative presets from SillyTavern</b>, archiving their data to a local database.<br><br>📌 <b>Benefit</b>: Native preset dropdown stays permanently clean, no need to reapply takeover on each startup.<br>📌 <b>Impact</b>: Those versions will actually disappear from SillyTavern's preset list.<br>📌 <b>Recovery</b>:<br>　• Uninstalling the extension automatically restores all archived presets<br>　• Switching back to DOM takeover automatically restores them<br>　• Manual restore is available in Settings tab<br><br>Please confirm you understand these effects. Continue?"
+    "Takeover Data Confirm Hint": "<b>This will directly delete non-representative presets from SillyTavern</b>, archiving their data to a local database.<br><br>📌 <b>Benefit</b>: Native preset dropdown stays permanently clean, no need to reapply takeover on each startup.<br>📌 <b>Impact</b>: Those versions will actually disappear from SillyTavern's preset list.<br>📌 <b>Recovery</b>:<br>　• Uninstalling the extension automatically restores all archived presets<br>　• Switching back to DOM takeover automatically restores them<br>　• Manual restore is available in Settings tab<br><br>Please confirm you understand these effects. Continue?",
+
+    "Takeover Data Processing": "Archiving {{count}} non-representative preset(s)…",
+    "Takeover Data Done": "Data takeover complete: archived {{archived}} / deleted {{deleted}}",
+
+    "Auto Seed Enabled": "Auto-seed initial snapshots",
+    "Auto Seed Enabled Desc": "When takeover/grouping is first enabled, automatically create an \"initial snapshot\" for every existing preset so they appear in the three-level panel right away (no need to modify them first).",
+
+    "Reseed Snapshots": "Scan all presets and create snapshots",
+    "Reseed Snapshots Desc": "Create an \"initial snapshot\" for every preset that has no snapshots yet, so the panel shows the complete three-level structure immediately.",
+    "Reseed Done": "Scan complete: created {{added}} · skipped {{skipped}} · total {{total}}",
+    "Reseed All Already Done": "All {{total}} presets already have snapshots, nothing to do",
+    "Reseed Skipped": "Scan skipped (feature disabled)",
+    "Reseed Failed": "Scan failed: {{message}}",
+
+    "Seed Snapshots Start": "Creating initial snapshots for {{count}} presets…",
+    "Seed Snapshots Done": "Created initial snapshots for {{added}} presets ({{total}} total)",
+
+    "Archived Version": "Archived",
+    "Archived Version Title": "In data takeover mode, this version has been deleted from SillyTavern and archived locally. It will be auto-restored when uninstalling the extension."
 }

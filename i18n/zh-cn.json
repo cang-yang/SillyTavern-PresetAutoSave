@@ -344,5 +344,24 @@
     "Takeover Mode DOM": "DOM 接管（轻量·推荐）",
     "Takeover Mode Data": "数据接管（一劳永逸·谨慎）",
     "Takeover Data Confirm Title": "⚠ 启用「数据接管」",
-    "Takeover Data Confirm Hint": "<b>这将直接从 SillyTavern 中删除非代表预设</b>，把它们的数据归档到本地数据库。<br><br>📌 <b>好处</b>：原生预设下拉会永久干净，无需每次启动都重新接管。<br>📌 <b>影响</b>：SillyTavern 的预设列表里那些版本会真的消失。<br>📌 <b>恢复方式</b>：<br>　• 卸载插件时会自动恢复全部归档预设<br>　• 切换回「DOM 接管」时会自动恢复<br>　• 设置 Tab 中可手动恢复<br><br>请确认你已知道这些影响，确定继续吗？"
+    "Takeover Data Confirm Hint": "<b>这将直接从 SillyTavern 中删除非代表预设</b>，把它们的数据归档到本地数据库。<br><br>📌 <b>好处</b>：原生预设下拉会永久干净，无需每次启动都重新接管。<br>📌 <b>影响</b>：SillyTavern 的预设列表里那些版本会真的消失。<br>📌 <b>恢复方式</b>：<br>　• 卸载插件时会自动恢复全部归档预设<br>　• 切换回「DOM 接管」时会自动恢复<br>　• 设置 Tab 中可手动恢复<br><br>请确认你已知道这些影响，确定继续吗？",
+
+    "Takeover Data Processing": "正在归档 {{count}} 个非代表预设…",
+    "Takeover Data Done": "数据接管完成：归档 {{archived}} 个 / 删除 {{deleted}} 个",
+
+    "Auto Seed Enabled": "首次开启自动建立初始快照",
+    "Auto Seed Enabled Desc": "首次启用接管/分组时，自动为现有所有预设建立一条「初始快照」，让它们立刻出现在三级面板里（无需等修改）。",
+
+    "Reseed Snapshots": "立即扫描全部预设建立快照",
+    "Reseed Snapshots Desc": "为所有当前没有快照的预设补一条「初始快照」，让面板立刻显示完整三级结构。",
+    "Reseed Done": "扫描完成：新建 {{added}} · 跳过 {{skipped}} · 共 {{total}}",
+    "Reseed All Already Done": "全部 {{total}} 个预设都已经有快照，无需操作",
+    "Reseed Skipped": "扫描已跳过（功能未启用）",
+    "Reseed Failed": "扫描失败：{{message}}",
+
+    "Seed Snapshots Start": "正在为 {{count}} 个预设建立初始快照…",
+    "Seed Snapshots Done": "已为 {{added}} 个预设建立初始快照（共 {{total}} 个）",
+
+    "Archived Version": "已归档",
+    "Archived Version Title": "数据接管模式下，这个版本已从 SillyTavern 删除并归档到插件本地。卸载插件时会自动恢复。"
 }

@@ -41,7 +41,13 @@ import {
     clearParseCache,
     pickRepresentativeVersion,
 } from './preset-grouping.js';
-import { refreshTakeover } from './preset-takeover.js';
+import {
+    refreshTakeover,
+    seedSnapshotsIfNeeded,
+    forceReseedSnapshots,
+    restoreAllFromArchive,
+} from './preset-takeover.js';
+import { listArchivedPresets } from './archive-store.js';
 
 // =====================================================
 // 状态
@@ -51,6 +57,7 @@ let _root = null;
 let _viewPopup = null;
 let _logUnsubscribe = null;
 let _logRefreshTimer = null;
+let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
 
 const INITIAL_STATE = Object.freeze({
     tab: 'list',
@@ -195,7 +202,14 @@ function waitForDOM() {
 // 数据加载
 // =====================================================
 async function loadData() {
-    _state.snapshots = await getAllSnapshots();
+    // 并行加载快照 + 归档（数据接管模式下面板要展示完整版本）
+    const [snapshots, archives] = await Promise.all([
+        getAllSnapshots().catch(() => []),
+        listArchivedPresets().catch(() => []),
+    ]);
+    _state.snapshots = snapshots || [];
+    _archivedCache = archives || [];
+
     const settings = getSettings();
     // 视图模式：从 settings 决定（启用分组 → series，否则 flat）
     _state.viewMode = settings.groupingEnabled ? 'series' : 'flat';
@@ -658,7 +672,7 @@ function renderSeriesView(filtered) {
         excluded: settings.groupingExcluded,
     });
 
-    // ⭐ 核心改造：把"原生预设列表"中存在但还没快照的预设也合并进来
+    // ⭐ 关键改造 1：把"原生预设列表"中存在但还没快照的预设也合并进来
     //   这样面板"列表" tab 永远展示完整的系列分组，
     //   即使某个版本还从来没修改过。
     try {
@@ -700,12 +714,63 @@ function renderSeriesView(filtered) {
                     latestTime: 0,
                     totalSize: 0,
                     snapshotCount: 0,
+                    archived: false,  // 标记：是否为已归档（数据接管模式下被删除）的版本
                 });
                 series.versionCount = series.versions.length;
             }
         }
     } catch (e) {
         logger.debug('renderSeriesView merge native list failed:', e);
+    }
+
+    // ⭐ 关键改造 2：把"已归档预设"也合并进来（数据接管模式下，这些预设已经从 ST 删除）
+    //   这样即使用户启用了 data takeover，面板也能完整看到所有系列的所有版本
+    //   归档版本带 archived=true 标记，UI 上以特殊颜色/角标显示
+    if (_archivedCache && _archivedCache.length > 0) {
+        try {
+            const overrides = settings.groupingManualOverrides || {};
+            const excluded = settings.groupingExcluded || {};
+            for (const arch of _archivedCache) {
+                const presetName = arch.presetName;
+                if (!presetName || excluded[presetName]) continue;
+                const info = getSeriesInfo(presetName, overrides, excluded);
+                if (info.excluded) continue;
+                const seriesKey = info.series || presetName;
+
+                let series = seriesMap.get(seriesKey);
+                if (!series) {
+                    series = {
+                        series: seriesKey,
+                        versions: [],
+                        latestTime: 0,
+                        totalSize: 0,
+                        snapshotCount: 0,
+                        versionCount: 0,
+                    };
+                    seriesMap.set(seriesKey, series);
+                }
+
+                const exists = series.versions.some(v => v.apiId === arch.apiId && v.presetName === presetName);
+                if (!exists) {
+                    series.versions.push({
+                        apiId: arch.apiId,
+                        presetName,
+                        version: info.version,
+                        duplicate: info.duplicate,
+                        kind: info.kind,
+                        manualOverride: info.manualOverride,
+                        snapshots: [],
+                        latestTime: arch.archivedAt || 0,
+                        totalSize: 0,
+                        snapshotCount: 0,
+                        archived: true,
+                    });
+                    series.versionCount = series.versions.length;
+                }
+            }
+        } catch (e) {
+            logger.debug('renderSeriesView merge archives failed:', e);
+        }
     }
 
     if (seriesMap.size === 0) {
@@ -811,6 +876,21 @@ function renderSeriesGroup(info) {
     const currentApi = getCurrentApiId();
     const isCurrent = info.versions.some(v => v.apiId === currentApi && v.presetName === currentName);
 
+    // ⭐ 副标题：显示该系列在原生下拉里"代表"的真实预设名（用户能直观看到这个文件夹对应哪个）
+    //    优先级：用户指定的默认应用 > 当前选中（在该系列内时）> 第一个版本
+    const settings = getSettings();
+    const seriesDefaults = settings.seriesDefaultApply || {};
+    let representativeName = seriesDefaults[seriesKey] || '';
+    if (!representativeName && isCurrent) representativeName = currentName;
+    if (!representativeName && info.versions.length > 0) {
+        // 尽量挑非归档的（在 ST 里实际存在）
+        const live = info.versions.find(v => !v.archived);
+        representativeName = (live || info.versions[0]).presetName;
+    }
+    const subtitleHtml = representativeName && representativeName !== seriesKey
+        ? `<span class="pas-series-subtitle" title="${escapeAttr(representativeName)}">→ ${escapeHtml(representativeName)}</span>`
+        : '';
+
     return `
 <div class="pas-series-group ${isCurrent ? 'pas-series-current' : ''}" data-series-key="${safeKey}">
     <div class="pas-series-header" data-action="toggle-series">
@@ -818,6 +898,7 @@ function renderSeriesGroup(info) {
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
             <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"></i>
             <span class="pas-series-name" title="${escapeAttr(seriesKey)}">${escapeHtml(seriesKey)}</span>
+            ${subtitleHtml}
             ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
         </div>
         <div class="pas-series-header-meta">
@@ -874,6 +955,10 @@ function renderVersionGroup(ver, seriesKey) {
     const emptyHtml = isEmpty
         ? `<span class="pas-tag pas-tag-empty" title="${escapeAttr(t('No Snapshots Yet Title'))}">${escapeHtml(t('No Snapshots Yet'))}</span>`
         : '';
+    // 数据接管模式下，已被归档（从 ST 删除）的版本显示一个特殊角标
+    const archivedHtml = ver.archived
+        ? `<span class="pas-tag pas-tag-archived" title="${escapeAttr(t('Archived Version Title'))}"><i class="fa-solid fa-box-archive"></i> ${escapeHtml(t('Archived Version'))}</span>`
+        : '';
 
     // 设为默认按钮：图钉图标，点亮表示当前生效
     const defaultBtnTitle = isDefaultApply ? t('Unset Default Version') : t('Set As Default Version');
@@ -899,6 +984,7 @@ function renderVersionGroup(ver, seriesKey) {
             ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
             ${defaultApplyHtml}
             ${manualHtml}
+            ${archivedHtml}
             ${emptyHtml}
             <span class="pas-version-api">${escapeHtml(ver.apiId)}</span>
         </div>
@@ -2497,6 +2583,8 @@ function renderSettingsTab() {
             { value: 'latest', label: t('Takeover Strategy Latest') },
             { value: 'manual', label: t('Takeover Strategy Manual') },
         ]),
+        toggle('autoSeedOnTakeover', t('Auto Seed Enabled'), t('Auto Seed Enabled Desc'), s.autoSeedOnTakeover),
+        action('reseed', t('Reseed Snapshots'), t('Reseed Snapshots Desc'), 'fa-magic-wand-sparkles'),
     ])}
 
     ${group(t('Advanced Group'), [
@@ -2573,6 +2661,21 @@ function select(key, label, desc, value, options) {
 </div>`;
 }
 
+function action(actionKey, label, desc, icon = 'fa-bolt') {
+    return `
+<div class="pas-setting-item pas-setting-action-row">
+    <div class="pas-setting-info">
+        <div class="pas-setting-label">${escapeHtml(label)}</div>
+        <div class="pas-setting-desc">${escapeHtml(desc)}</div>
+    </div>
+    <div class="pas-setting-input">
+        <button class="menu_button pas-setting-action-btn" data-action="${escapeAttr(actionKey)}" type="button">
+            <i class="fa-solid ${escapeAttr(icon)}"></i>
+        </button>
+    </div>
+</div>`;
+}
+
 function bindSettingsEvents(container) {
     // 复选框
     container.querySelectorAll('input[type="checkbox"][data-setting]').forEach(input => {
@@ -2634,6 +2737,34 @@ function bindSettingsEvents(container) {
         resetSettings();
         toast.success(t('Reset Settings Done'));
         renderSettingsTab();
+    });
+
+    // ⭐ 立即扫描全部预设建立快照（接管模式下用户随时能让"未修改的预设"出现在面板里）
+    container.querySelector('.pas-setting-action-btn[data-action="reseed"]')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        const oldHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+        try {
+            const result = await forceReseedSnapshots();
+            if (result && typeof result.added === 'number') {
+                if (result.added > 0) {
+                    toast.success(t('Reseed Done', { added: result.added, skipped: result.skipped, total: result.total }));
+                } else {
+                    toast.info(t('Reseed All Already Done', { total: result.total || 0 }));
+                }
+                // 立即刷新面板（保持当前 tab 是 list）
+                if (_state.tab === 'list') await refreshData();
+            } else {
+                toast.warning(t('Reseed Skipped'));
+            }
+        } catch (e2) {
+            toast.error(t('Reseed Failed', { message: e2?.message || String(e2) }));
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = oldHtml;
+        }
     });
 
     // 清空所有

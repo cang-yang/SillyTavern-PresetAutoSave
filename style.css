@@ -1357,6 +1357,52 @@
     border-color: rgba(251, 191, 36, 0.42);
     text-shadow: none;
 }
+
+/* 系列副标题：→ 实际预设名 */
+.pas-series-subtitle {
+    font-size: 0.85em;
+    color: var(--pas-fg-3, rgba(255,255,255,0.45));
+    font-weight: 400;
+    letter-spacing: 0.1px;
+    margin-left: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 220px;
+    flex-shrink: 1;
+}
+
+/* "已归档" 角标（数据接管模式下被删除的版本） */
+.pas-tag-archived {
+    background: rgba(168, 85, 247, 0.14);
+    color: #c084fc;
+    border-color: rgba(168, 85, 247, 0.36);
+}
+.pas-tag-archived::before {
+    background: #a855f7;
+}
+.pas-version-group:has(.pas-tag-archived) {
+    opacity: 0.85;
+}
+
+/* 设置 Tab 中的"操作行"按钮 */
+.pas-setting-action-btn {
+    min-width: 40px;
+    padding: 6px 12px;
+    font-size: 0.95em;
+    transition: transform var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-setting-action-btn:hover {
+    transform: translateY(-1px);
+}
+.pas-setting-action-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+.pas-setting-action-btn .fa-spinner {
+    color: var(--pas-c-info, #60a5fa);
+}
 .pas-tag-current::before {
     background: #fbbf24;
     opacity: 1;

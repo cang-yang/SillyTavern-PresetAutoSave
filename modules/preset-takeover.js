@@ -28,6 +28,7 @@ import { getSettings, onSettingChange, updateSetting } from './settings.js';
 import {
     on, getEventType, getCurrentApiId, selectPresetSafe,
     getPresetManager, getPresetSnapshot, savePresetSafe, deletePresetSafe, getAllPresetNames,
+    toast, t,
 } from './compatibility.js';
 import {
     parsePresetName,
@@ -41,7 +42,7 @@ import {
     removeArchivedPreset,
     getArchiveCount,
 } from './archive-store.js';
-import { getSnapshots } from './history-store.js';
+import { getSnapshots, addSnapshot, TRIGGER } from './history-store.js';
 
 // =====================================================
 // 常量
@@ -162,6 +163,14 @@ export async function initPresetTakeover() {
     setTimeout(() => refresh(), 100);
     setTimeout(() => refresh(), 500);
     setTimeout(() => refresh(), 1500);
+
+    // 启动种子：让"未修改的存量预设"立即出现在三级面板里
+    // 不阻塞主流程：发起异步种子，悄悄完成
+    setTimeout(() => {
+        seedSnapshotsIfNeeded().catch(e =>
+            logger.warn('[Takeover] seed snapshots failed:', e)
+        );
+    }, 2500);
 
     logger.success('[Takeover] Ready ✓');
 }
@@ -781,6 +790,16 @@ async function applyDataTakeover() {
         let archived = 0;
         let deleted = 0;
         let failed = 0;
+        let totalToProcess = 0;
+        for (const items of seriesMap.values()) {
+            if (items.length > 1) totalToProcess += (items.length - 1);
+        }
+        if (totalToProcess > 0) {
+            try {
+                toast.info(t('Takeover Data Processing', { count: totalToProcess }));
+            } catch (_) {}
+        }
+
         const currentName = (typeof window !== 'undefined' && window.SillyTavern)
             ? (() => {
                 try { return SillyTavern.getContext().getPresetManager?.(apiId)?.getSelectedPresetName?.() || ''; }
@@ -834,8 +853,30 @@ async function applyDataTakeover() {
 
         if (archived > 0 || deleted > 0) {
             logger.success(`[Takeover-Data] complete: archived=${archived}, deleted=${deleted}, failed=${failed}`);
+            try {
+                toast.success(t('Takeover Data Done', { archived, deleted }));
+            } catch (_) {}
+            // 删除后 ST 会重渲下拉，但代表 option 还会显示原始预设名
+            // → 再做一遍 DOM 接管的"代表项重命名"，让原下拉显示系列名
+            setTimeout(() => {
+                try {
+                    const selects = document.querySelectorAll(SELECT_SELECTOR);
+                    for (const sel of selects) {
+                        if (!sel || !sel.isConnected) continue;
+                        try { applyTakeoverToSelect(sel); } catch (_) {}
+                    }
+                } catch (_) {}
+            }, 600);
         } else {
             logger.debug('[Takeover-Data] nothing to do (no multi-version series)');
+            // 即使没有要归档的，也应做一次 DOM 接管使下拉显示系列名
+            try {
+                const selects = document.querySelectorAll(SELECT_SELECTOR);
+                for (const sel of selects) {
+                    if (!sel || !sel.isConnected) continue;
+                    try { applyTakeoverToSelect(sel); } catch (_) {}
+                }
+            } catch (_) {}
         }
         _takeoverActive = true;
     } catch (e) {
@@ -843,6 +884,144 @@ async function applyDataTakeover() {
     } finally {
         _dataTakeoverRunning = false;
     }
+}
+
+// =====================================================
+// 种子快照：开启分组/接管时为现有预设自动建立 1 条初始快照
+// 这样三级面板在用户做任何修改之前就能完整显示所有预设
+// =====================================================
+let _seedingRunning = false;
+
+/**
+ * 给当前 ST 所有现存预设建立"初始快照"（trigger='manual' / source='seed'）
+ *   - 只对没有任何快照的预设执行
+ *   - 已经有快照（无论数量多少）的预设跳过
+ *   - 异步分批执行，避免一次性卡住主线程
+ *   - 结果通过 toast 通知
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.force=false]  true = 忽略 settings.seedSnapshotsDone 强制重跑
+ * @param {boolean} [opts.silent=false] true = 不弹 toast（首次启动静默种子用）
+ */
+export async function seedSnapshotsIfNeeded(opts = {}) {
+    const { force = false, silent = false } = opts;
+
+    if (_seedingRunning) {
+        logger.debug('[Seed] already running, skip');
+        return { skipped: true };
+    }
+
+    const settings = getSettings();
+    if (!settings.enabled || !settings.groupingEnabled) {
+        logger.debug('[Seed] disabled by settings, skip');
+        return { skipped: true };
+    }
+    if (!force && !settings.autoSeedOnTakeover) {
+        logger.debug('[Seed] autoSeedOnTakeover=false, skip');
+        return { skipped: true };
+    }
+    if (!force && settings.seedSnapshotsDone) {
+        logger.debug('[Seed] already done in a previous session, skip');
+        return { skipped: true };
+    }
+
+    _seedingRunning = true;
+    try {
+        const apiId = getCurrentApiId();
+        if (!apiId) {
+            logger.warn('[Seed] no current API id, skip');
+            return { skipped: true };
+        }
+
+        const allObjs = getAllPresetNames() || [];
+        const allNames = allObjs
+            .map(o => (typeof o === 'string') ? o : (o && (o.name || o.preset_name)))
+            .filter(s => typeof s === 'string' && s);
+
+        if (allNames.length === 0) {
+            logger.debug('[Seed] no presets in ST');
+            return { skipped: true, total: 0 };
+        }
+
+        logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots...`);
+        if (!silent) {
+            try { toast.info(t('Seed Snapshots Start', { count: allNames.length })); } catch (_) {}
+        }
+
+        let added = 0;
+        let skipped = 0;
+        let failed = 0;
+        const total = allNames.length;
+
+        // 分批：每 5 个让出主线程一次，避免阻塞 UI
+        for (let i = 0; i < allNames.length; i++) {
+            const name = allNames[i];
+            try {
+                // 已有快照 → 跳过
+                const existing = await getSnapshots(apiId, name);
+                if (Array.isArray(existing) && existing.length > 0) {
+                    skipped++;
+                } else {
+                    // 读完整数据
+                    const data = getPresetSnapshot(name);
+                    if (!data || typeof data !== 'object') {
+                        failed++;
+                        continue;
+                    }
+                    // 用 MANUAL trigger 强制建一条（绕过 skipUnchangedSave）
+                    const snap = await addSnapshot(name, apiId, data, TRIGGER.MANUAL);
+                    if (snap) {
+                        added++;
+                    } else {
+                        failed++;
+                    }
+                }
+            } catch (e) {
+                logger.debug(`[Seed] error for "${name}":`, e);
+                failed++;
+            }
+
+            // 每 5 个 yield 一次（rAF / setTimeout）
+            if (i % 5 === 4 && i < allNames.length - 1) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+
+        logger.success(
+            `[Seed] complete: added=${added}, skipped=${skipped}` +
+            (failed > 0 ? `, failed=${failed}` : '') +
+            ` (total=${total})`
+        );
+        if (!silent) {
+            try {
+                if (added > 0) {
+                    toast.success(t('Seed Snapshots Done', { added, skipped, total }));
+                } else if (total > 0) {
+                    // 全部都已经有快照了 — 静默
+                }
+            } catch (_) {}
+        }
+
+        // 标记完成（无论这次是否真的添加，至少跑过一次了）
+        try {
+            updateSetting('seedSnapshotsDone', true);
+        } catch (_) {}
+
+        return { added, skipped, failed, total };
+    } catch (e) {
+        logger.error('[Seed] seedSnapshotsIfNeeded failed:', e);
+        return { error: String(e) };
+    } finally {
+        _seedingRunning = false;
+    }
+}
+
+/**
+ * 强制重新种子（设置面板"重新扫描"按钮调用）
+ * 会清掉 seedSnapshotsDone 标记，所有缺快照的预设会被补上一条
+ */
+export async function forceReseedSnapshots() {
+    return seedSnapshotsIfNeeded({ force: true, silent: false });
 }
 
 /**

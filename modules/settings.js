@@ -54,6 +54,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     takeoverHideMode: 'hide',       // 'hide' | 'collapse' 非代表 option 的处理方式（保留扩展）
     takeoverDataConfirmed: false,   // 用户是否已经接受过"数据接管"模式的危险提示
 
+    // 种子快照：开启分组/接管时为现有预设自动建立 1 条初始快照
+    autoSeedOnTakeover: true,       // 是否自动种子（首次接管/检测到新预设时）
+    seedSnapshotsDone: false,       // 全量 seed 是否已完成（避免每次启动都跑）
+
     // 高级
     debugMode: false,               // 启用详细日志
     fallbackPolling: false,         // 兜底轮询（默认关闭，仅当事件触发不可靠时启用）
@@ -86,6 +90,8 @@ const VALIDATORS = {
     seriesDefaultApply: (v) => sanitizeStringMap(v),
     takeoverHideMode: (v) => (v === 'collapse' ? 'collapse' : 'hide'),
     takeoverDataConfirmed: (v) => Boolean(v),
+    autoSeedOnTakeover: (v) => Boolean(v),
+    seedSnapshotsDone: (v) => Boolean(v),
     debugMode: (v) => Boolean(v),
     fallbackPolling: (v) => Boolean(v),
 };
