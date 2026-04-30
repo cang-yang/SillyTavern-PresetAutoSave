@@ -307,50 +307,6 @@
     min-width: 0;
 }
 
-/* API 切换器（panel 头部右侧） */
-.pas-panel-api-switcher {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 8px 2px 6px;
-    background: var(--pas-surface-3);
-    border: 1px solid var(--pas-border);
-    border-radius: var(--pas-radius-sm);
-    font-size: 0.82em;
-    color: var(--pas-fg-muted);
-    flex-shrink: 0;
-}
-.pas-panel-api-switcher i {
-    color: var(--pas-accent);
-    opacity: 0.85;
-    font-size: 0.92em;
-}
-.pas-panel-api-switcher .pas-api-switcher-label {
-    color: var(--pas-fg-faint);
-    white-space: nowrap;
-}
-.pas-api-select {
-    background: transparent !important;
-    border: none !important;
-    color: var(--pas-fg);
-    font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.92em;
-    padding: 1px 4px !important;
-    margin: 0;
-    cursor: pointer;
-    min-width: 0;
-    max-width: 200px;
-    line-height: 1.5;
-    box-shadow: none !important;
-}
-.pas-api-select:focus {
-    outline: 1px solid var(--pas-border-focus);
-    outline-offset: 1px;
-}
-.pas-api-select option {
-    background: var(--SmartThemeBlurTintColor, #1a1a1a);
-    color: var(--pas-fg);
-}
 
 /* --- Tab 切换 --- */
 .pas-panel-tabs {

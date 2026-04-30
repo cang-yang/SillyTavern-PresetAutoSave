@@ -742,35 +742,20 @@ export function listAllPresetsIncludingDetached(filterApiId) {
         return out;
     }
 
-    // 默认：优先用 mainApi；mainApi 不可靠时退到"当前可见 select 的 apiId"
+    // 默认：使用 ST 当前 mainApi
     let target = filterApiId;
     if (target === undefined || target === null) {
         try { target = getCurrentApiId(); } catch (_) { target = 'openai'; }
     }
     const wantAll = (target === '*');
 
-    // 检查 select 是否"用户当前看得见"（用于 fallback）
-    const isVisibleInDom = (sel) => {
-        if (!sel || !sel.isConnected) return false;
-        try {
-            // ST 用 closest('.preset_settings, [data-api-block]') 隐藏其他 API 的下拉
-            //   或者直接 style="display: none" / 父级 hidden
-            // 用 offsetParent 判断（当 element 不可见或为 fixed 时为 null）
-            // 兜底：检查 element.checkVisibility?.() 或 getBoundingClientRect
-            if (typeof sel.checkVisibility === 'function') {
-                return sel.checkVisibility();
-            }
-            const r = sel.getBoundingClientRect();
-            if (r.width === 0 && r.height === 0) return false;
-            return true;
-        } catch (_) {
-            return true;
-        }
-    };
-
-    // ⚡ 关键：build api → matched select map
-    //   一个 apiId 可能对应多个 select（如 textgenerationwebui 的下拉重复出现），
-    //   只要至少一个 isVisible 就认它"参与" - 这样用户看到的下拉对应的预设都会被列出
+    // ⚡ 严格按 apiId 过滤 —— 不做任何"可见性兜底"
+    //   ST 在 DOM 中始终存在多个 select[data-preset-manager-for]：
+    //     openai / kobold / novel / textgenerationwebui / context / instruct / sysprompt / reasoning ...
+    //   即使用户当前是 OpenAI 模式，textgenerationwebui 的 select 仍然在 DOM 中（只是被 CSS 隐藏）
+    //
+    //   "isVisibleInDom 兜底"是导致一级列表混入数百个其他 API 预设的元凶 —— 已彻底移除。
+    //   严格的 apiId 匹配是唯一可靠的过滤方式。
     const targetSelects = [];
     for (const sel of selects) {
         if (!sel || !sel.isConnected) continue;
@@ -781,18 +766,6 @@ export function listAllPresetsIncludingDetached(filterApiId) {
         }
         if (apiId === target) {
             targetSelects.push({ apiId, sel });
-        }
-    }
-
-    // 如果没有任何 select 匹配 target，且不是 '*'，说明 mainApi 与 DOM 不一致
-    //   退到"取当前可见的所有 select"，兜底用户实际看到的下拉
-    if (!wantAll && targetSelects.length === 0) {
-        for (const sel of selects) {
-            if (!sel || !sel.isConnected) continue;
-            if (isVisibleInDom(sel)) {
-                const apiId = getApiIdOfSelect(sel);
-                targetSelects.push({ apiId, sel });
-            }
         }
     }
 
@@ -1146,10 +1119,11 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
         logger.debug('[Seed] autoSeedOnTakeover=false, skip');
         return { skipped: true };
     }
-    if (!force && settings.seedSnapshotsDone) {
-        logger.debug('[Seed] already done in a previous session, skip');
-        return { skipped: true };
-    }
+    // ⚠️ 关键修复：seedSnapshotsDone=true 时不再直接 skip，
+    //   而是仍然扫描所有预设，只对"已有快照"的跳过、对"无快照"的补一条。
+    //   原因：用户可能添加了新的预设，那些预设需要立即出现在面板里（含一条种子快照）。
+    //   函数本身已经按"existing.length > 0 → skipped"处理了幂等性，没必要再用 done flag 短路。
+    // 仅保留 force 语义：如果 force=true，无视 done 标记（用于"重新扫描"按钮）。
 
     _seedingRunning = true;
     try {

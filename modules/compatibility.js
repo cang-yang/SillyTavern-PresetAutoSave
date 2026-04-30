@@ -431,9 +431,10 @@ export function selectPresetSafe(presetName) {
 
 /**
  * 获取所有预设名
+ * @param {string} [apiId] 指定 API 的 PresetManager；不传 = 当前 mainApi
  */
-export function getAllPresetNames() {
-    const pm = getPresetManager();
+export function getAllPresetNames(apiId) {
+    const pm = getPresetManager(apiId);
     if (!pm || typeof pm.getAllPresets !== 'function') return [];
     return safeCall(() => pm.getAllPresets(), [], 'getAllPresets');
 }
