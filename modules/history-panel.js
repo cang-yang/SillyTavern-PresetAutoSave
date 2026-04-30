@@ -48,6 +48,7 @@ import {
     seedSnapshotsIfNeeded,
     forceReseedSnapshots,
     restoreAllFromArchive,
+    listAllPresetsIncludingDetached,
 } from './preset-takeover.js';
 import { listArchivedPresets } from './archive-store.js';
 
@@ -693,16 +694,33 @@ function renderSeriesView(filtered) {
         return rawKey;
     };
 
-    // ⭐ 把"原生预设列表"中存在但还没快照的预设也合并进来
-    //   这样面板"列表" tab 永远展示完整的系列分组，
-    //   即使某个版本还从来没修改过。
+    // ⭐ 把"完整原生预设列表"合并进来（包括接管模式下被摘除的非代表 option）
+    //   这是用户报告"展开后只有一个版本"bug 的关键修复：
+    //   getAllPresetNames() 在某些 ST 版本下可能不返回 detached options，
+    //   所以同时调用 listAllPresetsIncludingDetached() 取并集。
     try {
-        const allNames = (getAllPresetNames() || []).map(o => (o && (o.name || o.preset_name)) || o).filter(s => typeof s === 'string' && s);
         const overrides = settings.groupingManualOverrides || {};
         const excluded = settings.groupingExcluded || {};
         const currentApi = getCurrentApiId() || 'openai';
 
-        for (const presetName of allNames) {
+        // 来源 1：ST 内部数据（getAllPresets）
+        const fromST = (getAllPresetNames() || [])
+            .map(o => (o && (o.name || o.preset_name)) || o)
+            .filter(s => typeof s === 'string' && s)
+            .map(name => ({ apiId: currentApi, presetName: name }));
+
+        // 来源 2：DOM 实际数据（含被接管摘除的）
+        let fromDOM = [];
+        try { fromDOM = listAllPresetsIncludingDetached() || []; } catch (_) {}
+
+        // 合并去重：以 apiId::presetName 为 key
+        const allEntries = new Map();
+        for (const e of [...fromST, ...fromDOM]) {
+            const k = `${e.apiId}::${e.presetName}`;
+            if (!allEntries.has(k)) allEntries.set(k, e);
+        }
+
+        for (const { apiId, presetName } of allEntries.values()) {
             if (excluded[presetName]) continue;
             const info = getSeriesInfo(presetName, overrides, excluded);
             if (info.excluded) continue;
@@ -721,11 +739,12 @@ function renderSeriesView(filtered) {
                 seriesMap.set(seriesKey, series);
             }
 
-            // 该系列中是否已存在 (apiId, presetName) 的版本？
-            const exists = series.versions.some(v => v.apiId === currentApi && v.presetName === presetName);
+            // 用归一化键判断"该系列中是否已有这个版本"，避免大小写差异重复加
+            const existsKey = (n) => normalizeSeriesKey(n);
+            const exists = series.versions.some(v => v.apiId === apiId && existsKey(v.presetName) === existsKey(presetName));
             if (!exists) {
                 series.versions.push({
-                    apiId: currentApi,
+                    apiId,
                     presetName,
                     version: info.version,
                     duplicate: info.duplicate,

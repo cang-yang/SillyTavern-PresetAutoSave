@@ -716,6 +716,60 @@ export function refreshTakeover() {
 }
 
 /**
+ * ⚡ 关键 API：返回**所有预设名**（含被接管摘除的非代表 option）
+ *
+ * 修复用户报告的"展开后只看到一个版本"bug：
+ *   - DOM 接管模式下，select.options 只剩"代表 option"
+ *   - 被合并的版本（V1, V2 等）已被 detach
+ *   - 历史面板用 getAllPresetNames() 拿到的是 ST 内部的 presets 数组
+ *     —— 但**有些 ST 版本（如 OpenAI PresetManager）的 getAllPresets() 直接读 select.options**
+ *     就会少返回那些被我们 detach 的预设。
+ *
+ * 这个 API 同时输出 select.options 里的 + _detachedOptions 里的，
+ * 是面板拿到完整列表的最可靠途径。
+ *
+ * @returns {Array<{apiId: string, presetName: string, detached: boolean}>}
+ */
+export function listAllPresetsIncludingDetached() {
+    const out = [];
+    let selects;
+    try {
+        selects = document.querySelectorAll(SELECT_SELECTOR);
+    } catch (_) {
+        return out;
+    }
+    const seen = new Set();
+    for (const select of selects) {
+        if (!select || !select.isConnected) continue;
+        const apiId = getApiIdOfSelect(select);
+        // 当前在 DOM 中的 option
+        for (const opt of select.options || []) {
+            const name = opt.value || opt.textContent;
+            if (!name) continue;
+            // 接管后代表 option 的 textContent 被改成了系列名 —— 用 data-pas-orig-text 取真实预设名
+            const realName = opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR) || name;
+            const key = `${apiId}::${realName}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ apiId, presetName: realName, detached: false });
+        }
+        // 被摘除的 option（不在 DOM 但存在于 _detachedOptions 表里）
+        const detached = _detachedOptions.get(apiId) || [];
+        for (const d of detached) {
+            const opt = d.option;
+            if (!opt) continue;
+            const name = opt.value || opt.textContent;
+            if (!name) continue;
+            const key = `${apiId}::${name}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ apiId, presetName: name, detached: true });
+        }
+    }
+    return out;
+}
+
+/**
  * 列出所有 select 当前可见的"系列代表"
  *  返回 [{ apiId, seriesKey, presetName, items: [{ presetName, version }] }]
  *  用于历史面板展示"原生列表"
