@@ -107,11 +107,12 @@ export async function initPresetTakeover() {
         logger.warn('[Takeover] archive store init failed (data mode unavailable):', e);
     }
 
-    // 监听设置变化（仅响应"接管相关"的字段）
+    // 监听设置变化（仅响应"会改变接管布局"的字段）
+    // ⚡ 关键：seriesDefaultApply 不在此列 —— 用户只是改"默认版本"，
+    //   不应该触发接管刷新，否则 DOM 重写会让 ST 误以为用户切换了预设
     _settingUnsubscribe = onSettingChange(({ key, newValue, oldValue }) => {
         if (
             key === 'takeoverEnabled'
-            || key === 'seriesDefaultApply'
             || key === 'groupingManualOverrides'
             || key === 'groupingExcluded'
             || key === 'groupingEnabled'

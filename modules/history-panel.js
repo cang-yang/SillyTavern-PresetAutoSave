@@ -29,6 +29,7 @@ import {
     getCurrentApiId, getSelectedPresetName,
     savePresetSafe, selectPresetSafe,
     getAllPresetNames,
+    deletePresetSafe,
     on as onEvent, getEventType,
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
@@ -40,6 +41,7 @@ import {
     groupNamesBySeries,
     clearParseCache,
     pickRepresentativeVersion,
+    normalizeSeriesKey,
 } from './preset-grouping.js';
 import {
     refreshTakeover,
@@ -673,7 +675,25 @@ function renderSeriesView(filtered) {
         excluded: settings.groupingExcluded,
     });
 
-    // ⭐ 关键改造 1：把"原生预设列表"中存在但还没快照的预设也合并进来
+    // ⚡ 关键修复 B3：用 normKey 做"二次归并"
+    //   seriesMap 的 key 是首次出现的"显示名"形式（如"mur 鹿鹿 API"），
+    //   后续 native list / archives 来的数据如果是另一种大小写/空格形式
+    //   （如"Mur 鹿鹿 API"或"mur鹿鹿 API"），必须归到已存在的系列里，
+    //   否则面板里会显示成多个独立的一级条目（用户报告的"一级里只有一个版本"假象）。
+    const _normKeyToDisplay = new Map();  // normKey → 显示名（已经在 seriesMap 中）
+    for (const k of seriesMap.keys()) {
+        _normKeyToDisplay.set(normalizeSeriesKey(k), k);
+    }
+    const _resolveSeriesKey = (rawKey) => {
+        const norm = normalizeSeriesKey(rawKey);
+        const existing = _normKeyToDisplay.get(norm);
+        if (existing) return existing;
+        // 第一次出现 → 注册显示名
+        _normKeyToDisplay.set(norm, rawKey);
+        return rawKey;
+    };
+
+    // ⭐ 把"原生预设列表"中存在但还没快照的预设也合并进来
     //   这样面板"列表" tab 永远展示完整的系列分组，
     //   即使某个版本还从来没修改过。
     try {
@@ -686,7 +706,7 @@ function renderSeriesView(filtered) {
             if (excluded[presetName]) continue;
             const info = getSeriesInfo(presetName, overrides, excluded);
             if (info.excluded) continue;
-            const seriesKey = info.series || presetName;
+            const seriesKey = _resolveSeriesKey(info.series || presetName);
 
             let series = seriesMap.get(seriesKey);
             if (!series) {
@@ -715,7 +735,7 @@ function renderSeriesView(filtered) {
                     latestTime: 0,
                     totalSize: 0,
                     snapshotCount: 0,
-                    archived: false,  // 标记：是否为已归档（数据接管模式下被删除）的版本
+                    archived: false,
                 });
                 series.versionCount = series.versions.length;
             }
@@ -724,9 +744,7 @@ function renderSeriesView(filtered) {
         logger.debug('renderSeriesView merge native list failed:', e);
     }
 
-    // ⭐ 关键改造 2：把"已归档预设"也合并进来（数据接管模式下，这些预设已经从 ST 删除）
-    //   这样即使用户启用了 data takeover，面板也能完整看到所有系列的所有版本
-    //   归档版本带 archived=true 标记，UI 上以特殊颜色/角标显示
+    // ⭐ 把"已归档预设"也合并进来（数据接管模式下）
     if (_archivedCache && _archivedCache.length > 0) {
         try {
             const overrides = settings.groupingManualOverrides || {};
@@ -736,7 +754,7 @@ function renderSeriesView(filtered) {
                 if (!presetName || excluded[presetName]) continue;
                 const info = getSeriesInfo(presetName, overrides, excluded);
                 if (info.excluded) continue;
-                const seriesKey = info.series || presetName;
+                const seriesKey = _resolveSeriesKey(info.series || presetName);
 
                 let series = seriesMap.get(seriesKey);
                 if (!series) {
@@ -1963,8 +1981,38 @@ async function onClearPreset(key) {
         t('Clear Preset Hint', { name: escapeHtml(presetName) })
     );
     if (!ok) return;
+    // 1) 清空快照历史
     await clearPresetHistory(apiId, presetName);
-    toast.success(t('Cleared'));
+    // 2) 检查 ST 里是否还存在同名预设 → 如有，再问是否一并删除
+    //    （这是用户报"0KB 数据删不掉，因为面板里一直显示"的根因）
+    let stillExists = false;
+    try {
+        const all = (getAllPresetNames() || []).map(o => (o && (o.name || o.preset_name)) || o);
+        stillExists = all.some(n => String(n) === String(presetName));
+    } catch (_) {}
+    if (stillExists) {
+        const removeFromST = await confirmSafe(
+            t('Clear Preset Also Remove From ST Confirm'),
+            t('Clear Preset Also Remove From ST Hint', { name: escapeHtml(presetName) })
+        );
+        if (removeFromST) {
+            try {
+                const delOk = await deletePresetSafe(presetName, apiId);
+                if (delOk) {
+                    toast.success(t('Cleared'));
+                } else {
+                    toast.warning(t('Clear Preset ST Delete Failed'));
+                }
+            } catch (e) {
+                toast.warning(t('Clear Preset ST Delete Failed'));
+                logger.warn('delete preset from ST failed:', e);
+            }
+        } else {
+            toast.success(t('Cleared'));
+        }
+    } else {
+        toast.success(t('Cleared'));
+    }
     await refreshData();
 }
 
@@ -1987,7 +2035,9 @@ async function onToggleSeriesDefault(seriesKey, presetName) {
     }
 
     updateSetting('seriesDefaultApply', map);
-    try { refreshTakeover(); } catch (_) {}
+    // ⚡ 关键：不再触发 refreshTakeover()！
+    //   default 是"用户点代表项时跳到哪个版本"的运行时决策，
+    //   不应该改变当前 select 的代表项，否则 DOM 重写会让 ST 误触发预设切换。
 
     if (wasDefault) {
         toast.info(t('Default Apply Cleared', { series: seriesKey }));

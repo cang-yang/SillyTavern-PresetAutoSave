@@ -398,16 +398,35 @@ export function selectPresetSafe(presetName) {
     const pm = getPresetManager();
     if (!pm) return false;
 
-    return safeCall(() => {
-        if (typeof pm.findPreset === 'function' && typeof pm.selectPreset === 'function') {
-            const value = pm.findPreset(presetName);
-            if (value !== undefined) {
-                pm.selectPreset(value);
-                return true;
-            }
-        }
+    // ⚡ 关键：ST 的 selectPreset 可能在 ST 内部 onChange 链中抛错
+    //   （如 mistralai_model undefined 等历史遗留迁移代码失败），
+    //   但实际预设已经切换了。所以不能直接看 safeCall 的 catch 结果，
+    //   要"切换后再读 selected preset name 是否变成目标值"作为最终判定。
+    if (typeof pm.findPreset !== 'function' || typeof pm.selectPreset !== 'function') {
         return false;
-    }, false, 'selectPreset');
+    }
+    const value = pm.findPreset(presetName);
+    if (value === undefined) {
+        return false;
+    }
+    try {
+        pm.selectPreset(value);
+    } catch (e) {
+        // ST 内部抛错不代表切换失败 —— 验证下面的最终状态
+    }
+    // 验证：切换后再问 ST 选中的是不是目标
+    try {
+        const cur = pm.getSelectedPresetName?.();
+        if (cur && String(cur) === String(presetName)) {
+            return true;
+        }
+    } catch (_) {}
+    // 退一步：select 元素的 value 是否对了
+    try {
+        const sel = document.querySelector('select[data-preset-manager-for]');
+        if (sel && sel.value === presetName) return true;
+    } catch (_) {}
+    return false;
 }
 
 /**

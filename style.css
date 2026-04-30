@@ -229,8 +229,22 @@
     min-height: 60vh;
     color: var(--pas-fg);
     font-size: 14px;
+    /* ⚡ 关键：ST 的 Popup 容器默认 text-align: center，
+       会让所有 inline / inline-block 元素（包括 span 标题）居中。
+       明确强制左对齐避免溢出。 */
+    text-align: left;
     /* 性能：让浏览器知道这是一个独立的合成层 */
     contain: layout style;
+}
+.pas-panel * {
+    text-align: inherit;
+}
+/* 标题/名称类组件再次明确左对齐（防御性） */
+.pas-series-name,
+.pas-version-rawname,
+.pas-preset-name,
+.pas-card-name-custom {
+    text-align: left;
 }
 
 /* --- 头部（重构：stats 嵌入 title 中部，避免长内容与右上关闭按钮挤压） --- */
@@ -854,6 +868,7 @@
 .pas-version-group {
     background: var(--pas-surface-2);
     border: 1px solid var(--pas-border);
+    /* 二级用蓝色，明确与一级金色/紫色 边框对比，避免"金色嵌套金色"视觉错觉 */
     border-left: 3px solid rgba(96, 165, 250, 0.55);
     border-radius: var(--pas-radius);
     overflow: hidden;
@@ -861,12 +876,13 @@
 }
 .pas-version-group:hover {
     border-color: var(--pas-border-strong);
-    border-left-color: rgba(96, 165, 250, 0.75);
+    border-left-color: rgba(96, 165, 250, 0.85);
 }
+/* 当前版本：用更亮的蓝色（不再用金色，金色专属一级当前系列） */
 .pas-version-group.pas-version-current {
-    border-left-color: var(--pas-c-pin);
+    border-left-color: rgba(96, 165, 250, 1);
     background: linear-gradient(180deg,
-        rgba(245, 158, 11, 0.07) 0%,
+        rgba(96, 165, 250, 0.08) 0%,
         var(--pas-surface-2) 100%);
 }
 .pas-version-group.pas-version-archived {
