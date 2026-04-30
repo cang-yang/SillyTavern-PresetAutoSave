@@ -14,7 +14,7 @@
 
 import { logger } from './logger.js';
 import {
-    getSettings, updateSetting, resetSettings,
+    getSettings, updateSetting, resetSettings, batchUpdate,
 } from './settings.js';
 import {
     getAllSnapshots, deleteSnapshot, getSnapshotById,
@@ -28,9 +28,17 @@ import {
     confirmSafe, toast, t,
     getCurrentApiId, getSelectedPresetName,
     savePresetSafe, selectPresetSafe,
+    getAllPresetNames,
+    on as onEvent, getEventType,
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
+import {
+    parsePresetName,
+    groupSnapshotsBySeries,
+    groupNamesBySeries,
+    clearParseCache,
+} from './preset-grouping.js';
 
 // =====================================================
 // 状态
@@ -46,7 +54,10 @@ const INITIAL_STATE = Object.freeze({
     filter: 'all',
     search: '',
     snapshots: [],
-    expandedPresets: null,    // Set<string> - 展开的预设 key（"<apiId>::<presetName>"）
+    viewMode: 'series',       // 'series' | 'flat' - List Tab 视图模式
+    expandedSeries: null,     // Set<string> - 展开的系列 key
+    expandedVersions: null,   // Set<string> - 展开的版本 key（"<apiId>::<presetName>"）
+    expandedPresets: null,    // Set<string> - 兼容字段：flat 模式下展开的预设 key
     diffSel: { a: null, b: null },  // 选中用于对比的两个 snapshot id
     log: {
         level: 'all',         // all | debug | info | success | warn | error
@@ -63,6 +74,9 @@ function newState() {
         filter: 'all',
         search: '',
         snapshots: [],
+        viewMode: 'series',
+        expandedSeries: new Set(),
+        expandedVersions: new Set(),
         expandedPresets: new Set(),
         diffSel: { a: null, b: null },
         log: { level: 'all', search: '', autoScroll: true },
@@ -78,6 +92,23 @@ function resetState() {
 // =====================================================
 export async function initHistoryPanel() {
     logger.debug('History panel ready');
+    // 启动导入识别（事件驱动，无轮询）
+    startImportWatcher();
+}
+
+/**
+ * 卸载（onDelete/onDisable 时调用）
+ */
+export function teardownHistoryPanel() {
+    stopImportWatcher();
+    if (_groupingManagerPopup) {
+        try { _groupingManagerPopup.completeCancelled?.(); } catch (_) {}
+        _groupingManagerPopup = null;
+    }
+    if (_firstScanWizardPopup) {
+        try { _firstScanWizardPopup.completeCancelled?.(); } catch (_) {}
+        _firstScanWizardPopup = null;
+    }
 }
 
 // =====================================================
@@ -128,11 +159,16 @@ export async function showHistoryPanel() {
         }
         _popup = null;
         _root = null;
-        // 关闭子弹窗（如查看 JSON）
+        // 关闭可能还开着的子弹窗
         if (_viewPopup) {
             try { _viewPopup.completeCancelled?.(); } catch (_) {}
             _viewPopup = null;
         }
+        if (_groupingManagerPopup) {
+            try { _groupingManagerPopup.completeCancelled?.(); } catch (_) {}
+            _groupingManagerPopup = null;
+        }
+        // 注意：_firstScanWizardPopup 是模块全局，由其自己的 finally 处理，不在此关闭
         resetState();
     }
 }
@@ -157,11 +193,36 @@ function waitForDOM() {
 // =====================================================
 async function loadData() {
     _state.snapshots = await getAllSnapshots();
-    // 默认展开当前预设
+    const settings = getSettings();
+    // 视图模式：从 settings 决定（启用分组 → series，否则 flat）
+    _state.viewMode = settings.groupingEnabled ? 'series' : 'flat';
+
+    // 默认展开当前预设/系列
     const curName = getSelectedPresetName();
     const curApi = getCurrentApiId();
     if (curName && curApi) {
         _state.expandedPresets.add(presetKey(curApi, curName));
+        _state.expandedVersions.add(presetKey(curApi, curName));
+    }
+
+    if (_state.viewMode === 'series' && curName) {
+        const overrides = settings.groupingManualOverrides;
+        const excluded = settings.groupingExcluded;
+        const expandMode = settings.groupingDefaultExpand || 'current';
+        const seriesMap = groupSnapshotsBySeries(_state.snapshots, { overrides, excluded });
+
+        if (expandMode === 'all') {
+            for (const k of seriesMap.keys()) _state.expandedSeries.add(k);
+        } else if (expandMode === 'current') {
+            // 找到当前预设所在系列
+            for (const [k, info] of seriesMap.entries()) {
+                if (info.versions.some(v => v.apiId === curApi && v.presetName === curName)) {
+                    _state.expandedSeries.add(k);
+                    break;
+                }
+            }
+        }
+        // none → 不预展开
     }
 }
 
@@ -251,6 +312,24 @@ function buildPanelHTML() {
                     </span>
                 </div>
                 <div class="pas-list-actions">
+                    <div class="pas-view-toggle" role="group" aria-label="${escapeAttr(t('Grouping View Series'))}">
+                        <button class="pas-view-btn pas-view-btn-series pas-view-btn-active" data-view="series" type="button" title="${escapeAttr(t('Grouping View Series Title'))}">
+                            <i class="fa-solid fa-layer-group"></i>
+                            <span>${escapeHtml(t('Grouping View Series'))}</span>
+                        </button>
+                        <button class="pas-view-btn pas-view-btn-flat" data-view="flat" type="button" title="${escapeAttr(t('Grouping View Flat Title'))}">
+                            <i class="fa-solid fa-list-ul"></i>
+                            <span>${escapeHtml(t('Grouping View Flat'))}</span>
+                        </button>
+                    </div>
+                    <button class="pas-mini-btn pas-btn-manage-grouping" type="button" title="${escapeAttr(t('Grouping Manage Title'))}">
+                        <i class="fa-solid fa-folder-tree"></i>
+                        <span>${escapeHtml(t('Grouping Manage'))}</span>
+                    </button>
+                    <button class="pas-mini-btn pas-btn-rescan-grouping" type="button" title="${escapeAttr(t('Grouping Rescan Title'))}">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span>${escapeHtml(t('Grouping Rescan'))}</span>
+                    </button>
                     <button class="pas-mini-btn pas-btn-expand-all" type="button" title="${escapeAttr(t('Expand All'))}">
                         <i class="fa-solid fa-angles-down"></i>
                         <span>${escapeHtml(t('Expand All'))}</span>
@@ -368,13 +447,64 @@ function bindEvents() {
         });
     });
 
+    // 视图切换（series ↔ flat）
+    $$('.pas-view-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const v = btn.getAttribute('data-view');
+            if (!v || v === _state.viewMode) return;
+            _state.viewMode = v;
+            // 同步到 settings：groupingEnabled
+            updateSetting('groupingEnabled', v === 'series');
+            updateViewToggleUI();
+            renderListTab();
+        });
+    });
+    updateViewToggleUI();
+
+    // 管理分组
+    $('.pas-btn-manage-grouping')?.addEventListener('click', () => {
+        showGroupingManager();
+    });
+
+    // 重新扫描分组（重置 firstScanDone 后再次弹向导）
+    $('.pas-btn-rescan-grouping')?.addEventListener('click', async () => {
+        try {
+            // 清空分组解析缓存（万一用户改了正则等）
+            clearParseCache();
+            // 重置 firstScanDone 让向导能再次弹出
+            updateSetting('groupingFirstScanDone', false);
+            await showGroupingFirstScanWizard();
+            await refreshData();
+        } catch (e) {
+            logger.error('Rescan grouping failed:', e);
+            toast.error(String(e?.message || e));
+        }
+    });
+
     // 展开/收起全部
     $('.pas-btn-expand-all')?.addEventListener('click', () => {
-        const presets = groupSnapshotsByPreset(applyFiltersAndSearch(_state.snapshots));
-        for (const k of Object.keys(presets)) _state.expandedPresets.add(k);
+        const filtered = applyFiltersAndSearch(_state.snapshots);
+        if (_state.viewMode === 'series') {
+            const settings = getSettings();
+            const seriesMap = groupSnapshotsBySeries(filtered, {
+                overrides: settings.groupingManualOverrides,
+                excluded: settings.groupingExcluded,
+            });
+            for (const [seriesKey, info] of seriesMap.entries()) {
+                _state.expandedSeries.add(seriesKey);
+                for (const ver of info.versions) {
+                    _state.expandedVersions.add(presetKey(ver.apiId, ver.presetName));
+                }
+            }
+        } else {
+            const presets = groupSnapshotsByPreset(filtered);
+            for (const k of Object.keys(presets)) _state.expandedPresets.add(k);
+        }
         renderListTab();
     });
     $('.pas-btn-collapse-all')?.addEventListener('click', () => {
+        _state.expandedSeries.clear();
+        _state.expandedVersions.clear();
         _state.expandedPresets.clear();
         renderListTab();
     });
@@ -465,36 +595,71 @@ function renderActiveTab() {
 }
 
 // =====================================================
-// 列表 Tab 渲染（按预设分组）
+// 列表 Tab 渲染（series 三级 / flat 两级）
 // =====================================================
 function renderListTab() {
     const list = _root?.querySelector('.pas-snapshot-list');
     if (!list) return;
 
     const filtered = applyFiltersAndSearch(_state.snapshots);
-
     if (filtered.length === 0) {
         list.innerHTML = renderEmptyState();
         updateBadge(0);
         return;
     }
 
-    // 按预设分组
+    if (_state.viewMode === 'series') {
+        list.innerHTML = renderSeriesView(filtered);
+    } else {
+        list.innerHTML = renderFlatView(filtered);
+    }
+    updateBadge(filtered.length);
+}
+
+/**
+ * 视图切换按钮的 active 同步
+ */
+function updateViewToggleUI() {
+    if (!_root) return;
+    _root.querySelectorAll('.pas-view-btn').forEach(b => {
+        b.classList.toggle('pas-view-btn-active', b.getAttribute('data-view') === _state.viewMode);
+    });
+    // 系列视图下显示"管理分组"按钮，flat 隐藏
+    const manageBtn = _root.querySelector('.pas-btn-manage-grouping');
+    if (manageBtn) {
+        manageBtn.style.display = (_state.viewMode === 'series') ? '' : 'none';
+    }
+}
+
+/**
+ * 系列三级视图：系列 → 版本 → 快照
+ */
+function renderSeriesView(filtered) {
+    const settings = getSettings();
+    const seriesMap = groupSnapshotsBySeries(filtered, {
+        overrides: settings.groupingManualOverrides,
+        excluded: settings.groupingExcluded,
+    });
+
+    // 没有任何系列分组（全部都被 excluded）→ 兜底渲染 flat
+    if (seriesMap.size === 0) return renderFlatView(filtered);
+
+    // 系列按"最新时间"倒序
+    const seriesList = Array.from(seriesMap.values()).sort((a, b) => b.latestTime - a.latestTime);
+    return seriesList.map(renderSeriesGroup).join('');
+}
+
+/**
+ * 扁平视图：保留旧的"按预设分组"行为（兼容、调试用）
+ */
+function renderFlatView(filtered) {
     const grouped = groupSnapshotsByPreset(filtered);
     const presetKeys = Object.keys(grouped).sort((a, b) => {
-        // 按各预设最新时间倒序排
         const at = grouped[a][0]?.timestamp || 0;
         const bt = grouped[b][0]?.timestamp || 0;
         return bt - at;
     });
-
-    let html = '';
-    for (const key of presetKeys) {
-        html += renderPresetGroup(key, grouped[key]);
-    }
-
-    list.innerHTML = html;
-    updateBadge(filtered.length);
+    return presetKeys.map(k => renderPresetGroup(k, grouped[k])).join('');
 }
 
 function presetKey(apiId, presetName) {
@@ -559,13 +724,139 @@ function renderPresetGroup(key, snapshots) {
 </div>`;
 }
 
+/**
+ * 系列卡（一级）
+ *   - 标题左侧：箭头 + 图标 + 系列名 + 版本数
+ *   - 标题右侧：快照总数 / 总大小 / 最新时间
+ *   - 展开后渲染版本列表
+ */
+function renderSeriesGroup(info) {
+    const seriesKey = info.series;
+    const isExpanded = _state.expandedSeries.has(seriesKey);
+    const safeKey = escapeAttr(seriesKey);
+    const currentName = getSelectedPresetName();
+    const currentApi = getCurrentApiId();
+    const isCurrent = info.versions.some(v => v.apiId === currentApi && v.presetName === currentName);
+
+    return `
+<div class="pas-series-group ${isCurrent ? 'pas-series-current' : ''}" data-series-key="${safeKey}">
+    <div class="pas-series-header" data-action="toggle-series">
+        <div class="pas-series-header-main">
+            <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
+            <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"></i>
+            <span class="pas-series-name" title="${escapeAttr(seriesKey)}">${escapeHtml(seriesKey)}</span>
+            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
+        </div>
+        <div class="pas-series-header-meta">
+            <span class="pas-series-versions" title="${escapeAttr(t('Grouping Series Header Versions', { count: info.versionCount }))}">
+                <i class="fa-solid fa-code-branch"></i> ${info.versionCount}
+            </span>
+            <span class="pas-divider">·</span>
+            <span class="pas-series-snapshots" title="${escapeAttr(t('Grouping Series Header Snapshots', { count: info.snapshotCount }))}">
+                <i class="fa-solid fa-camera"></i> ${info.snapshotCount}
+            </span>
+            <span class="pas-divider">·</span>
+            <span class="pas-series-size">${formatBytes(info.totalSize)}</span>
+            <span class="pas-divider">·</span>
+            <span class="pas-series-latest">${formatTime(info.latestTime)}</span>
+        </div>
+    </div>
+    ${isExpanded ? `
+    <div class="pas-series-body">
+        ${info.versions.map(v => renderVersionGroup(v, seriesKey)).join('')}
+    </div>` : ''}
+</div>`;
+}
+
+/**
+ * 版本卡（二级）：每个 (apiId+presetName) 对应一个版本
+ */
+function renderVersionGroup(ver, seriesKey) {
+    const versionKey = presetKey(ver.apiId, ver.presetName);
+    const isExpanded = _state.expandedVersions.has(versionKey);
+    const safeKey = escapeAttr(versionKey);
+    const safeSeries = escapeAttr(seriesKey);
+    const currentName = getSelectedPresetName();
+    const currentApi = getCurrentApiId();
+    const isCurrent = (ver.presetName === currentName && ver.apiId === currentApi);
+
+    const versionLabel = ver.version
+        ? escapeHtml(ver.version)
+        : `<span class="pas-version-untitled">${escapeHtml(t('Grouping Untitled Version'))}</span>`;
+    const dupHtml = ver.duplicate
+        ? `<span class="pas-version-duplicate" title="${escapeAttr(ver.duplicate)}">${escapeHtml(ver.duplicate)}</span>`
+        : '';
+    const manualHtml = ver.manualOverride
+        ? `<span class="pas-tag pas-tag-manual-override" title="${escapeAttr(t('Grouping Manual Tag Title'))}">${escapeHtml(t('Grouping Manual Tag'))}</span>`
+        : '';
+
+    return `
+<div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}">
+    <div class="pas-version-header" data-action="toggle-version">
+        <div class="pas-version-header-main">
+            <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-version-chevron"></i>
+            <i class="fa-solid fa-code-branch pas-version-icon"></i>
+            <span class="pas-version-label">${versionLabel}</span>
+            ${dupHtml}
+            <span class="pas-version-rawname" title="${escapeAttr(ver.presetName)}">${escapeHtml(ver.presetName)}</span>
+            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
+            ${manualHtml}
+            <span class="pas-version-api">${escapeHtml(ver.apiId)}</span>
+        </div>
+        <div class="pas-version-header-meta">
+            <span class="pas-version-count">${ver.snapshotCount}</span>
+            <span class="pas-divider">·</span>
+            <span class="pas-version-size">${formatBytes(ver.totalSize)}</span>
+            <span class="pas-divider">·</span>
+            <span class="pas-version-latest">${formatTime(ver.latestTime)}</span>
+            <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </div>
+    </div>
+    ${isExpanded ? `
+    <div class="pas-version-body">
+        ${ver.snapshots.map(renderCard).join('')}
+    </div>` : ''}
+</div>`;
+}
+
 function applyFiltersAndSearch(snapshots) {
     let result = [...snapshots];
 
     if (_state.filter === 'current') {
         const name = getSelectedPresetName();
         const api = getCurrentApiId();
-        result = result.filter(s => s.presetName === name && s.apiId === api);
+        // series 视图下的"当前预设"= 当前预设所在的整个"系列"
+        // flat 视图下保持原行为：精确到 (apiId, presetName)
+        if (_state.viewMode === 'series' && name) {
+            const settings = getSettings();
+            const overrides = settings.groupingManualOverrides;
+            const excluded = settings.groupingExcluded;
+            const curInfo = (() => {
+                try {
+                    return parsePresetName(name);
+                } catch (_) { return { series: name }; }
+            })();
+            // 应用手动覆盖到当前预设
+            let curSeries = curInfo.series || name;
+            if (overrides && Object.hasOwn(overrides, name) && overrides[name]) {
+                curSeries = overrides[name];
+            }
+            result = result.filter(s => {
+                if (s.apiId !== api) return false;
+                const ovr = (overrides && overrides[s.presetName]) || null;
+                if (ovr) return ovr === curSeries;
+                try {
+                    const parsed = parsePresetName(s.presetName || '');
+                    return (parsed.series || s.presetName) === curSeries;
+                } catch (_) {
+                    return s.presetName === name;
+                }
+            });
+        } else {
+            result = result.filter(s => s.presetName === name && s.apiId === api);
+        }
     } else if (_state.filter === 'pinned') {
         result = result.filter(s => !!s.pinned);
     } else if (_state.filter === 'today') {
@@ -578,9 +869,14 @@ function applyFiltersAndSearch(snapshots) {
 
     if (_state.search) {
         const q = _state.search.toLowerCase();
+        // 用解析后的"系列名"参与搜索：用户输入"梦境"也应能命中所有梦境思客版本
         result = result.filter(s => {
             if ((s.presetName || '').toLowerCase().includes(q)) return true;
             if ((s.name || '').toLowerCase().includes(q)) return true;
+            try {
+                const parsed = parsePresetName(s.presetName || '');
+                if ((parsed.series || '').toLowerCase().includes(q)) return true;
+            } catch (_) {}
             return false;
         });
     }
@@ -1064,10 +1360,12 @@ function renderEmptyState() {
 // 卡片操作 / 分组操作
 // =====================================================
 async function handleListClick(e) {
-    // 1) 折叠头点击 -> 切换展开
-    const header = e.target.closest('.pas-preset-header');
     const clearBtn = e.target.closest('.pas-btn-clear-preset');
+    const seriesHeader = e.target.closest('.pas-series-header');
+    const versionHeader = e.target.closest('.pas-version-header');
+    const presetHeader = e.target.closest('.pas-preset-header');
 
+    // 1) 清除某预设/版本的全部历史按钮
     if (clearBtn) {
         e.preventDefault();
         e.stopPropagation();
@@ -1076,8 +1374,31 @@ async function handleListClick(e) {
         return;
     }
 
-    if (header) {
-        const group = header.closest('.pas-preset-group');
+    // 2) 系列折叠（series 模式）
+    if (seriesHeader) {
+        const group = seriesHeader.closest('.pas-series-group');
+        const key = group?.getAttribute('data-series-key');
+        if (!key) return;
+        if (_state.expandedSeries.has(key)) _state.expandedSeries.delete(key);
+        else _state.expandedSeries.add(key);
+        renderListTab();
+        return;
+    }
+
+    // 3) 版本折叠（series 模式下的二级）
+    if (versionHeader) {
+        const group = versionHeader.closest('.pas-version-group');
+        const key = group?.getAttribute('data-version-key');
+        if (!key) return;
+        if (_state.expandedVersions.has(key)) _state.expandedVersions.delete(key);
+        else _state.expandedVersions.add(key);
+        renderListTab();
+        return;
+    }
+
+    // 4) 预设折叠（flat 模式下的旧逻辑）
+    if (presetHeader) {
+        const group = presetHeader.closest('.pas-preset-group');
         const key = group?.getAttribute('data-preset-key');
         if (!key) return;
         if (_state.expandedPresets.has(key)) _state.expandedPresets.delete(key);
@@ -1086,7 +1407,7 @@ async function handleListClick(e) {
         return;
     }
 
-    // 2) 卡片操作按钮（按 data-action 分发）
+    // 5) 卡片操作按钮（按 data-action 分发）
     const btn = e.target.closest('.pas-btn-action');
     if (!btn) return;
     e.preventDefault();
@@ -1375,6 +1696,414 @@ async function onClearPreset(key) {
 }
 
 // =====================================================
+// 分组管理弹窗（手动覆盖 + 排除）
+// =====================================================
+let _groupingManagerPopup = null;
+
+/**
+ * 打开"管理分组"弹窗：列出所有出现过的预设名，
+ * 让用户手动指定每个预设属于哪个系列（或标记为"不分组"）。
+ *
+ * 数据来源：
+ *   1. 当前所有快照的 (apiId, presetName)
+ *   2. SillyTavern 当前已加载的预设名（getAllPresetNames）
+ */
+async function showGroupingManager() {
+    if (_groupingManagerPopup) return;
+
+    // 收集所有候选名（快照中出现过 + 当前预设管理器列表）
+    const fromSnapshots = new Set(_state.snapshots.map(s => s.presetName).filter(Boolean));
+    const allNames = new Set(fromSnapshots);
+    try {
+        const names = getAllPresetNames();
+        if (Array.isArray(names)) for (const n of names) if (n) allNames.add(n);
+    } catch (_) { /* 忽略：getAllPresetNames 可能在切换 API 期间失败 */ }
+
+    if (allNames.size === 0) {
+        toast.info(t('Grouping Empty Series'));
+        return;
+    }
+
+    const settings = getSettings();
+    const overrides = { ...(settings.groupingManualOverrides || {}) };
+    const excluded = { ...(settings.groupingExcluded || {}) };
+
+    // 按"自动识别系列"分组列表，方便用户快速调整
+    const sortedNames = Array.from(allNames).sort((a, b) => a.localeCompare(b));
+    const grouped = groupNamesBySeries(sortedNames, overrides, excluded);
+
+    const ctx = SillyTavern.getContext();
+    const html = buildGroupingManagerHTML(grouped, sortedNames, overrides, excluded);
+
+    _groupingManagerPopup = new ctx.Popup(html, ctx.POPUP_TYPE.DISPLAY, '', {
+        wide: true,
+        large: true,
+        allowVerticalScrolling: true,
+        okButton: t('Grouping Manage Save'),
+        cancelButton: t('Cancel'),
+    });
+
+    const promise = _groupingManagerPopup.show();
+    setTimeout(() => bindGroupingManagerEvents(), 50);
+
+    const result = await promise;
+    _groupingManagerPopup = null;
+
+    if (result) {
+        // 用户点了"保存"
+        const root = document.querySelector('.pas-grouping-manager');
+        if (!root) return;
+        const newOverrides = {};
+        const newExcluded = {};
+        root.querySelectorAll('.pas-grouping-row').forEach(row => {
+            const presetName = row.getAttribute('data-preset-name');
+            if (!presetName) return;
+            const ex = row.querySelector('.pas-grouping-exclude');
+            if (ex && ex.checked) {
+                newExcluded[presetName] = true;
+                return;
+            }
+            const input = row.querySelector('.pas-grouping-series-input');
+            const val = (input?.value || '').trim();
+            if (val) newOverrides[presetName] = val;
+        });
+        batchUpdate({
+            groupingManualOverrides: newOverrides,
+            groupingExcluded: newExcluded,
+        });
+        toast.success(t('Grouping Manage Saved'));
+        await refreshData();
+    }
+}
+
+function buildGroupingManagerHTML(grouped, allNames, overrides, excluded) {
+    const rowsHtml = allNames.map(name => {
+        const parsed = parsePresetName(name);
+        const autoSeries = parsed.series;
+        const overrideVal = overrides[name] || '';
+        const isExcluded = !!excluded[name];
+        const safeName = escapeAttr(name);
+        const seriesValue = overrideVal;
+        return `
+<div class="pas-grouping-row" data-preset-name="${safeName}">
+    <div class="pas-grouping-row-name">
+        <span class="pas-grouping-original" title="${safeName}">${escapeHtml(name)}</span>
+        ${parsed.version ? `<span class="pas-grouping-version">${escapeHtml(parsed.version)}</span>` : ''}
+    </div>
+    <div class="pas-grouping-row-auto" title="${escapeAttr(t('Grouping Manage Auto'))}">
+        <i class="fa-solid fa-wand-magic-sparkles"></i>
+        <span>${escapeHtml(autoSeries)}</span>
+    </div>
+    <div class="pas-grouping-row-input">
+        <input type="text" class="pas-grouping-series-input text_pole"
+            value="${escapeAttr(seriesValue)}"
+            placeholder="${escapeAttr(t('Grouping Manage Manual Placeholder'))}"
+            ${isExcluded ? 'disabled' : ''} />
+    </div>
+    <label class="pas-grouping-row-exclude">
+        <input type="checkbox" class="pas-grouping-exclude" ${isExcluded ? 'checked' : ''}>
+        <span>${escapeHtml(t('Grouping Manage Excluded Label'))}</span>
+    </label>
+</div>`;
+    }).join('');
+
+    return `
+<div class="pas-grouping-manager">
+    <h3 style="margin: 0 0 6px 0;">
+        <i class="fa-solid fa-folder-tree"></i> ${escapeHtml(t('Grouping Manage Title Full'))}
+    </h3>
+    <div class="pas-grouping-hint">${escapeHtml(t('Grouping Manage Hint'))}</div>
+    <div class="pas-grouping-list">${rowsHtml}</div>
+</div>`;
+}
+
+function bindGroupingManagerEvents() {
+    const root = document.querySelector('.pas-grouping-manager');
+    if (!root) return;
+    // 勾选"不分组"时禁用 input
+    root.querySelectorAll('.pas-grouping-row').forEach(row => {
+        const ex = row.querySelector('.pas-grouping-exclude');
+        const input = row.querySelector('.pas-grouping-series-input');
+        if (!ex || !input) return;
+        ex.addEventListener('change', () => {
+            input.disabled = ex.checked;
+            if (ex.checked) input.value = '';
+        });
+    });
+}
+
+// =====================================================
+// 首次扫描向导
+// =====================================================
+let _firstScanWizardPopup = null;
+
+/**
+ * 弹出"首次整理预设分组"向导
+ * 调用方：当扩展加载，且 settings.groupingFirstScanDone === false 且 enabled === true 时
+ */
+export async function showGroupingFirstScanWizard(opts = {}) {
+    if (_firstScanWizardPopup) return;
+    const ctx = (() => {
+        try { return SillyTavern.getContext(); } catch (_) { return null; }
+    })();
+    if (!ctx) return;
+
+    let names = [];
+    try {
+        const list = getAllPresetNames();
+        if (Array.isArray(list)) names = list.filter(Boolean);
+    } catch (_) {}
+
+    if (names.length < 2) {
+        // 不足以分组：直接标记完成不再打扰
+        updateSetting('groupingFirstScanDone', true);
+        return;
+    }
+
+    const groups = groupNamesBySeries(names);
+    // 只显示"含 ≥2 个版本"的系列作为预览（说明确实有重复）
+    const significantGroups = groups.filter(g => g.items.length >= 2);
+    const previewHtml = significantGroups.slice(0, 12).map(g => `
+<div class="pas-firstscan-group">
+    <div class="pas-firstscan-group-name">
+        <i class="fa-solid fa-folder"></i>
+        <strong>${escapeHtml(g.series)}</strong>
+        <span class="pas-firstscan-group-count">×${g.items.length}</span>
+    </div>
+    <div class="pas-firstscan-group-items">
+        ${g.items.map(it => `<span class="pas-firstscan-item">${escapeHtml(it.presetName)}${it.version ? ` <em>(${escapeHtml(it.version)})</em>` : ''}</span>`).join('')}
+    </div>
+</div>`).join('');
+
+    const moreCount = significantGroups.length > 12 ? significantGroups.length - 12 : 0;
+
+    const html = `
+<div class="pas-firstscan">
+    <h3 style="margin: 0 0 8px 0;">
+        <i class="fa-solid fa-wand-magic-sparkles"></i> ${escapeHtml(t('Grouping First Scan Title'))}
+    </h3>
+    <p class="pas-firstscan-hint">${escapeHtml(t('Grouping First Scan Hint', { count: names.length }))}</p>
+    <div class="pas-firstscan-summary">
+        ${escapeHtml(t('Grouping First Scan Sample', { series: groups.length }))}
+    </div>
+    <div class="pas-firstscan-preview">
+        ${previewHtml || `<p style="opacity: 0.6;">${escapeHtml(t('Grouping Empty Series'))}</p>`}
+        ${moreCount > 0 ? `<div class="pas-firstscan-more">+${moreCount}</div>` : ''}
+    </div>
+</div>`;
+
+    _firstScanWizardPopup = new ctx.Popup(html, ctx.POPUP_TYPE.CONFIRM, '', {
+        okButton: t('Grouping First Scan Confirm'),
+        cancelButton: t('Grouping First Scan Skip'),
+    });
+
+    let result = false;
+    try {
+        result = await _firstScanWizardPopup.show();
+    } finally {
+        _firstScanWizardPopup = null;
+    }
+
+    if (result) {
+        // 用户确认：开启分组并标记完成
+        batchUpdate({
+            groupingEnabled: true,
+            groupingFirstScanDone: true,
+        });
+        toast.success(t('Grouping First Scan Done', {
+            series: groups.length,
+            versions: names.length,
+        }));
+    } else {
+        // 用户跳过：仍然标记完成（不要每次启动都打扰）
+        updateSetting('groupingFirstScanDone', true);
+    }
+}
+
+// =====================================================
+// 导入识别：监听预设列表变化
+// =====================================================
+/**
+ * 启动"导入识别"机制：
+ *   - 第一次启动时记录当前预设名快照（基线）
+ *   - 监听 SETTINGS_UPDATED / OAI_PRESET_CHANGED_AFTER 事件，
+ *     在事件触发后做一次轻量 diff（事件驱动，无轮询）
+ *   - 发现新增预设时弹出"建议归属"提示
+ *
+ * 设计要点：
+ *   - 完全事件驱动，无 setInterval —— 与 P10 优化一致
+ *   - 仅在 settings.groupingEnabled && settings.groupingPromptOnImport 时弹窗
+ *   - 弹窗串行（_importPromptInflight 防并发）
+ *   - 如果用户为该预设手动设置过归属（出现在 overrides/excluded），不再提示
+ *   - 检查节流：最快每 1500ms 处理一次事件
+ */
+let _importWatchPrev = null;          // Set<string> 上次已知的预设名
+let _importPromptInflight = false;    // 防多次弹窗叠加
+let _importWatchUnsubs = [];          // 事件取消订阅函数
+let _importWatchThrottleTs = 0;
+let _importWatchThrottleTimer = null;
+const IMPORT_WATCH_THROTTLE_MS = 1500;
+
+function startImportWatcher() {
+    stopImportWatcher();
+    // 首次记录基线（不弹窗）
+    _importWatchPrev = collectKnownPresetNames();
+
+    try {
+        const events = [
+            getEventType('SETTINGS_UPDATED', 'settings_updated'),
+            getEventType('OAI_PRESET_CHANGED_AFTER', 'oai_preset_changed_after'),
+            getEventType('PRESET_CHANGED', 'preset_changed'),
+        ];
+        for (const ev of events) {
+            const off = onEvent(ev, scheduleImportWatchTick);
+            _importWatchUnsubs.push(off);
+        }
+        logger.debug('Import watcher armed');
+    } catch (e) {
+        logger.warn('Import watcher failed to start:', e);
+    }
+}
+
+function stopImportWatcher() {
+    for (const off of _importWatchUnsubs) {
+        try { off(); } catch (_) {}
+    }
+    _importWatchUnsubs.length = 0;
+    if (_importWatchThrottleTimer) {
+        clearTimeout(_importWatchThrottleTimer);
+        _importWatchThrottleTimer = null;
+    }
+}
+
+/**
+ * 节流：事件触发后，最多 1500ms 后跑一次 importWatchTick
+ */
+function scheduleImportWatchTick() {
+    const now = Date.now();
+    if (now - _importWatchThrottleTs < IMPORT_WATCH_THROTTLE_MS) {
+        if (_importWatchThrottleTimer) return;
+        _importWatchThrottleTimer = setTimeout(() => {
+            _importWatchThrottleTimer = null;
+            _importWatchThrottleTs = Date.now();
+            importWatchTick().catch(e => logger.warn('import-watch tick failed:', e));
+        }, IMPORT_WATCH_THROTTLE_MS - (now - _importWatchThrottleTs));
+        return;
+    }
+    _importWatchThrottleTs = now;
+    importWatchTick().catch(e => logger.warn('import-watch tick failed:', e));
+}
+
+/**
+ * 收集"已知预设名"：getAllPresetNames() 的结果
+ */
+function collectKnownPresetNames() {
+    const set = new Set();
+    try {
+        const arr = getAllPresetNames();
+        if (Array.isArray(arr)) for (const n of arr) if (n) set.add(n);
+    } catch (_) {}
+    return set;
+}
+
+async function importWatchTick() {
+    const settings = getSettings();
+    if (!settings.groupingEnabled || !settings.groupingPromptOnImport) return;
+    if (_importPromptInflight) return;
+
+    const cur = collectKnownPresetNames();
+    if (!_importWatchPrev || _importWatchPrev.size === 0) {
+        _importWatchPrev = cur;
+        return;
+    }
+
+    // 找出新增预设名
+    const added = [];
+    for (const n of cur) if (!_importWatchPrev.has(n)) added.push(n);
+
+    // 同步基线
+    _importWatchPrev = cur;
+    if (added.length === 0) return;
+
+    // 已被用户标记的不再提示
+    const overrides = settings.groupingManualOverrides || {};
+    const excluded = settings.groupingExcluded || {};
+    const candidates = added.filter(n =>
+        !Object.hasOwn(overrides, n) &&
+        !Object.hasOwn(excluded, n)
+    );
+    if (candidates.length === 0) return;
+
+    // 收集现有系列（不含 added 自己）
+    const existingNames = Array.from(cur).filter(n => !candidates.includes(n));
+    const existingGroups = groupNamesBySeries(existingNames, overrides, excluded);
+    const existingSeries = existingGroups.map(g => g.series);
+
+    // 一次只处理一个，避免连环弹窗
+    for (const newName of candidates) {
+        const ok = await maybePromptForImportAssignment(newName, existingSeries);
+        if (!ok) break; // 用户取消则停止
+    }
+}
+
+/**
+ * 弹窗：建议把新预设归到某系列
+ * @returns {Promise<boolean>} 是否继续处理后续候选
+ */
+async function maybePromptForImportAssignment(newName, existingSeries) {
+    const parsed = parsePresetName(newName);
+    const candidate = parsed.series;
+
+    // 自动识别后系列名 == 原名（无版本）→ 没有歧义，新建系列即可，不打扰
+    if (!parsed.version && existingSeries.includes(candidate) === false) {
+        return true;
+    }
+
+    // 自动归到现有系列时，弹窗确认（用户最常见的诉求）
+    let suggested = '';
+    if (existingSeries.includes(candidate)) {
+        suggested = candidate;
+    } else {
+        // 大小写不敏感匹配
+        const lower = candidate.toLowerCase();
+        const hit = existingSeries.find(s => s.toLowerCase() === lower);
+        if (hit) suggested = hit;
+    }
+
+    // 没有匹配的现有系列 → 新建系列，不打扰
+    if (!suggested) return true;
+
+    _importPromptInflight = true;
+    try {
+        const ctx = SillyTavern.getContext();
+        const ok = await confirmSafe(
+            t('Grouping Import Detected Title'),
+            `<div>${t('Grouping Import Detected Hint', {
+                name: `<b>${escapeHtml(newName)}</b>`,
+                series: `<b>${escapeHtml(suggested)}</b>`,
+            })}</div>
+            <div style="margin-top: 6px; font-size: 0.86em; opacity: 0.7;">
+              ${escapeHtml(t('Grouping Manage Auto'))}: ${escapeHtml(parsed.series)}
+              ${parsed.version ? ` · ${escapeHtml(parsed.version)}` : ''}
+            </div>`
+        );
+        if (ok) {
+            // 写入手动覆盖：精确归到 suggested
+            const newOverrides = { ...(getSettings().groupingManualOverrides || {}) };
+            newOverrides[newName] = suggested;
+            updateSetting('groupingManualOverrides', newOverrides);
+            toast.success(t('Grouping Override Set', { name: newName, series: suggested }));
+        }
+        return true;
+    } catch (e) {
+        logger.warn('Import prompt failed:', e);
+        return false;
+    } finally {
+        _importPromptInflight = false;
+    }
+}
+
+// =====================================================
 // 日志 Tab 渲染
 // =====================================================
 function renderLogTab() {
@@ -1501,6 +2230,16 @@ function renderSettingsTab() {
         toggle('notifyOnSave', t('Notify On Save'), t('Notify On Save Desc'), s.notifyOnSave),
     ])}
 
+    ${group(t('Grouping Group'), [
+        toggle('groupingEnabled', t('Grouping Enabled'), t('Grouping Enabled Desc'), s.groupingEnabled),
+        toggle('groupingPromptOnImport', t('Grouping Prompt On Import'), t('Grouping Prompt On Import Desc'), s.groupingPromptOnImport),
+        select('groupingDefaultExpand', t('Grouping Default Expand'), t('Grouping Default Expand Desc'), s.groupingDefaultExpand, [
+            { value: 'current', label: t('Grouping Default Expand Current') },
+            { value: 'all',     label: t('Grouping Default Expand All') },
+            { value: 'none',    label: t('Grouping Default Expand None') },
+        ]),
+    ])}
+
     ${group(t('Advanced Group'), [
         toggle('debugMode', t('Debug Mode'), t('Debug Mode Desc'), s.debugMode),
         toggle('fallbackPolling', t('Fallback Polling'), t('Fallback Polling Desc'), s.fallbackPolling),
@@ -1557,6 +2296,24 @@ function number(key, label, desc, value, min, max, step, unit = '') {
 </div>`;
 }
 
+function select(key, label, desc, value, options) {
+    const optsHtml = (options || []).map(o => `
+        <option value="${escapeAttr(o.value)}" ${o.value === value ? 'selected' : ''}>${escapeHtml(o.label)}</option>
+    `).join('');
+    return `
+<div class="pas-setting-item">
+    <div class="pas-setting-info">
+        <div class="pas-setting-label">${escapeHtml(label)}</div>
+        <div class="pas-setting-desc">${escapeHtml(desc)}</div>
+    </div>
+    <div class="pas-setting-input">
+        <select class="text_pole pas-select-input" data-setting="${escapeAttr(key)}" data-setting-type="select">
+            ${optsHtml}
+        </select>
+    </div>
+</div>`;
+}
+
 function bindSettingsEvents(container) {
     // 复选框
     container.querySelectorAll('input[type="checkbox"][data-setting]').forEach(input => {
@@ -1585,6 +2342,13 @@ function bindSettingsEvents(container) {
                 updateSetting(key, val);
                 input.value = String(getSettings()[key]);
             }
+        });
+    });
+
+    // 下拉
+    container.querySelectorAll('select[data-setting]').forEach(sel => {
+        sel.addEventListener('change', () => {
+            updateSetting(sel.getAttribute('data-setting'), sel.value);
         });
     });
 

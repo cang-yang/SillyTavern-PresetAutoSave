@@ -38,6 +38,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
     showStatusIndicator: true,      // 显示状态指示器（小圆点）
     notifyOnSave: false,            // 每次保存显示Toast
 
+    // 预设分组（系列识别）
+    groupingEnabled: true,          // 是否启用预设系列分组（三级面板）
+    groupingFirstScanDone: false,   // 首次扫描向导是否已完成
+    groupingPromptOnImport: true,   // 检测到新预设导入时是否提示归属确认
+    groupingManualOverrides: {},    // { [presetName]: seriesName } 用户手动覆盖
+    groupingExcluded: {},           // { [presetName]: true } 用户标记为"不分组"
+    groupingDefaultExpand: 'current', // 'current' | 'all' | 'none' 系列默认展开策略
+
     // 高级
     debugMode: false,               // 启用详细日志
     fallbackPolling: false,         // 兜底轮询（默认关闭，仅当事件触发不可靠时启用）
@@ -58,9 +66,41 @@ const VALIDATORS = {
     enableSwitchGuard: (v) => Boolean(v),
     showStatusIndicator: (v) => Boolean(v),
     notifyOnSave: (v) => Boolean(v),
+    groupingEnabled: (v) => Boolean(v),
+    groupingFirstScanDone: (v) => Boolean(v),
+    groupingPromptOnImport: (v) => Boolean(v),
+    groupingManualOverrides: (v) => sanitizeStringMap(v),
+    groupingExcluded: (v) => sanitizeBoolMap(v),
+    groupingDefaultExpand: (v) => (v === 'all' || v === 'none' || v === 'current') ? v : 'current',
     debugMode: (v) => Boolean(v),
     fallbackPolling: (v) => Boolean(v),
 };
+
+/**
+ * 仅保留"非空字符串 → 非空字符串"的键值对
+ * （防御 extensionSettings 被外部脏数据污染）
+ */
+function sanitizeStringMap(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+    const out = {};
+    for (const [k, val] of Object.entries(v)) {
+        if (typeof k !== 'string' || !k) continue;
+        if (typeof val !== 'string' || !val) continue;
+        if (k.length > 200 || val.length > 200) continue;  // 防御过长
+        out[k] = val;
+    }
+    return out;
+}
+
+function sanitizeBoolMap(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+    const out = {};
+    for (const [k, val] of Object.entries(v)) {
+        if (typeof k !== 'string' || !k || k.length > 200) continue;
+        if (val) out[k] = true;
+    }
+    return out;
+}
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -106,7 +146,11 @@ export async function initSettings() {
         let migrated = false;
         for (const key of Object.keys(DEFAULT_SETTINGS)) {
             if (!Object.hasOwn(allSettings[MODULE_NAME], key)) {
-                allSettings[MODULE_NAME][key] = DEFAULT_SETTINGS[key];
+                const dv = DEFAULT_SETTINGS[key];
+                // 对象/数组要深拷贝，避免所有用户共享同一个引用
+                allSettings[MODULE_NAME][key] = (dv && typeof dv === 'object')
+                    ? structuredClone(dv)
+                    : dv;
                 migrated = true;
             }
         }

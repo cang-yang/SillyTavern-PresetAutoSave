@@ -12,7 +12,14 @@ import { initSettings } from './modules/settings.js';
 import { initHistoryStore } from './modules/history-store.js';
 import { initAutoSave, teardown as teardownAutoSave } from './modules/auto-save.js';
 import { initUIInjector, teardown as teardownUI } from './modules/ui-injector.js';
-import { initHistoryPanel, showHistoryPanel } from './modules/history-panel.js';
+import {
+    initHistoryPanel,
+    showHistoryPanel,
+    showGroupingFirstScanWizard,
+    teardownHistoryPanel,
+} from './modules/history-panel.js';
+import { getSettings } from './modules/settings.js';
+import { runGroupingSelfTest } from './modules/preset-grouping.js';
 
 const VERSION = '1.0.0';
 
@@ -38,6 +45,7 @@ export async function onDelete() {
     try {
         teardownAutoSave();
         teardownUI();
+        teardownHistoryPanel();
         offAll();
     } catch (e) {
         logger.error('onDelete cleanup error:', e);
@@ -53,6 +61,7 @@ export function onDisable() {
     try {
         teardownAutoSave();
         teardownUI();
+        teardownHistoryPanel();
         offAll();
     } catch (e) {
         logger.error('onDisable cleanup error:', e);
@@ -100,6 +109,28 @@ export function onDisable() {
             await initAutoSave();
             logger.success('All systems operational ✓');
             logger.info(`Tracking [${ENV.stVersion}] - 历史按钮已就位`);
+
+            // 调试模式下运行分组算法自检
+            try {
+                if (getSettings().debugMode) {
+                    runGroupingSelfTest(false);
+                }
+            } catch (_) { /* 忽略 */ }
+
+            // 首次扫描向导：仅在未完成 + 启用分组 时延迟弹出
+            try {
+                const s = getSettings();
+                if (s.groupingEnabled && !s.groupingFirstScanDone) {
+                    // 延迟 4 秒，避免和其他 toast/弹窗争抢
+                    setTimeout(() => {
+                        showGroupingFirstScanWizard().catch(e =>
+                            logger.warn('Grouping first-scan wizard failed:', e)
+                        );
+                    }, 4000);
+                }
+            } catch (e) {
+                logger.warn('Schedule grouping wizard failed:', e);
+            }
         } catch (e) {
             logger.error('APP_READY phase error:', e);
         }
