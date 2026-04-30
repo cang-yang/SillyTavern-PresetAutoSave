@@ -53,6 +53,21 @@ export const ENV = {
 // =====================================================
 const _registeredListeners = []; // { eventName, handler } - 便于卸载
 let _lastSnapshotPath = null;    // 上一次 getPresetSnapshot 走的路径，用于日志降噪
+let _presetDataResolver = null;  // 外部注册的预设数据解析器（接管模块用于查找 detached 预设）
+
+/**
+ * 注册外部的预设数据解析器
+ * 接管模块在初始化时注册此回调，使 getPresetSnapshot 能从 detached options 获取预设数据。
+ *
+ * ⚡ 背景：DOM 接管后 pm.findPreset(name) 搜索 <select>.options，
+ *   但被 detach 的 option 已不在 select 中 → findPreset 返回 undefined。
+ *   接管模块保留了 detached option 的引用，能通过 option.value 反查原始数组索引。
+ *
+ * @param {function(string, string): object|null} fn (apiId, presetName) => presetData
+ */
+export function registerPresetDataResolver(fn) {
+    _presetDataResolver = typeof fn === 'function' ? fn : null;
+}
 
 // =====================================================
 // 初始化探测
@@ -247,11 +262,41 @@ export function getCurrentApiId() {
 
 /**
  * 获取当前选中的预设名
+ *
+ * ⚡ B26 修复：DOM 接管后 representative option 的 textContent 被改为系列名，
+ *   ST 的 pm.getSelectedPresetName() 读取 textContent → 返回系列名（如"梦境思客"）。
+ *   我们需要检查 ORIGINAL_TEXT_DATA_ATTR 取回真实预设名（如"梦境思客V2-0429"）。
+ *   否则 auto-save 会把快照存到系列名下，与 seed 产生的真实名快照不一致。
  */
 export function getSelectedPresetName() {
     const pm = getPresetManager();
     if (!pm || typeof pm.getSelectedPresetName !== 'function') return null;
-    return safeCall(() => pm.getSelectedPresetName(), null, 'getSelectedPresetName');
+    let name = safeCall(() => pm.getSelectedPresetName(), null, 'getSelectedPresetName');
+
+    // 修正接管后的系列名 → 真实预设名
+    if (name) {
+        try {
+            const apiId = getCurrentApiId();
+            const selects = document.querySelectorAll('select[data-preset-manager-for]');
+            for (const sel of selects) {
+                const selApiId = (sel.getAttribute('data-preset-manager-for') || '')
+                    .split(',').map(s => s.trim()).filter(Boolean)[0] || '';
+                if (selApiId !== apiId) continue;
+                const selectedOpt = sel.options[sel.selectedIndex];
+                if (selectedOpt) {
+                    const orig = selectedOpt.getAttribute('data-pas-orig-text');
+                    if (orig) {
+                        name = orig;
+                    }
+                }
+                break;
+            }
+        } catch (_) {
+            // 降级：保持 PM 返回的名字
+        }
+    }
+
+    return name;
 }
 
 /**
@@ -326,6 +371,18 @@ export function getPresetSnapshot(presetName) {
             } catch (_) {}
         } else if (isUsable(found)) {
             return cloneDeepSafe(found);
+        }
+    }
+
+    // ⚡ 路径 2.5（B26 关键修复）：通过接管模块注册的解析器获取 detached 预设数据
+    //   DOM 接管后 pm.findPreset(name) 搜索 <select>.options，
+    //   但被 detach 的 option 已不在 select 中 → findPreset 返回 undefined。
+    //   接管模块的解析器直接搜索 _detachedOptions + oai_settings.preset_settings_openai，
+    //   能获取 detached 预设的完整数据。
+    if (_presetDataResolver) {
+        const resolved = safeCall(() => _presetDataResolver(apiId, name), null, 'presetDataResolver');
+        if (isUsable(resolved)) {
+            return cloneDeepSafe(resolved);
         }
     }
 

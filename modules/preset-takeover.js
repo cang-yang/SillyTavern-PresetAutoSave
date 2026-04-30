@@ -28,7 +28,7 @@ import { getSettings, onSettingChange, updateSetting } from './settings.js';
 import {
     on, getEventType, getCurrentApiId, selectPresetSafe,
     getPresetManager, getPresetSnapshot, savePresetSafe, deletePresetSafe, getAllPresetNames,
-    toast, t,
+    toast, t, registerPresetDataResolver,
 } from './compatibility.js';
 import {
     parsePresetName,
@@ -90,6 +90,127 @@ const REFRESH_DEBOUNCE_MS = 220;    // 防抖窗口（合并 ST 连续触发的�
 const REFRESH_MIN_INTERVAL_MS = 350; // 真正执行 refresh 的最小间隔
 
 // =====================================================
+// B26 关键修复：预设数据解析器
+// ⚡ DOM 接管后 pm.findPreset(name) 搜索 <select>.options，
+//   但被 detach 的 option 已不在 select 中 → findPreset 返回 undefined。
+//   此解析器从 _detachedOptions 引用 + DOM 中的 option 反查 oai_settings 数组。
+// =====================================================
+
+/**
+ * 通过预设名从 DOM option（含 detached）反查预设数据
+ * - OpenAI: option.value 是数组索引 → oai_settings.preset_settings_openai[idx]
+ * - 其他 API: pm.findPreset(name) 搜 select options，但 detached 不在 select 中
+ *   → 需要先暂时还原 option 到 DOM，或直接搜索内部数据
+ *
+ * @param {string} apiId
+ * @param {string} presetName
+ * @returns {object|null}
+ */
+function resolvePresetDataFromDetached(apiId, presetName) {
+    if (!presetName) return null;
+
+    // 1) 先在 detached options 中搜索
+    const detached = _detachedOptions.get(apiId) || [];
+    let targetOption = null;
+    for (const d of detached) {
+        const opt = d.option;
+        if (!opt) continue;
+        // detached option 的 textContent 是原始预设名（未被接管改写）
+        const text = (opt.textContent || '').trim();
+        if (text === presetName) {
+            targetOption = opt;
+            break;
+        }
+    }
+
+    // 2) 如果 detached 中没找到，在当前 DOM select 中搜索
+    //    （代表 option 的 textContent 已改为系列名，需要用 data-pas-orig-text 匹配）
+    if (!targetOption) {
+        try {
+            const selects = document.querySelectorAll(SELECT_SELECTOR);
+            for (const sel of selects) {
+                const selApiId = getApiIdOfSelect(sel);
+                if (selApiId !== apiId) continue;
+                for (const opt of sel.options) {
+                    const origText = opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
+                    const text = (origText || opt.textContent || '').trim();
+                    if (text === presetName) {
+                        targetOption = opt;
+                        break;
+                    }
+                }
+                if (targetOption) break;
+            }
+        } catch (_) {}
+    }
+
+    if (!targetOption) return null;
+
+    // 3) 用 option.value 取预设数据
+    const optValue = targetOption.value;
+
+    if (apiId === 'openai') {
+        // OpenAI 的 option.value 是 preset_settings_openai 的数组索引
+        const idx = parseInt(optValue, 10);
+        if (!isNaN(idx)) {
+            try {
+                const arr = window.oai_settings && window.oai_settings.preset_settings_openai;
+                if (Array.isArray(arr) && arr[idx] && typeof arr[idx] === 'object') {
+                    return arr[idx]; // 返回引用，由 getPresetSnapshot 负责 cloneDeepSafe
+                }
+            } catch (_) {}
+        }
+        // 某些 ST 版本的 value 可能直接是预设名，尝试 findPreset
+        // （但如果 findPreset 能工作，路径 2 就已经成功了，这里只是兜底）
+    }
+
+    // 4) 对非 openai API：尝试通过暂时插回 option 让 findPreset 工作
+    //    或直接搜索 ST 内部数据结构
+    try {
+        const pm = getPresetManager(apiId);
+        if (pm && typeof pm.findPreset === 'function') {
+            // 如果 option 不在 DOM 中，暂时插回让 findPreset 搜索
+            const wasDetached = !targetOption.parentNode;
+            let tempParent = null;
+            if (wasDetached) {
+                // 找到对应的 select
+                const selects = document.querySelectorAll(SELECT_SELECTOR);
+                for (const sel of selects) {
+                    if (getApiIdOfSelect(sel) === apiId) {
+                        tempParent = sel;
+                        break;
+                    }
+                }
+                if (tempParent) {
+                    tempParent.appendChild(targetOption);
+                }
+            }
+            try {
+                const found = pm.findPreset(presetName);
+                if (typeof found === 'number') {
+                    // 其他可能用索引的 API
+                    try {
+                        const list = pm.getPresetList && pm.getPresetList(apiId);
+                        if (list && list.presets && list.presets[found]) {
+                            return list.presets[found];
+                        }
+                    } catch (_) {}
+                } else if (found && typeof found === 'object' && Object.keys(found).length > 0) {
+                    return found;
+                }
+            } finally {
+                // 还原：把临时插回的 option 移除
+                if (wasDetached && tempParent && targetOption.parentNode === tempParent) {
+                    tempParent.removeChild(targetOption);
+                }
+            }
+        }
+    } catch (_) {}
+
+    return null;
+}
+
+// =====================================================
 // 初始化
 // =====================================================
 export async function initPresetTakeover() {
@@ -99,6 +220,9 @@ export async function initPresetTakeover() {
     }
 
     logger.info('[Takeover] Starting initialization...');
+
+    // ⚡ B26: 注册预设数据解析器 —— 让 getPresetSnapshot 能从 detached options 获取数据
+    registerPresetDataResolver(resolvePresetDataFromDetached);
 
     // 初始化归档存储（数据接管模式需要）
     try {
@@ -953,6 +1077,10 @@ export function teardown() {
     _refreshSuppressUntil = 0;
     _takeoverActive = false;
     _initialized = false;
+
+    // ⚡ B26: 注销解析器
+    registerPresetDataResolver(null);
+
     logger.info('Preset takeover torn down');
 }
 
