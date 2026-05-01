@@ -1177,6 +1177,42 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
 }
 
 /**
+ * 为单个预设创建初始快照（如果尚无快照）
+ * V-1: 用于导入检测和切换时补种，避免新导入预设显示 "0 · 0 B · —"
+ *
+ * @param {string} presetName
+ * @param {string} [apiId] - 不传则自动获取当前 API
+ * @returns {Promise<{seeded: boolean}>}
+ */
+export async function seedSnapshotForPreset(presetName, apiId) {
+    try {
+        const aid = apiId || getCurrentApiId();
+        if (!aid || !presetName) return { seeded: false };
+
+        const existing = await getSnapshots(aid, presetName);
+        if (Array.isArray(existing) && existing.length > 0) {
+            return { seeded: false };
+        }
+
+        const data = getPresetSnapshot(presetName);
+        if (!data || typeof data !== 'object') {
+            logger.debug(`[Seed] no data for "${presetName}", skip single-seed`);
+            return { seeded: false };
+        }
+
+        const snap = await addSnapshot(presetName, aid, data, TRIGGER.MANUAL);
+        if (snap) {
+            logger.info(`[Seed] initial snapshot created for "${presetName}"`);
+            return { seeded: true };
+        }
+        return { seeded: false };
+    } catch (e) {
+        logger.debug(`[Seed] seedSnapshotForPreset error for "${presetName}":`, e);
+        return { seeded: false };
+    }
+}
+
+/**
  * 强制重新种子
  */
 export async function forceReseedSnapshots() {

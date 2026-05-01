@@ -37,6 +37,7 @@ import {
 import {
     refreshTakeover,
     seedSnapshotsIfNeeded,
+    seedSnapshotForPreset,
     restoreAllFromArchive,
     listAllPresetsIncludingDetached,
 } from './preset-takeover.js';
@@ -902,7 +903,6 @@ function collectKnownPresetNames() {
 
 async function importWatchTick() {
     const settings = getSettings();
-    if (!settings.groupingEnabled || !settings.groupingPromptOnImport) return;
     if (_importPromptInflight) return;
 
     const cur = collectKnownPresetNames();
@@ -918,6 +918,20 @@ async function importWatchTick() {
     // 同步基线
     _importWatchPrev = cur;
     if (added.length === 0) return;
+
+    // V-1: 为新导入的预设创建初始快照（不受 grouping 开关限制）
+    if (settings.enabled) {
+        for (const name of added) {
+            try {
+                await seedSnapshotForPreset(name);
+            } catch (e) {
+                logger.debug(`[ImportWatch] seed failed for "${name}":`, e);
+            }
+        }
+    }
+
+    // 分组弹窗仅在 grouping 相关设置启用时触发
+    if (!settings.groupingEnabled || !settings.groupingPromptOnImport) return;
 
     // 已被用户标记的不再提示
     const overrides = settings.groupingManualOverrides || {};

@@ -28,6 +28,7 @@ import {
     t,
 } from './compatibility.js';
 import { addSnapshot, deleteSnapshot, TRIGGER, hashPreset } from './history-store.js';
+import { seedSnapshotForPreset } from './preset-takeover.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -1141,6 +1142,13 @@ function updateTrackingAfterSwitch() {
     _setStatus('idle');
 
     logger.debug(`Tracking updated: [${_currentApiId}] ${_currentPresetName} hash=${_lastSavedHash}`);
+
+    // V-1: 首次切换到没有快照的预设时，自动创建初始快照
+    if (newApiId && newPresetName) {
+        seedSnapshotForPreset(newPresetName, newApiId).catch(e => {
+            logger.debug(`[AutoSave] seed-on-switch failed for "${newPresetName}":`, e);
+        });
+    }
 }
 
 // =====================================================
