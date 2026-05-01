@@ -819,7 +819,10 @@ export async function showGroupingFirstScanWizard(opts = {}) {
         return;
     }
 
-    const groups = groupNamesBySeries(names);
+    const settings = getSettings();
+    const overrides = settings.groupingManualOverrides || {};
+    const excluded = settings.groupingExcluded || {};
+    const groups = groupNamesBySeries(names, overrides, excluded);
     // 只显示"含 ≥2 个版本"的系列作为预览（说明确实有重复）
     const significantGroups = groups.filter(g => g.items.length >= 2);
     const previewHtml = significantGroups.slice(0, 12).map(g => `

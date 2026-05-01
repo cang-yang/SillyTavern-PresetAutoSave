@@ -12,7 +12,7 @@
  */
 
 import { logger } from './logger.js';
-import { t, toast } from './compatibility.js';
+import { t, toast, escapeHtml as esc, formatTime } from './compatibility.js';
 import { stableStringify, formatBytes } from './history-store.js';
 
 let _popup = null;
@@ -285,17 +285,17 @@ function buildDiffHTML(a, b) {
     <div class="pas-diff-summary-bar">${summaryBarHTML(c)}</div>
     <div class="pas-diff-toolbar">
         <div class="pas-diff-toolbar-left">
-            <label class="pas-log-autoscroll" title="${escA(t('Diff Show All Desc'))}" style="margin-right:0;">
+            <label class="pas-log-autoscroll" title="${esc(t('Diff Show All Desc'))}" style="margin-right:0;">
                 <input type="checkbox" class="pas-diff-show-all">
                 <span>${esc(t('Diff Show All'))}</span>
             </label>
         </div>
         <div class="pas-diff-toolbar-right">
-            <button class="pas-mini-btn pas-diff-btn-swap" type="button" title="${escA(t('Diff Swap Title'))}">
+            <button class="pas-mini-btn pas-diff-btn-swap" type="button" title="${esc(t('Diff Swap Title'))}">
                 <i class="fa-solid fa-arrow-right-arrow-left"></i>
                 <span>${esc(t('Diff Swap'))}</span>
             </button>
-            <button class="pas-mini-btn pas-diff-btn-export" type="button" title="${escA(t('Diff Export Title'))}">
+            <button class="pas-mini-btn pas-diff-btn-export" type="button" title="${esc(t('Diff Export Title'))}">
                 <i class="fa-solid fa-download"></i>
                 <span>${esc(t('Diff Export'))}</span>
             </button>
@@ -309,7 +309,7 @@ function sideMetaHTML(tag, s) {
     const nm = s.name?.trim() || s.presetName;
     return `<span class="pas-diff-side-meta-tag">${esc(tag)}</span>
         <span class="pas-diff-side-meta-name">${esc(nm)}</span>
-        <span class="pas-diff-side-meta-time">${esc(fmtTime(s.timestamp))}</span>
+        <span class="pas-diff-side-meta-time">${esc(formatTime(s.timestamp))}</span>
         <span class="pas-diff-side-meta-extra">${formatBytes(s.size || 0)} · <code>${esc(s.hash || '')}</code>${s.pinned ? ' · <i class="fa-solid fa-thumbtack" style="color:var(--pas-c-pin)"></i>' : ''}</span>`;
 }
 
@@ -637,17 +637,4 @@ function fmtV(v) {
 
 function rd(d) { return parseFloat(d.toFixed(4)); }
 
-function fmtTime(ts) {
-    if (!ts) return '—';
-    try {
-        const d = new Date(ts), pad = n => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    } catch (_) { return String(ts); }
-}
-
-function esc(s) {
-    if (s == null) return '';
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-}
-
-function escA(s) { return esc(s); }
+// esc / escA / fmtTime 已统一为 escapeHtml / formatTime，从 compatibility.js 导入（见文件顶部）

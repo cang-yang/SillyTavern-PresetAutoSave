@@ -2762,8 +2762,9 @@
 /* --- 容器 --- */
 .pas-dd-wrapper {
     position: relative;
-    display: inline-flex;
-    width: 100%;
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 /* --- 触发器（模拟 select 外观） --- */

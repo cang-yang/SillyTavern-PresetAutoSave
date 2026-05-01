@@ -45,13 +45,6 @@ export const TRIGGER_LABEL_KEYS = Object.freeze({
     manual: 'Trigger Manual',
 });
 
-/** @deprecated 兼容旧引用，请使用 TRIGGER_LABEL_KEYS + t() */
-export const TRIGGER_LABELS = Object.freeze({
-    auto: '自动保存',
-    switch_guard: '切换前备份',
-    manual: '手动快照',
-});
-
 // =====================================================
 // 状态
 // =====================================================

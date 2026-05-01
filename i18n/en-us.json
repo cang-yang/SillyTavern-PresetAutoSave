@@ -376,5 +376,7 @@
 
     "Clear Preset Also Remove From ST Confirm": "Also delete this preset from SillyTavern?",
     "Clear Preset Also Remove From ST Hint": "<p>Snapshots of <b>{{name}}</b> have been cleared, but the preset itself still exists in SillyTavern.</p><p>Do you want to also remove it from the SillyTavern preset list?</p><p style=\"opacity:.7;font-size:.92em\">⚠ This cannot be undone. If unsure, select No to only clear the snapshot history.</p>",
-    "Clear Preset ST Delete Failed": "Snapshots cleared, but failed to delete preset from SillyTavern"
+    "Clear Preset ST Delete Failed": "Snapshots cleared, but failed to delete preset from SillyTavern",
+
+    "Panel Open Failed": "Failed to load panel data: {{message}}"
 }

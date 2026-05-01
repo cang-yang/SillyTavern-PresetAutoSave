@@ -307,43 +307,46 @@ function applyTakeoverToSelect(select) {
     wrapper = document.createElement('div');
     wrapper.className = 'pas-dd-wrapper';
     wrapper.style.position = 'relative';
-    wrapper.style.display = 'inline-block';
-    wrapper.style.width = '100%';
+    wrapper.style.display = 'flex';
+    wrapper.style.flex = '1 1 0';
+    wrapper.style.minWidth = '0';
 
+    // BUG-03 fix: _selfMutating 保护覆盖整个 DOM 创建过程
+    let trigger, panel;
     _selfMutating = true;
     try {
         select.parentNode.insertBefore(wrapper, select);
         wrapper.appendChild(select);
+
+        // 隐藏原生 select（CSS only — ST 仍可通过 ID/selector 正常访问）
+        select.style.opacity = '0';
+        select.style.pointerEvents = 'none';
+        select.style.position = 'absolute';
+        select.style.width = '100%';
+        select.style.height = '100%';
+        select.style.top = '0';
+        select.style.left = '0';
+        select.style.zIndex = '-1';
+        select.setAttribute(TAKEOVER_DATA_ATTR, '1');
+
+        // 创建 trigger 按钮
+        trigger = document.createElement('div');
+        trigger.className = 'pas-dd-trigger';
+        trigger.tabIndex = 0;
+        trigger.innerHTML = `
+            <span class="pas-dd-label"></span>
+            <i class="fas fa-chevron-down pas-dd-chevron"></i>
+        `;
+        wrapper.appendChild(trigger);
+
+        // 创建 panel（下拉面板）
+        panel = document.createElement('div');
+        panel.className = 'pas-dd-panel';
+        panel.style.display = 'none';
+        wrapper.appendChild(panel);
     } finally {
         _selfMutating = false;
     }
-
-    // 隐藏原生 select（CSS only — ST 仍可通过 ID/selector 正常访问）
-    select.style.opacity = '0';
-    select.style.pointerEvents = 'none';
-    select.style.position = 'absolute';
-    select.style.width = '100%';
-    select.style.height = '100%';
-    select.style.top = '0';
-    select.style.left = '0';
-    select.style.zIndex = '-1';
-    select.setAttribute(TAKEOVER_DATA_ATTR, '1');
-
-    // 创建 trigger 按钮
-    const trigger = document.createElement('div');
-    trigger.className = 'pas-dd-trigger';
-    trigger.tabIndex = 0;
-    trigger.innerHTML = `
-        <span class="pas-dd-label"></span>
-        <i class="fas fa-chevron-down pas-dd-chevron"></i>
-    `;
-    wrapper.appendChild(trigger);
-
-    // 创建 panel（下拉面板）
-    const panel = document.createElement('div');
-    panel.className = 'pas-dd-panel';
-    panel.style.display = 'none';
-    wrapper.appendChild(panel);
 
     // 渲染分组内容
     renderDropdownContent(panel, select, apiId, overrides, excluded, seriesDefaults);
