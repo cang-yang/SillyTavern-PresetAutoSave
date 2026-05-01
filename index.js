@@ -162,8 +162,20 @@ export async function onDelete() {
             logger.error('Clear archives on onDelete failed:', e)
         );
 
-        // 5) 重置扩展设置
+        // 5) 重置扩展设置 + 直接清除 ST 的 extensionSettings 条目
         resetSettings();
+        try {
+            const ctx = SillyTavern.getContext();
+            if (ctx.extensionSettings) {
+                delete ctx.extensionSettings['preset_auto_save'];
+                if (typeof ctx.saveSettingsDebounced === 'function') {
+                    ctx.saveSettingsDebounced();
+                }
+                logger.debug('onDelete: extensionSettings.preset_auto_save cleared');
+            }
+        } catch (e) {
+            logger.warn('onDelete: failed to clear extensionSettings:', e);
+        }
 
         // 6) 拆除其他模块
         teardownAutoSave();

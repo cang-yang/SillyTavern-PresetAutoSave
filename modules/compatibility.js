@@ -569,6 +569,30 @@ export function selectPresetSafe(presetName) {
     if (value === undefined || value === null) {
         return false;
     }
+
+    // ⚡ D2 修复：DOM 接管可能已将目标 option 从 select 中 detach，
+    //   导致 $(select).val(value) 静默失败 → .trigger('change') 读到旧预设。
+    //   在调用 pm.selectPreset(value) 前，确保目标 option 存在于 select 中。
+    //   插入临时 option（value + textContent 正确），scheduleRefresh 会自动重新接管。
+    let _d2TempOption = null;
+    try {
+        const _apiId = getCurrentApiId();
+        const _selects = document.querySelectorAll('select[data-preset-manager-for]');
+        for (const _sel of _selects) {
+            const _selApiId = (_sel.getAttribute('data-preset-manager-for') || '')
+                .split(',').map(s => s.trim()).filter(Boolean)[0] || '';
+            if (_selApiId !== _apiId) continue;
+            const _optExists = Array.from(_sel.options).some(o => o.value === String(value));
+            if (!_optExists) {
+                _d2TempOption = document.createElement('option');
+                _d2TempOption.value = String(value);
+                _d2TempOption.textContent = presetName;
+                _sel.appendChild(_d2TempOption);
+            }
+            break;
+        }
+    } catch (_) {}
+
     try {
         pm.selectPreset(value);
     } catch (e) {

@@ -1051,7 +1051,7 @@ function renderSeriesGroup(info) {
         </div>
     </div>
     <div class="pas-series-body"${isExpanded ? '' : ' hidden'}>
-        ${info.versions.map(v => renderVersionGroup(v, seriesKey)).join('')}
+        ${info.versions.map(v => renderVersionGroup(v, seriesKey, info.versions)).join('')}
     </div>
 </div>`;
 }
@@ -1066,7 +1066,7 @@ function renderSeriesGroup(info) {
  *
  * 这样无论预设名多长、标签多少都不会与右侧操作按钮重叠。
  */
-function renderVersionGroup(ver, seriesKey) {
+function renderVersionGroup(ver, seriesKey, allVersions) {
     const versionKey = presetKey(ver.apiId, ver.presetName);
     const isExpanded = _state.expandedVersions.has(versionKey);
     const safeKey = escapeAttr(versionKey);
@@ -1085,8 +1085,11 @@ function renderVersionGroup(ver, seriesKey) {
     const versionPillHtml = ver.version
         ? `<span class="pas-version-pill" title="${escapeAttr(t('Version Label Title', { version: ver.version }))}">${escapeHtml(ver.version)}</span>`
         : '';
-    // ⚡ C1 修复：副本编号不是错误，改用 fa-copy 图标 + 更友好的 tooltip
-    const dupHtml = ver.duplicate
+    // ⚡ D3 修复：副本标记只在系列有多个版本时才显示。
+    //   例："Deepseek 官方提示词指南预设 (5)" 的 "(5)" 被解析为副本，
+    //   但如果系列中只有这一个版本，则不显示副本图标（因为不是真的"重复"）。
+    const showDuplicate = ver.duplicate && Array.isArray(allVersions) && allVersions.length > 1;
+    const dupHtml = showDuplicate
         ? `<span class="pas-version-pill pas-version-pill-dup" title="${escapeAttr(t('Duplicate Version Title'))}"><i class="fa-solid fa-copy"></i> ${escapeHtml(ver.duplicate)}</span>`
         : '';
 

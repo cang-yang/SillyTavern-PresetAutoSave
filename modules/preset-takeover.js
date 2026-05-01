@@ -620,22 +620,15 @@ function applyTakeoverToSelect(select) {
                 autoSetCount++;
             }
         }
-        // ⚡ 清理已有的单版本系列条目（历史遗留膨胀数据）
-        let purgeCount = 0;
-        for (const key of Object.keys(seriesDefaults)) {
-            const items = seriesGroups.get(key);
-            // 系列已不存在或只有单版本 → 删除无意义的默认值
-            if (!items || items.length <= 1) {
-                delete seriesDefaults[key];
-                purgeCount++;
-            }
-        }
-        if (autoSetCount > 0 || purgeCount > 0) {
+        // ⚡ D1 修复：完全移除 purge 逻辑。
+        //   seriesDefaultApply 是跨 API 共享的 Map，每个 API 的 applyTakeoverToSelect()
+        //   只能看到本 API 的 seriesGroups，purge 会误删其他 API 设置的默认值。
+        //   旧条目累积无害（auto-set 只在 !seriesDefaults[key] 时添加）。
+        if (autoSetCount > 0) {
             // 批量写入 settings（异步，不阻塞接管流程）
             try {
                 updateSetting('seriesDefaultApply', { ...seriesDefaults });
-                if (autoSetCount > 0) logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
-                if (purgeCount > 0) logger.debug(`[Takeover] purged ${purgeCount} single-version default entries`);
+                logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
             } catch (e) {
                 logger.debug('[Takeover] auto-set default write failed:', e);
             }
