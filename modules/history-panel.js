@@ -152,6 +152,14 @@ export async function showHistoryPanel() {
         await waitForDOM();
 
         _root = document.querySelector('.pas-panel');
+
+        // ⚡ C3 修复：阻止面板内部鼠标事件冒泡到 ST Popup overlay
+        //   ST Popup 通过 overlay 的 mousedown 判断"点击外部 → 关闭"
+        //   面板中的 <select> 原生下拉收回时会触发此逻辑导致整个面板消失
+        if (_root) {
+            _root.addEventListener('mousedown', (e) => e.stopPropagation());
+            _root.addEventListener('pointerdown', (e) => e.stopPropagation());
+        }
         if (!_root) {
             logger.error('Panel root not found');
             return;
@@ -757,6 +765,9 @@ function renderSeriesView(filtered) {
     //
     //    DOM 上的 select 是 ST 渲染给用户看的下拉，里面只有真实的预设名，
     //    所以是绝对干净、可信的唯一数据源。
+    // ⚡ C1 修复：将 allEntries 提升到函数作用域，使后续的"幽灵版本清理"代码块也能访问
+    let allEntries = new Map();
+
     try {
         const overrides = settings.groupingManualOverrides || {};
         const excluded = settings.groupingExcluded || {};
@@ -776,7 +787,7 @@ function renderSeriesView(filtered) {
         };
 
         // 合并去重：以 apiId::presetName 为 key
-        const allEntries = new Map();
+        allEntries = new Map();
         for (const e of fromDOM) {
             if (e.apiId && e.apiId !== currentApi) continue;
             if (!e.presetName || isPureNumberLike(e.presetName)) continue;
@@ -1077,8 +1088,9 @@ function renderVersionGroup(ver, seriesKey) {
     const versionPillHtml = ver.version
         ? `<span class="pas-version-pill" title="${escapeAttr(t('Version Label Title', { version: ver.version }))}">${escapeHtml(ver.version)}</span>`
         : '';
+    // ⚡ C1 修复：副本编号不是错误，改用 fa-copy 图标 + 更友好的 tooltip
     const dupHtml = ver.duplicate
-        ? `<span class="pas-version-pill pas-version-pill-dup" title="${escapeAttr(t('Duplicate Version Title'))}"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(ver.duplicate)}</span>`
+        ? `<span class="pas-version-pill pas-version-pill-dup" title="${escapeAttr(t('Duplicate Version Title'))}"><i class="fa-solid fa-copy"></i> ${escapeHtml(ver.duplicate)}</span>`
         : '';
 
     // 标签徽章

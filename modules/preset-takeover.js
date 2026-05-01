@@ -34,6 +34,7 @@ import {
     parsePresetName,
     getSeriesInfo,
     pickRepresentativeVersion,
+    pickLatestVersion,
 } from './preset-grouping.js';
 import {
     initArchiveStore,
@@ -598,6 +599,33 @@ function applyTakeoverToSelect(select) {
             version: info.version,
             duplicate: info.duplicate,
         });
+    }
+
+    // ⚡ C1 新增：自动为没有配置默认版本的系列设置默认值（= 最新版本）
+    //   用户需求："任何一级预设系列下，都要把最新的一个预设作为默认的"
+    //   仅在 seriesDefaultApply 中没有该系列的条目时自动写入
+    {
+        let autoSetCount = 0;
+        for (const [seriesKey, items] of seriesGroups) {
+            if (items.length === 0) continue;
+            // 已有用户配置 → 跳过
+            if (seriesDefaults[seriesKey]) continue;
+            // 用 pickLatestVersion 选出最新版本
+            const latest = pickLatestVersion(items);
+            if (latest && latest.presetName) {
+                seriesDefaults[seriesKey] = latest.presetName;
+                autoSetCount++;
+            }
+        }
+        if (autoSetCount > 0) {
+            // 批量写入 settings（异步，不阻塞接管流程）
+            try {
+                updateSetting('seriesDefaultApply', { ...seriesDefaults });
+                logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
+            } catch (e) {
+                logger.debug('[Takeover] auto-set default write failed:', e);
+            }
+        }
     }
 
     // 3) 选出每个系列的"代表 option"

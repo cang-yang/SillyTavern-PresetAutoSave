@@ -11,7 +11,7 @@ import {
     initCompatibility, ENV, offAll,
     savePresetSafe, getPresetManager,
 } from './modules/compatibility.js';
-import { initSettings } from './modules/settings.js';
+import { initSettings, getSettings, resetSettings } from './modules/settings.js';
 import { initHistoryStore, getAllSnapshots, clearAll as clearAllSnapshots } from './modules/history-store.js';
 import { initAutoSave, teardown as teardownAutoSave } from './modules/auto-save.js';
 import { initUIInjector, teardown as teardownUI } from './modules/ui-injector.js';
@@ -32,7 +32,6 @@ import {
     listAllPresetsIncludingDetached,
 } from './modules/preset-takeover.js';
 import { clearAllArchived } from './modules/archive-store.js';
-import { getSettings } from './modules/settings.js';
 import { runGroupingSelfTest, parsePresetName, groupNamesBySeries } from './modules/preset-grouping.js';
 
 const VERSION = '1.0.0';
@@ -132,33 +131,47 @@ export async function onActivate() {
 }
 
 export async function onDelete() {
-    logger.info('Cleaning up: restoring all presets to ST (snapshots + archives)');
+    logger.info('Uninstalling: restoring presets → clearing all plugin data');
     try {
-        // 用户语义（B11）：
-        //   - 未修改过的预设（无快照）→ 保留 ST 中的原始数据，什么都不动
-        //   - 已修改的预设（有快照） → 把"最新快照数据"写回 ST，让用户卸载插件后
-        //                              拿到的是他在面板里编辑的最新版本
-        //   - 数据接管模式下被归档的预设 → restoreAllFromArchive 已处理（优先快照、回退归档）
+        // ⚡ C2 重写：卸载语义 —— 干干净净地移除插件所有痕迹
         //
-        // DOM 接管模式：select.options 中被 detach 的非代表 option 由 teardownTakeover 自动复原；
-        //                ST 内部 oai_settings.preset_names 始终完整 → 预设数据本身不会丢。
+        //   1) 先还原 DOM 接管（把被 detach 的 option 放回 select）
+        //   2) 恢复数据接管归档的预设（被 deletePresetSafe 删除的）
+        //   3) 用最新快照补回 ST 中缺失的预设（排除系列名幽灵快照，不覆盖已存在的）
+        //   4) 清空所有插件存储（history-store + archive-store）
+        //   5) 重置扩展设置
+        //   6) 拆除所有模块
 
-        // 1) 数据接管的归档恢复（内部已实现"snapshot 优先 → archive fallback"）
+        // 1) 还原 DOM 接管
+        teardownTakeover();
+
+        // 2) 恢复数据接管模式下被归档的预设
         await restoreAllFromArchive().catch(e =>
             logger.error('Archive restore on onDelete failed:', e)
         );
 
-        // 2) 把所有"有快照的预设"的最新快照写回 ST
-        const r = await _writeBackLatestSnapshots();
-        logger.success(`onDelete: latest snapshot writeback · ${r.written || 0} written · ${r.skipped || 0} skipped`);
+        // 3) 用最新快照恢复 ST 中缺失的真实预设（跳过已存在 + 过滤幽灵快照）
+        const r = await _writeBackLatestSnapshots({ skipExisting: true, filterGhosts: true });
+        logger.success(`onDelete: snapshot writeback · ${r.written || 0} restored · ${r.skipped || 0} skipped`);
 
-        // 3) 拆下所有 DOM 接管标记，让原下拉恢复完整
-        teardownTakeover();
+        // 4) 清空所有插件存储
+        await clearAllSnapshots().catch(e =>
+            logger.error('Clear snapshots on onDelete failed:', e)
+        );
+        await clearAllArchived().catch(e =>
+            logger.error('Clear archives on onDelete failed:', e)
+        );
+
+        // 5) 重置扩展设置
+        resetSettings();
+
+        // 6) 拆除其他模块
         teardownAutoSave();
         teardownUI();
         teardownHistoryPanel();
         offAll();
-        logger.success('onDelete: cleanup complete');
+
+        logger.success('onDelete: cleanup complete — all plugin data cleared');
     } catch (e) {
         logger.error('onDelete cleanup error:', e);
     }
@@ -169,13 +182,30 @@ export function onEnable() {
 }
 
 /**
- * 把所有"有快照的预设"的最新快照写回 ST（onDisable / onDelete 共用）
- * 用户语义：未修改的预设保留原始；已修改的预设以最新快照覆盖
+ * ⚡ C2+C3 重写：把有快照的预设写回 ST
+ *
+ * 两种模式（通过 opts 控制）：
+ *
+ *   onDelete 调用（skipExisting=true, filterGhosts=true）：
+ *     - 过滤幽灵快照（presetName === 系列名 且同系列有其他真实版本）
+ *     - 已存在于 ST 的预设 → 跳过（不覆盖用户的手动修改）
+ *     - 不存在于 ST 的预设 → 用最新快照写回（恢复被数据接管删除的）
+ *
+ *   onDisable 调用（默认，skipExisting=false, filterGhosts=false）：
+ *     - 保持旧行为：已存在的预设 → 用最新快照覆盖
+ *     - 不存在的预设 → 跳过
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.skipExisting=false] true = 不覆盖已存在的预设（onDelete 语义）
+ * @param {boolean} [opts.filterGhosts=false] true = 过滤掉系列名幽灵快照
  */
-async function _writeBackLatestSnapshots() {
+async function _writeBackLatestSnapshots(opts = {}) {
+    const { skipExisting = false, filterGhosts = false } = opts;
     try {
         const allSnaps = await getAllSnapshots();
         if (!Array.isArray(allSnaps) || allSnaps.length === 0) return { written: 0, skipped: 0 };
+
+        // 1. 按 (apiId, presetName) 分组，取每组中 timestamp 最大的快照
         const latestMap = new Map();
         for (const s of allSnaps) {
             if (!s || !s.presetName || !s.apiId) continue;
@@ -185,6 +215,36 @@ async function _writeBackLatestSnapshots() {
                 latestMap.set(k, s);
             }
         }
+
+        // 2. 过滤幽灵快照（presetName 等于系列名，且该系列有其他版本）
+        //    这些是旧版 seedSnapshotsIfNeeded 把代表 option 系列名当预设名存的残留
+        if (filterGhosts) {
+            const seriesMembers = new Map(); // seriesKey → Set<presetName>
+            for (const snap of latestMap.values()) {
+                try {
+                    const parsed = parsePresetName(snap.presetName);
+                    const series = parsed.series || snap.presetName;
+                    if (!seriesMembers.has(series)) seriesMembers.set(series, new Set());
+                    seriesMembers.get(series).add(snap.presetName);
+                } catch (_) { /* 解析失败 → 当独立预设，不过滤 */ }
+            }
+            for (const [key, snap] of [...latestMap.entries()]) {
+                try {
+                    const parsed = parsePresetName(snap.presetName);
+                    const series = parsed.series || snap.presetName;
+                    // 只有当 presetName === 系列名 且同系列还有其他成员时才是幽灵
+                    if (snap.presetName === series) {
+                        const members = seriesMembers.get(series);
+                        if (members && members.size > 1) {
+                            latestMap.delete(key);
+                            logger.debug(`writeBack: filtered ghost snapshot "${snap.presetName}" (series has ${members.size} real versions)`);
+                        }
+                    }
+                } catch (_) { /* 解析失败 → 保留 */ }
+            }
+        }
+
+        // 3. 逐个写回 ST
         let written = 0, skipped = 0;
         for (const snap of latestMap.values()) {
             if (!snap.preset || typeof snap.preset !== 'object') {
@@ -193,12 +253,33 @@ async function _writeBackLatestSnapshots() {
             }
             try {
                 const pm = getPresetManager(snap.apiId);
-                // 只在 ST 实际能找到这个预设时才覆盖；
-                //   找不到 = ST 自己也没有 → 不创建（用户没要求新建）
-                if (pm && typeof pm.findPreset === 'function') {
-                    const found = pm.findPreset(snap.presetName);
-                    if (found === undefined) { skipped++; continue; }
+
+                if (skipExisting) {
+                    // onDelete 语义：只恢复 ST 中不存在的预设（不覆盖已有的）
+                    let exists = false;
+                    if (pm && typeof pm.getPresetList === 'function') {
+                        try {
+                            const { preset_names } = pm.getPresetList(snap.apiId);
+                            if (Array.isArray(preset_names)) {
+                                exists = preset_names.includes(snap.presetName);
+                            } else if (preset_names && typeof preset_names === 'object') {
+                                exists = Object.hasOwn(preset_names, snap.presetName);
+                            }
+                        } catch (_) {}
+                    }
+                    // 兜底：findPreset 检查
+                    if (!exists && pm && typeof pm.findPreset === 'function') {
+                        exists = pm.findPreset(snap.presetName) !== undefined;
+                    }
+                    if (exists) { skipped++; continue; }
+                } else {
+                    // onDisable 语义（旧行为）：只覆盖已存在的预设
+                    if (pm && typeof pm.findPreset === 'function') {
+                        const found = pm.findPreset(snap.presetName);
+                        if (found === undefined) { skipped++; continue; }
+                    }
                 }
+
                 await savePresetSafe(snap.presetName, snap.preset, { apiId: snap.apiId, skipUpdate: true });
                 written++;
             } catch (e) {

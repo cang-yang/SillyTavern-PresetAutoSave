@@ -536,11 +536,37 @@ export function selectPresetSafe(presetName) {
     //   （如 mistralai_model undefined 等历史遗留迁移代码失败），
     //   但实际预设已经切换了。所以不能直接看 safeCall 的 catch 结果，
     //   要"切换后再读 selected preset name 是否变成目标值"作为最终判定。
-    if (typeof pm.findPreset !== 'function' || typeof pm.selectPreset !== 'function') {
+    if (typeof pm.selectPreset !== 'function') {
         return false;
     }
-    const value = pm.findPreset(presetName);
-    if (value === undefined) {
+    let value = (typeof pm.findPreset === 'function') ? pm.findPreset(presetName) : undefined;
+
+    // ⚡ C1 修复：如果 findPreset 返回 undefined（预设被 detach / 不在 select 中），
+    //   通过 pm.getPresetList() 的 preset_names 映射直接获取索引值
+    if (value === undefined || value === null) {
+        try {
+            const apiId = getCurrentApiId();
+            if (typeof pm.getPresetList === 'function') {
+                const { preset_names } = pm.getPresetList(apiId);
+                if (preset_names) {
+                    let idx;
+                    if (Array.isArray(preset_names)) {
+                        idx = preset_names.indexOf(presetName);
+                        if (idx < 0) idx = undefined;
+                    } else if (typeof preset_names === 'object') {
+                        idx = preset_names[presetName];
+                    }
+                    if (idx !== undefined && idx !== null) {
+                        value = String(idx);
+                    }
+                }
+            }
+        } catch (e) {
+            logger.debug('[selectPresetSafe] getPresetList fallback failed:', e);
+        }
+    }
+
+    if (value === undefined || value === null) {
         return false;
     }
     try {
