@@ -313,7 +313,8 @@ async function loadData() {
     const curApi = getCurrentApiId();
     if (curName && curApi) {
         _state.expandedPresets.add(presetKey(curApi, curName));
-        _state.expandedVersions.add(presetKey(curApi, curName));
+        // 不自动展开版本组（二级）——用户要求展开系列后只看到版本列表（收起状态），
+        // 需要手动点击版本头部才展开快照。expandedVersions 仅由用户点击或"全部展开"填充。
     }
 
     if (_state.viewMode === 'series') {

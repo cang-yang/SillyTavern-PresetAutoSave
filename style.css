@@ -27,6 +27,7 @@
     /* 文字 */
     --pas-fg:        var(--SmartThemeBodyColor, #e2e8f0);
     --pas-fg-muted:  rgba(255, 255, 255, 0.62);
+    --pas-fg-3:      rgba(255, 255, 255, 0.45);
     --pas-fg-faint:  rgba(255, 255, 255, 0.36);
 
     /* 表面 */
