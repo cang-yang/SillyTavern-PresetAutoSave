@@ -678,6 +678,23 @@ export function renderSeriesView(filtered, panelCtx) {
         }
     }
 
+    // O-2: 筛选/搜索激活时，隐藏无匹配快照的版本组和空系列组
+    //   当 filter !== 'all' 或搜索词非空时，面板只展示有实际匹配快照的版本，
+    //   不再显示 "无快照 · 0 · 0 B" 空壳条目。
+    const _state = panelCtx.state();
+    const hasActiveFilter = (_state.filter && _state.filter !== 'all') || !!_state.search;
+    if (hasActiveFilter) {
+        for (const [k, series] of seriesMap) {
+            // 移除没有快照的版本组
+            series.versions = series.versions.filter(v => (v.snapshotCount || 0) > 0);
+            series.versionCount = series.versions.length;
+            // 如果该系列下所有版本都被过滤掉了，移除整个系列
+            if (series.versions.length === 0) {
+                seriesMap.delete(k);
+            }
+        }
+    }
+
     if (seriesMap.size === 0) {
         return `<div class="pas-empty-state pas-empty-state-grouping">
             <i class="fa-solid fa-folder-tree"></i>

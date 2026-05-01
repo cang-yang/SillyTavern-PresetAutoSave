@@ -319,17 +319,17 @@ async function loadData() {
     if (_state.viewMode === 'series') {
         const overrides = settings.groupingManualOverrides;
         const excluded = settings.groupingExcluded;
-        const expandMode = settings.groupingDefaultExpand || 'current';
+        // O-1: 默认全部收起（'none'），用户可在设置中改为 'current' 或 'all'
+        const expandMode = settings.groupingDefaultExpand || 'none';
         const seriesMap = groupSnapshotsBySeries(_state.snapshots, { overrides, excluded });
 
         if (expandMode === 'all') {
             for (const k of seriesMap.keys()) _state.expandedSeries.add(k);
         } else if (expandMode === 'current') {
-            // ⭐ 改进：current 模式不只展开当前系列，
-            //   还展开所有"多版本系列"（让用户能立刻看到分组结果，而不是空荡荡的列表）
+            // O-1: 'current' 模式仅展开当前预设所在的系列，不再展开所有多版本系列
             for (const [k, info] of seriesMap.entries()) {
                 const isCurrent = curName && info.versions.some(v => v.apiId === curApi && v.presetName === curName);
-                if (isCurrent || (info.versions && info.versions.length > 1)) {
+                if (isCurrent) {
                     _state.expandedSeries.add(k);
                 }
             }
