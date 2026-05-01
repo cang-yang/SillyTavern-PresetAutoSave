@@ -81,6 +81,12 @@ let _selfMutating = false;
 // 我们正在以"代表项策略"切换预设（用于 change 拦截避免递归）
 let _selfChangingValue = false;
 
+// ⚡ P1 修复：编程式预设切换标志
+//   当我们主动调用 selectPresetSafe 时设为 true，
+//   使 onSelectChangeIntercept 对内部触发的 change 事件放行（不阻止），
+//   让 ST 原生 handler 能正常处理（此时 option textContent 已被修正为真实名）。
+let _inProgrammaticSwitch = false;
+
 // ⚡ 防抖与去重缓存
 let _refreshTimer = null;          // 当前调度中的 timer id（用于取消）
 const _selectFingerprints = new WeakMap();  // select → 上一次接管时计算的指纹
@@ -721,10 +727,17 @@ function applyTakeoverToSelect(select) {
 }
 
 // =====================================================
-// change 拦截：用户选中代表项 → 应用真正的默认版本
+// change 拦截：用户选中任意 option → 自行完成预设切换
+// ⚡ P1 修复：统一拦截所有被接管 select 的 change 事件
+//   原因：接管把 option.textContent 改为系列名，ST 原生 handler 读到系列名 → 查找失败
+//   策略：始终 stopImmediatePropagation，自己用 selectPresetSafe 完成切换，
+//         然后通过 _inProgrammaticSwitch 放行内部触发的 change 给 ST 原生 handler
 // =====================================================
 function onSelectChangeIntercept(e) {
+    // ⚡ P1 修复：编程式切换（selectPresetSafe 内部触发的 change）→ 放行给 ST 原生
+    if (_inProgrammaticSwitch) return;
     if (_selfChangingValue) return;
+
     const select = e.currentTarget;
     if (!select || !select.tagName || select.tagName.toLowerCase() !== 'select') return;
     if (!select.hasAttribute(TAKEOVER_DATA_ATTR)) return;
@@ -739,75 +752,78 @@ function onSelectChangeIntercept(e) {
     const opt = Array.from(select.options).find(o => o.value === value);
     if (!opt) return;
 
-    // 判断是否为接管后的"代表 option"
-    if (!opt.hasAttribute(REP_OPTION_DATA_ATTR)) return;
-
-    const seriesKey = opt.getAttribute(SERIES_KEY_DATA_ATTR);
-    if (!seriesKey) return;
-
-    // 查找该系列的"用户指定默认版本"
-    const seriesDefaults = settings.seriesDefaultApply || {};
-    const targetName = seriesDefaults[seriesKey];
-    // ⚡ B29 修复：value 是 option.value（openai 为数组索引如 "15"），不能与预设名直接比较
-    //   需要用当前选中 option 的真实预设名来判断
-    const currentRealName = (opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR) || opt.textContent || '').trim();
-    if (!targetName || targetName === currentRealName) {
-        return;
-    }
-
-    // 检查目标版本是否仍存在（在被摘除列表中或 DOM 中）
     const apiId = getApiIdOfSelect(select);
-    const detached = _detachedOptions.get(apiId) || [];
-    // ⚡ B29 修复：用 textContent 匹配预设名（option.value 对 openai 是数组索引）
-    const targetDetachedEntry = detached.find(d => (d.option.textContent || '').trim() === targetName);
-    const existsInSelect = Array.from(select.options).some(o => {
-        const origText = o.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
-        return (origText || o.textContent || '').trim() === targetName;
-    });
-    if (!targetDetachedEntry && !existsInSelect) {
-        logger.warn(`takeover: configured default version "${targetName}" missing for series "${seriesKey}"`);
-        return;
-    }
 
-    // 阻止默认事件传播，先不让 ST 加载代表预设
+    // ⚡ P1 核心修复：对所有被接管 select 的 change 事件统一拦截
+    //   阻止 ST 原生 handler 读取被修改过 textContent 的 option
     e.stopImmediatePropagation();
     e.preventDefault();
 
-    // ⚡ B29 修复：selectPresetSafe 内部的 findPreset 搜 DOM options，
-    //   但目标版本的 option 已被 detach → findPreset 返回 undefined。
-    //   先暂时把目标 option 还原到 select 中，让 findPreset 能找到。
-    let _tempAttached = false;
-    if (targetDetachedEntry && !targetDetachedEntry.option.parentNode) {
-        _selfMutating = true;
-        try {
-            select.appendChild(targetDetachedEntry.option);
-            _tempAttached = true;
-        } finally {
-            _selfMutating = false;
+    // 获取真实预设名（可能已被改写为系列名）
+    const origText = opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
+    const realName = (origText || opt.textContent || '').trim();
+    if (!realName) return;
+
+    // 判断是否为代表 option + 是否需要重定向
+    const isRep = opt.hasAttribute(REP_OPTION_DATA_ATTR);
+    let targetName = realName;
+
+    if (isRep) {
+        const seriesKey = opt.getAttribute(SERIES_KEY_DATA_ATTR) || realName;
+        const seriesDefaults = settings.seriesDefaultApply || {};
+        const defaultVersion = seriesDefaults[seriesKey];
+        if (defaultVersion && defaultVersion !== realName) {
+            // 检查目标版本是否存在（在被摘除列表中或 DOM 中）
+            const detached = _detachedOptions.get(apiId) || [];
+            const targetDetachedEntry = detached.find(d => (d.option.textContent || '').trim() === defaultVersion);
+            const existsInSelect = Array.from(select.options).some(o => {
+                const ot = o.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
+                return (ot || o.textContent || '').trim() === defaultVersion;
+            });
+            if (targetDetachedEntry || existsInSelect) {
+                targetName = defaultVersion;
+                logger.debug(`takeover: redirected ${seriesKey} → ${targetName}`);
+            } else {
+                logger.warn(`takeover: configured default "${defaultVersion}" missing for series "${seriesKey}", using ${realName}`);
+            }
         }
     }
 
-    // 通过 PresetManager 直接应用目标预设
+    // ⚡ P1 修复：如果目标就是当前 REP option 本身，临时恢复其 textContent 为真实名
+    //   这样 selectPresetSafe 内部 pm.selectPreset() 触发的 change 事件
+    //   让 ST 原生 handler onSettingsPresetChange() 能读到正确的预设名
+    let _textRestoreOpt = null;
+    let _textRestoreValue = null;
+    if (targetName === realName && origText) {
+        _textRestoreOpt = opt;
+        _textRestoreValue = opt.textContent;
+        _selfMutating = true;
+        try { opt.textContent = realName; } finally { _selfMutating = false; }
+    }
+
+    // ⚡ P1 修复：设置编程式切换标志
+    //   selectPresetSafe → pm.selectPreset(value) → $(select).trigger('change')
+    //   → onSelectChangeIntercept 再次触发 → 检测 _inProgrammaticSwitch → return（放行）
+    //   → ST 原生 handler 正常执行
+    _inProgrammaticSwitch = true;
     _selfChangingValue = true;
     try {
         const ok = selectPresetSafe(targetName);
         if (!ok) {
             logger.warn(`takeover: selectPresetSafe(${targetName}) failed`);
-        } else {
-            logger.debug(`takeover: redirected ${seriesKey} → ${targetName}`);
         }
     } finally {
+        _inProgrammaticSwitch = false;
         _selfChangingValue = false;
-        // 还原：如果暂时挂回了 option，移除它（下次 refresh 会正式处理）
-        if (_tempAttached && targetDetachedEntry.option.parentNode === select) {
+        // 恢复 textContent 为系列名（保持接管状态的 DOM 外观）
+        if (_textRestoreOpt && _textRestoreValue !== null) {
             _selfMutating = true;
-            try {
-                select.removeChild(targetDetachedEntry.option);
-            } finally {
-                _selfMutating = false;
-            }
+            try { _textRestoreOpt.textContent = _textRestoreValue; } finally { _selfMutating = false; }
         }
     }
+
+    // 安排刷新（重新接管 DOM，清理临时 option 等）
+    scheduleRefresh();
 }
 
 // =====================================================

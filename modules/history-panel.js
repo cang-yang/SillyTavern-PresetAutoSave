@@ -1085,10 +1085,14 @@ function renderVersionGroup(ver, seriesKey, allVersions) {
     const versionPillHtml = ver.version
         ? `<span class="pas-version-pill" title="${escapeAttr(t('Version Label Title', { version: ver.version }))}">${escapeHtml(ver.version)}</span>`
         : '';
-    // ⚡ D3 修复：副本标记只在系列有多个版本时才显示。
-    //   例："Deepseek 官方提示词指南预设 (5)" 的 "(5)" 被解析为副本，
-    //   但如果系列中只有这一个版本，则不显示副本图标（因为不是真的"重复"）。
-    const showDuplicate = ver.duplicate && Array.isArray(allVersions) && allVersions.length > 1;
+    // ⚡ D3+P4 修复：副本标记仅在系列中确实存在"同版本号"的其他预设时才显示。
+    //   原来的 allVersions.length > 1 判断过于宽松——只要系列有多版本就显示。
+    //   实际上 "(1)" 表示导入副本，只有存在同 version 的另一个预设时才算真正的"副本"。
+    //   例："梦境思客V2-0426 (1)" 只在系列中还有 "梦境思客V2-0426" 时才显示副本标记。
+    //   例："Deepseek 官方提示词指南预设 (5)" 如果系列只有它一个版本也不显示。
+    const showDuplicate = ver.duplicate && Array.isArray(allVersions) && allVersions.some(
+        v => v !== ver && v.version === ver.version
+    );
     const dupHtml = showDuplicate
         ? `<span class="pas-version-pill pas-version-pill-dup" title="${escapeAttr(t('Duplicate Version Title'))}"><i class="fa-solid fa-copy"></i> ${escapeHtml(ver.duplicate)}</span>`
         : '';
@@ -2582,8 +2586,19 @@ async function importWatchTick() {
     const existingGroups = groupNamesBySeries(existingNames, overrides, excluded);
     const existingSeries = existingGroups.map(g => g.series);
 
+    // ⚡ P3 修复：过滤掉与已存在预设同属一个系列的候选
+    //   版本切换（takeover）时，被隐藏的 option 可能被临时恢复到 select 中，
+    //   导致同系列版本被误判为"新导入"。通过 normalizeSeriesKey 比较排除。
+    const existingNormKeys = new Set(existingSeries.map(s => normalizeSeriesKey(s)));
+    const trulyNewCandidates = candidates.filter(n => {
+        const info = getSeriesInfo(n, overrides, excluded);
+        const normKey = normalizeSeriesKey(info.series || n);
+        return !existingNormKeys.has(normKey);
+    });
+    if (trulyNewCandidates.length === 0) return;
+
     // 一次只处理一个，避免连环弹窗
-    for (const newName of candidates) {
+    for (const newName of trulyNewCandidates) {
         const ok = await maybePromptForImportAssignment(newName, existingSeries);
         if (!ok) break; // 用户取消则停止
     }

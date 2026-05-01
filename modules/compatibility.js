@@ -574,7 +574,12 @@ export function selectPresetSafe(presetName) {
     //   导致 $(select).val(value) 静默失败 → .trigger('change') 读到旧预设。
     //   在调用 pm.selectPreset(value) 前，确保目标 option 存在于 select 中。
     //   插入临时 option（value + textContent 正确），scheduleRefresh 会自动重新接管。
+    //
+    // ⚡ P2 修复：临时 option 必须在 change handler 处理完后清理，
+    //   否则 detached 数量单调递增（每次 applyTakeoverToSelect 将其当正常 option 处理）。
+    //   用 requestAnimationFrame 延迟移除，确保 ST change handler 已读取完 option 信息。
     let _d2TempOption = null;
+    let _d2TempSelect = null;
     try {
         const _apiId = getCurrentApiId();
         const _selects = document.querySelectorAll('select[data-preset-manager-for]');
@@ -587,7 +592,9 @@ export function selectPresetSafe(presetName) {
                 _d2TempOption = document.createElement('option');
                 _d2TempOption.value = String(value);
                 _d2TempOption.textContent = presetName;
+                _d2TempOption.setAttribute('data-pas-temp', 'true');
                 _sel.appendChild(_d2TempOption);
+                _d2TempSelect = _sel;
             }
             break;
         }
@@ -597,6 +604,19 @@ export function selectPresetSafe(presetName) {
         pm.selectPreset(value);
     } catch (e) {
         // ST 内部抛错不代表切换失败 —— 验证下面的最终状态
+    } finally {
+        // ⚡ P2 修复：用 requestAnimationFrame 延迟移除临时 option
+        //   确保 ST 的 change handler（同步执行）已读取完 option 信息后再清理
+        if (_d2TempOption) {
+            const tempOpt = _d2TempOption;
+            requestAnimationFrame(() => {
+                try {
+                    if (tempOpt.parentNode) {
+                        tempOpt.parentNode.removeChild(tempOpt);
+                    }
+                } catch (_) {}
+            });
+        }
     }
     // 验证：切换后再问 ST 选中的是不是目标
     try {
