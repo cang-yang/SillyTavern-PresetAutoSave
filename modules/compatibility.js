@@ -555,10 +555,24 @@ export function selectPresetSafe(presetName) {
             return true;
         }
     } catch (_) {}
-    // 退一步：select 元素的 value 是否对了
+    // ⚡ B29 修复：退一步验证 select 元素的选中项文本
+    //   openai 的 sel.value 是数组索引（如 "15"），不能与预设名比较
+    //   改为读选中 option 的 textContent（或 data-pas-orig-text 属性）
     try {
-        const sel = document.querySelector('select[data-preset-manager-for]');
-        if (sel && sel.value === presetName) return true;
+        const apiId = getCurrentApiId();
+        const selects = document.querySelectorAll('select[data-preset-manager-for]');
+        for (const sel of selects) {
+            const selApiId = (sel.getAttribute('data-preset-manager-for') || '')
+                .split(',').map(s => s.trim()).filter(Boolean)[0] || '';
+            if (selApiId !== apiId) continue;
+            const selectedOpt = sel.options[sel.selectedIndex];
+            if (selectedOpt) {
+                const origText = selectedOpt.getAttribute('data-pas-orig-text');
+                const realName = (origText || selectedOpt.textContent || '').trim();
+                if (realName === presetName) return true;
+            }
+            break;
+        }
     } catch (_) {}
     return false;
 }

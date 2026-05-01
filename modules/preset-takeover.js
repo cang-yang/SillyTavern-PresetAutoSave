@@ -98,7 +98,7 @@ const REFRESH_MIN_INTERVAL_MS = 350; // 真正执行 refresh 的最小间隔
 
 /**
  * 通过预设名从 DOM option（含 detached）反查预设数据
- * - OpenAI: option.value 是数组索引 → oai_settings.preset_settings_openai[idx]
+ * - OpenAI: option.value 是数组索引 → 通过 getPresetList() 查 presets[idx]
  * - 其他 API: pm.findPreset(name) 搜 select options，但 detached 不在 select 中
  *   → 需要先暂时还原 option 到 DOM，或直接搜索内部数据
  *
@@ -146,22 +146,43 @@ function resolvePresetDataFromDetached(apiId, presetName) {
 
     if (!targetOption) return null;
 
-    // 3) 用 option.value 取预设数据
-    const optValue = targetOption.value;
+    // 3) ⚡ B29 修复：优先通过 pm.getPresetList() 按预设名查内部数据数组
+    //   原代码错误地引用 window.oai_settings.preset_settings_openai（那是字符串，不是数组！）
+    //   正确方式：pm.getPresetList(apiId) → { presets, preset_names } → preset_names[name] → presets[idx]
+    try {
+        const pm0 = getPresetManager(apiId);
+        if (pm0 && typeof pm0.getPresetList === 'function') {
+            const { presets, preset_names } = pm0.getPresetList(apiId);
+            if (presets && preset_names) {
+                let idx = -1;
+                if (Array.isArray(preset_names)) {
+                    idx = preset_names.indexOf(presetName);
+                } else if (typeof preset_names === 'object') {
+                    const v = preset_names[presetName];
+                    if (v !== undefined) idx = v;
+                }
+                if (idx >= 0 && presets[idx] && typeof presets[idx] === 'object' && Object.keys(presets[idx]).length > 0) {
+                    return presets[idx];
+                }
+            }
+        }
+    } catch (_) {}
 
+    // 3b) 回退：用 option.value（对 openai 是数组索引）直接查 presets 数组
+    const optValue = targetOption.value;
     if (apiId === 'openai') {
-        // OpenAI 的 option.value 是 preset_settings_openai 的数组索引
         const idx = parseInt(optValue, 10);
         if (!isNaN(idx)) {
             try {
-                const arr = window.oai_settings && window.oai_settings.preset_settings_openai;
-                if (Array.isArray(arr) && arr[idx] && typeof arr[idx] === 'object') {
-                    return arr[idx]; // 返回引用，由 getPresetSnapshot 负责 cloneDeepSafe
+                const pm0 = getPresetManager(apiId);
+                if (pm0 && typeof pm0.getPresetList === 'function') {
+                    const { presets } = pm0.getPresetList(apiId);
+                    if (Array.isArray(presets) && presets[idx] && typeof presets[idx] === 'object') {
+                        return presets[idx];
+                    }
                 }
             } catch (_) {}
         }
-        // 某些 ST 版本的 value 可能直接是预设名，尝试 findPreset
-        // （但如果 findPreset 能工作，路径 2 就已经成功了，这里只是兜底）
     }
 
     // 4) 对非 openai API：尝试通过暂时插回 option 让 findPreset 工作
@@ -187,16 +208,21 @@ function resolvePresetDataFromDetached(apiId, presetName) {
             }
             try {
                 const found = pm.findPreset(presetName);
-                if (typeof found === 'number') {
-                    // 其他可能用索引的 API
-                    try {
-                        const list = pm.getPresetList && pm.getPresetList(apiId);
-                        if (list && list.presets && list.presets[found]) {
-                            return list.presets[found];
-                        }
-                    } catch (_) {}
-                } else if (found && typeof found === 'object' && Object.keys(found).length > 0) {
-                    return found;
+                if (found !== undefined && found !== null) {
+                    // findPreset 返回 option.val()（字符串），对 openai 是数组索引如 "15"
+                    const idx = parseInt(String(found), 10);
+                    if (!isNaN(idx)) {
+                        try {
+                            const list = pm.getPresetList && pm.getPresetList(apiId);
+                            if (list && list.presets && list.presets[idx]) {
+                                return list.presets[idx];
+                            }
+                        } catch (_) {}
+                    }
+                    // 对非 openai API：found 可能本身就是可用的对象（理论上不会，但防御性保留）
+                    if (found && typeof found === 'object' && Object.keys(found).length > 0) {
+                        return found;
+                    }
                 }
             } finally {
                 // 还原：把临时插回的 option 移除
@@ -218,6 +244,10 @@ export async function initPresetTakeover() {
         logger.debug('Takeover already initialized, skip');
         return;
     }
+
+    // ⚡ P8 修复：立即设置 _initialized = true（claim-first），
+    //   防止并发调用导致事件被重复订阅。失败时在 catch 中回滚。
+    _initialized = true;
 
     logger.info('[Takeover] Starting initialization...');
 
@@ -308,8 +338,6 @@ export async function initPresetTakeover() {
 
     setupDocObserver();
 
-    _initialized = true;
-
     // 立即应用一次 + 800ms 兜底（让 ST 完成首次渲染）
     // 注意：不再 4 次密集 refresh —— 那是导致刷新风暴的主因之一
     refresh();
@@ -363,10 +391,18 @@ function computeSelectFingerprint(select) {
     const opts = select.options;
     const len = opts ? opts.length : 0;
     if (len === 0) return `${select.id || ''}::0`;
-    const firstV = opts[0]?.value || '';
-    const lastV = opts[len - 1]?.value || '';
-    const midV = opts[Math.floor(len / 2)]?.value || '';
-    return `${select.id || select.getAttribute('data-preset-manager-for') || ''}::${len}::${firstV}::${midV}::${lastV}::${select.value}`;
+    // ⚡ P7 修复：用 textContent（或 data-pas-orig-text）计算指纹，而非 option.value
+    //   原因：OpenAI 的 option.value 是数组索引（如 "15"），ST 重新渲染 select 时
+    //   索引可能不变但内容变了 → 用 value 计算的指纹会漏检变化。
+    //   textContent 是真实预设名，能准确反映内容是否变化。
+    const getText = (opt) => {
+        if (!opt) return '';
+        return opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR) || opt.textContent || '';
+    };
+    const firstT = getText(opts[0]);
+    const lastT = getText(opts[len - 1]);
+    const midT = getText(opts[Math.floor(len / 2)]);
+    return `${select.id || select.getAttribute('data-preset-manager-for') || ''}::${len}::${firstT}::${midT}::${lastT}::${select.value}`;
 }
 
 /**
@@ -677,17 +713,23 @@ function onSelectChangeIntercept(e) {
     // 查找该系列的"用户指定默认版本"
     const seriesDefaults = settings.seriesDefaultApply || {};
     const targetName = seriesDefaults[seriesKey];
-    // 如果没指定，或者指定的就是当前 value，啥也不做
-    if (!targetName || targetName === value) {
+    // ⚡ B29 修复：value 是 option.value（openai 为数组索引如 "15"），不能与预设名直接比较
+    //   需要用当前选中 option 的真实预设名来判断
+    const currentRealName = (opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR) || opt.textContent || '').trim();
+    if (!targetName || targetName === currentRealName) {
         return;
     }
 
-    // 检查目标版本是否仍存在（在被摘除列表中）
+    // 检查目标版本是否仍存在（在被摘除列表中或 DOM 中）
     const apiId = getApiIdOfSelect(select);
     const detached = _detachedOptions.get(apiId) || [];
-    const exists = detached.some(d => d.option.value === targetName)
-        || Array.from(select.options).some(o => o.value === targetName);
-    if (!exists) {
+    // ⚡ B29 修复：用 textContent 匹配预设名（option.value 对 openai 是数组索引）
+    const targetDetachedEntry = detached.find(d => (d.option.textContent || '').trim() === targetName);
+    const existsInSelect = Array.from(select.options).some(o => {
+        const origText = o.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
+        return (origText || o.textContent || '').trim() === targetName;
+    });
+    if (!targetDetachedEntry && !existsInSelect) {
         logger.warn(`takeover: configured default version "${targetName}" missing for series "${seriesKey}"`);
         return;
     }
@@ -695,6 +737,20 @@ function onSelectChangeIntercept(e) {
     // 阻止默认事件传播，先不让 ST 加载代表预设
     e.stopImmediatePropagation();
     e.preventDefault();
+
+    // ⚡ B29 修复：selectPresetSafe 内部的 findPreset 搜 DOM options，
+    //   但目标版本的 option 已被 detach → findPreset 返回 undefined。
+    //   先暂时把目标 option 还原到 select 中，让 findPreset 能找到。
+    let _tempAttached = false;
+    if (targetDetachedEntry && !targetDetachedEntry.option.parentNode) {
+        _selfMutating = true;
+        try {
+            select.appendChild(targetDetachedEntry.option);
+            _tempAttached = true;
+        } finally {
+            _selfMutating = false;
+        }
+    }
 
     // 通过 PresetManager 直接应用目标预设
     _selfChangingValue = true;
@@ -707,6 +763,15 @@ function onSelectChangeIntercept(e) {
         }
     } finally {
         _selfChangingValue = false;
+        // 还原：如果暂时挂回了 option，移除它（下次 refresh 会正式处理）
+        if (_tempAttached && targetDetachedEntry.option.parentNode === select) {
+            _selfMutating = true;
+            try {
+                select.removeChild(targetDetachedEntry.option);
+            } finally {
+                _selfMutating = false;
+            }
+        }
     }
 }
 
@@ -985,8 +1050,14 @@ export function listSeriesFromNativeSelects() {
         const apiId = getApiIdOfSelect(select);
 
         // 收集 select 中可见 option + 已被摘除的 option，合并出"完整列表"
-        const visible = Array.from(select.options || []).map(o => o.value || o.textContent).filter(Boolean);
-        const detached = (_detachedOptions.get(apiId) || []).map(d => d.option.value || d.option.textContent).filter(Boolean);
+        // ⚡ B29 修复：用 textContent 作为预设名（option.value 对 openai 是数组索引）
+        const visible = Array.from(select.options || []).map(o => {
+            const orig = o.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
+            return (orig || o.textContent || '').trim();
+        }).filter(Boolean);
+        const detached = (_detachedOptions.get(apiId) || []).map(d =>
+            (d.option.textContent || '').trim()
+        ).filter(Boolean);
         const all = [...new Set([...visible, ...detached])];
 
         const seriesGroups = new Map();

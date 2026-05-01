@@ -876,6 +876,38 @@ function renderSeriesView(filtered) {
         }
     }
 
+    // ⚡ B29 修复：过滤掉旧的"系列名快照"——
+    //   旧版本的 seedSnapshotsIfNeeded 曾把代表 option 的系列名（如"梦境思客"）
+    //   当成预设名存入快照。这些快照会在面板中显示为"二级条目中混入一级名称"。
+    //   判断条件：版本的 presetName 精确等于其所在系列的 seriesKey，
+    //             且该 presetName 不是真正的原生预设（不在 allEntries 中）
+    try {
+        for (const [seriesKey, series] of seriesMap) {
+            if (!series.versions || series.versions.length <= 1) continue;
+            series.versions = series.versions.filter(ver => {
+                if (ver.presetName !== seriesKey) return true; // 名字不同于系列名 → 保留
+                // presetName === seriesKey 时，检查是否真的是原生预设
+                const nativeKey = `${currentApi}::${ver.presetName}`;
+                if (allEntries && allEntries.has(nativeKey)) return true; // 原生存在 → 保留
+                // 不在原生列表中 → 是旧的系列名幽灵条目，但保留其快照（合并到同系列其他版本）
+                if (ver.snapshots && ver.snapshots.length > 0) {
+                    // 把幽灵版本的快照分配到系列中的第一个真实版本
+                    const realVer = series.versions.find(v => v.presetName !== seriesKey);
+                    if (realVer) {
+                        realVer.snapshots.push(...ver.snapshots);
+                        realVer.snapshotCount = (realVer.snapshotCount || 0) + ver.snapshots.length;
+                        realVer.totalSize = (realVer.totalSize || 0) + (ver.totalSize || 0);
+                        if (ver.latestTime > realVer.latestTime) realVer.latestTime = ver.latestTime;
+                    }
+                }
+                return false; // 过滤掉幽灵版本
+            });
+            series.versionCount = series.versions.length;
+        }
+    } catch (e) {
+        logger.debug('renderSeriesView ghost version cleanup failed:', e);
+    }
+
     // 防御性清理：删除 versions 为空的系列（理论不应该有）
     for (const [k, s] of seriesMap) {
         if (!s.versions || s.versions.length === 0) {
@@ -998,7 +1030,7 @@ function renderSeriesGroup(info) {
             <span class="pas-series-version-pill" title="${escapeAttr(t('Grouping Series Header Versions', { count: info.versionCount }))}">
                 <i class="fa-solid fa-code-branch"></i> ${info.versionCount}
             </span>
-            ${isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : ''}
+            ${isCurrent ? `<span class="pas-tag pas-tag-current-series" title="${escapeAttr(t('Current Preset'))}"><i class="fa-solid fa-circle-dot"></i></span>` : ''}
         </div>
         <div class="pas-series-header-row pas-series-header-row-meta">
             <span class="pas-series-snapshots" title="${escapeAttr(t('Grouping Series Header Snapshots', { count: info.snapshotCount }))}">
