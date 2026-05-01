@@ -3245,3 +3245,696 @@
         padding: 7px 10px;
     }
 }
+
+/* =========================================================
+ * 亮色主题（Light Theme）覆盖
+ * ---------------------------------------------------------
+ * SillyTavern 使用 body.light class 表示亮色主题。
+ * 所有暗色主题下使用 rgba(255,255,255,...) 半透明白色的地方
+ * 在亮色背景上不可见，需要翻转为 rgba(0,0,0,...) 半透明黑色。
+ *
+ * 策略：
+ *  1. 覆盖 CSS 自定义变量（--pas-*），一处改全局
+ *  2. 逐一覆盖硬编码 rgba(255,255,255,...) 的选择器
+ *  3. 调整暗色主题专用的饱和色（标签/徽章等）使其在亮色背景上可读
+ * ========================================================= */
+
+/* --- 1. 核心 CSS 变量覆盖 --- */
+body.light .pas-panel,
+body.light .pas-view-popup,
+body.light .pas-diff-popup,
+body.light .pas-grouping-manager,
+body.light .pas-firstscan,
+body.light .pas-dd-wrapper,
+[data-theme="light"] .pas-panel,
+[data-theme="light"] .pas-view-popup,
+[data-theme="light"] .pas-diff-popup,
+[data-theme="light"] .pas-grouping-manager,
+[data-theme="light"] .pas-firstscan,
+[data-theme="light"] .pas-dd-wrapper {
+    /* 文字 */
+    --pas-fg:        var(--SmartThemeBodyColor, #1a1a2e);
+    --pas-fg-muted:  rgba(0, 0, 0, 0.60);
+    --pas-fg-3:      rgba(0, 0, 0, 0.45);
+    --pas-fg-faint:  rgba(0, 0, 0, 0.36);
+
+    /* 表面 —— 半透明黑色在白色底上形成浅灰 */
+    --pas-surface-0: rgba(0, 0, 0, 0.02);
+    --pas-surface-1: rgba(0, 0, 0, 0.04);
+    --pas-surface-2: rgba(0, 0, 0, 0.07);
+    --pas-surface-3: rgba(0, 0, 0, 0.06);
+    --pas-surface-4: rgba(0, 0, 0, 0.05);
+
+    /* 边框 */
+    --pas-border:        var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.12));
+    --pas-border-strong: rgba(0, 0, 0, 0.22);
+    --pas-border-focus:  rgba(124, 77, 255, 0.50);
+
+    /* 强调色 —— 加深以便在亮色背景上可读 */
+    --pas-accent:      var(--SmartThemeQuoteColor, #7c3aed);
+    --pas-accent-soft: rgba(124, 58, 237, 0.10);
+
+    /* 语义色 —— 在亮色背景上加深饱和度 */
+    --pas-c-add:    #16a34a;
+    --pas-c-del:    #dc2626;
+    --pas-c-edit:   #9333ea;
+    --pas-c-info:   #2563eb;
+    --pas-c-warn:   #d97706;
+    --pas-c-toggle: #737373;
+    --pas-c-pin:    #d97706;
+    --pas-c-a:      #2563eb;
+    --pas-c-b:      #ea580c;
+}
+
+/* --- 2. 修改摘要区域 --- */
+body.light .pas-summary-line,
+[data-theme="light"] .pas-summary-line {
+    background: rgba(0, 0, 0, 0.02);
+}
+body.light .pas-summary-line-text code,
+[data-theme="light"] .pas-summary-line-text code {
+    background: rgba(0, 0, 0, 0.06);
+}
+body.light .pas-summary-line-text code.pas-summary-from,
+[data-theme="light"] .pas-summary-line-text code.pas-summary-from {
+    color: #b91c1c;
+}
+body.light .pas-summary-line-text code.pas-summary-to,
+[data-theme="light"] .pas-summary-line-text code.pas-summary-to {
+    color: #15803d;
+}
+body.light .pas-summary-line-toggle-off,
+[data-theme="light"] .pas-summary-line-toggle-off {
+    background: rgba(0, 0, 0, 0.02);
+}
+body.light .pas-card-summary.pas-summary-empty,
+body.light .pas-card-summary.pas-summary-first,
+[data-theme="light"] .pas-card-summary.pas-summary-empty,
+[data-theme="light"] .pas-card-summary.pas-summary-first {
+    background: rgba(0, 0, 0, 0.02);
+}
+body.light .pas-card-summary.pas-summary-first,
+[data-theme="light"] .pas-card-summary.pas-summary-first {
+    color: #2563eb;
+}
+
+/* --- 3. Tab 切换 --- */
+body.light .pas-tab-active,
+[data-theme="light"] .pas-tab-active {
+    box-shadow:
+        0 0 0 1px var(--pas-border-strong) inset,
+        0 1px 0 rgba(255, 255, 255, 0.65) inset,
+        0 1px 3px rgba(0, 0, 0, 0.10);
+}
+body.light .pas-tab-active:hover,
+[data-theme="light"] .pas-tab-active:hover {
+    background: linear-gradient(180deg,
+        rgba(0, 0, 0, 0.04) 0%,
+        rgba(0, 0, 0, 0.02) 100%);
+}
+body.light .pas-tab-badge,
+[data-theme="light"] .pas-tab-badge {
+    background: rgba(0, 0, 0, 0.08);
+}
+body.light .pas-tab-active .pas-tab-badge,
+[data-theme="light"] .pas-tab-active .pas-tab-badge {
+    background: var(--pas-accent);
+    color: white;
+}
+
+/* --- 4. 滚动条 --- */
+body.light .pas-snapshot-list::-webkit-scrollbar-thumb,
+body.light .pas-log-view::-webkit-scrollbar-thumb,
+body.light .pas-view-json::-webkit-scrollbar-thumb,
+body.light .pas-diff-body::-webkit-scrollbar-thumb,
+body.light .pas-diff-content-table::-webkit-scrollbar-thumb,
+[data-theme="light"] .pas-snapshot-list::-webkit-scrollbar-thumb,
+[data-theme="light"] .pas-log-view::-webkit-scrollbar-thumb,
+[data-theme="light"] .pas-view-json::-webkit-scrollbar-thumb,
+[data-theme="light"] .pas-diff-body::-webkit-scrollbar-thumb,
+[data-theme="light"] .pas-diff-content-table::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.20);
+}
+body.light .pas-snapshot-list::-webkit-scrollbar-thumb:hover,
+body.light .pas-log-view::-webkit-scrollbar-thumb:hover,
+body.light .pas-view-json::-webkit-scrollbar-thumb:hover,
+body.light .pas-diff-body::-webkit-scrollbar-thumb:hover,
+body.light .pas-diff-content-table::-webkit-scrollbar-thumb:hover,
+[data-theme="light"] .pas-snapshot-list::-webkit-scrollbar-thumb:hover,
+[data-theme="light"] .pas-log-view::-webkit-scrollbar-thumb:hover,
+[data-theme="light"] .pas-view-json::-webkit-scrollbar-thumb:hover,
+[data-theme="light"] .pas-diff-body::-webkit-scrollbar-thumb:hover,
+[data-theme="light"] .pas-diff-content-table::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.35);
+}
+
+/* --- 5. 预设分组 --- */
+body.light .pas-preset-api,
+[data-theme="light"] .pas-preset-api {
+    background: rgba(0, 0, 0, 0.06);
+}
+body.light .pas-preset-count,
+[data-theme="light"] .pas-preset-count {
+    background: rgba(0, 0, 0, 0.08);
+}
+body.light .pas-preset-body,
+[data-theme="light"] .pas-preset-body {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+/* --- 6. 系列卡 --- */
+body.light .pas-series-group,
+[data-theme="light"] .pas-series-group {
+    border-left-color: rgba(147, 51, 234, 0.50);
+}
+body.light .pas-series-group:hover,
+[data-theme="light"] .pas-series-group:hover {
+    border-left-color: rgba(147, 51, 234, 0.75);
+}
+body.light .pas-series-version-pill,
+[data-theme="light"] .pas-series-version-pill {
+    background: rgba(147, 51, 234, 0.10);
+    border-color: rgba(147, 51, 234, 0.30);
+    color: #7c3aed;
+}
+body.light .pas-series-current .pas-series-version-pill,
+[data-theme="light"] .pas-series-current .pas-series-version-pill {
+    background: rgba(217, 119, 6, 0.12);
+    border-color: rgba(217, 119, 6, 0.35);
+    color: #b45309;
+}
+body.light .pas-series-icon,
+[data-theme="light"] .pas-series-icon {
+    color: rgba(147, 51, 234, 0.80);
+}
+body.light .pas-series-body,
+[data-theme="light"] .pas-series-body {
+    background: rgba(0, 0, 0, 0.03);
+}
+body.light .pas-series-subtitle,
+[data-theme="light"] .pas-series-subtitle {
+    color: rgba(0, 0, 0, 0.45);
+}
+
+/* --- 7. 版本卡 --- */
+body.light .pas-version-group.pas-version-archived,
+[data-theme="light"] .pas-version-group.pas-version-archived {
+    background: rgba(0, 0, 0, 0.015);
+}
+body.light .pas-version-api,
+[data-theme="light"] .pas-version-api {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.light .pas-version-pill,
+[data-theme="light"] .pas-version-pill {
+    color: #2563eb;
+    background: rgba(37, 99, 235, 0.10);
+    border-color: rgba(37, 99, 235, 0.25);
+}
+body.light .pas-version-body,
+[data-theme="light"] .pas-version-body {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+/* --- 8. 标签/徽章（亮色背景上加深颜色） --- */
+body.light .pas-tag-current,
+[data-theme="light"] .pas-tag-current {
+    background: rgba(217, 119, 6, 0.12);
+    color: #b45309;
+    border-color: rgba(217, 119, 6, 0.40);
+}
+body.light .pas-tag-current::before,
+[data-theme="light"] .pas-tag-current::before {
+    background: #d97706;
+}
+body.light .pas-tag-auto,
+[data-theme="light"] .pas-tag-auto {
+    background: rgba(37, 99, 235, 0.10);
+    border-color: rgba(37, 99, 235, 0.35);
+    color: #1d4ed8;
+}
+body.light .pas-tag-switch_guard,
+[data-theme="light"] .pas-tag-switch_guard {
+    background: rgba(22, 163, 74, 0.10);
+    border-color: rgba(22, 163, 74, 0.35);
+    color: #15803d;
+}
+body.light .pas-tag-manual,
+[data-theme="light"] .pas-tag-manual {
+    background: rgba(147, 51, 234, 0.10);
+    border-color: rgba(147, 51, 234, 0.35);
+    color: #7c3aed;
+}
+body.light .pas-tag-archived,
+[data-theme="light"] .pas-tag-archived {
+    background: rgba(168, 85, 247, 0.10);
+    color: #7c3aed;
+    border-color: rgba(168, 85, 247, 0.30);
+}
+body.light .pas-tag-archived::before,
+[data-theme="light"] .pas-tag-archived::before {
+    background: #9333ea;
+}
+body.light .pas-tag-manual-override,
+[data-theme="light"] .pas-tag-manual-override {
+    background: rgba(147, 51, 234, 0.10);
+    border-color: rgba(147, 51, 234, 0.35);
+    color: #7c3aed;
+}
+body.light .pas-tag-empty,
+[data-theme="light"] .pas-tag-empty {
+    background: rgba(0, 0, 0, 0.03);
+    color: rgba(0, 0, 0, 0.36);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+/* --- 9. 开关 --- */
+body.light .pas-switch-slider,
+[data-theme="light"] .pas-switch-slider {
+    background-color: rgba(0, 0, 0, 0.18);
+}
+body.light .pas-switch-slider::before,
+[data-theme="light"] .pas-switch-slider::before {
+    background-color: white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.20);
+}
+
+/* --- 10. 首次扫描预览 --- */
+body.light .pas-firstscan-item,
+[data-theme="light"] .pas-firstscan-item {
+    background: rgba(0, 0, 0, 0.04);
+}
+body.light .pas-firstscan-group-count,
+[data-theme="light"] .pas-firstscan-group-count {
+    background: rgba(147, 51, 234, 0.10);
+    color: #7c3aed;
+}
+body.light .pas-firstscan-group,
+[data-theme="light"] .pas-firstscan-group {
+    border-left-color: rgba(147, 51, 234, 0.50);
+}
+body.light .pas-firstscan-group:hover,
+[data-theme="light"] .pas-firstscan-group:hover {
+    border-left-color: rgba(147, 51, 234, 0.75);
+}
+body.light .pas-firstscan-group-name i,
+[data-theme="light"] .pas-firstscan-group-name i {
+    color: rgba(147, 51, 234, 0.80);
+}
+
+/* --- 11. Diff 弹窗 --- */
+body.light .pas-diff-section-head,
+[data-theme="light"] .pas-diff-section-head {
+    background: rgba(0, 0, 0, 0.03);
+}
+body.light .pas-diff-section-head:hover,
+[data-theme="light"] .pas-diff-section-head:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+body.light .pas-diff-section-count,
+[data-theme="light"] .pas-diff-section-count {
+    background: rgba(0, 0, 0, 0.07);
+}
+body.light .pas-diff-prompt-header,
+[data-theme="light"] .pas-diff-prompt-header {
+    background: rgba(0, 0, 0, 0.02);
+}
+body.light .pas-diff-prompt-fields,
+[data-theme="light"] .pas-diff-prompt-fields {
+    background: rgba(0, 0, 0, 0.01);
+}
+body.light .pas-diff-prompt-role,
+[data-theme="light"] .pas-diff-prompt-role {
+    background: rgba(37, 99, 235, 0.10);
+    color: #1d4ed8;
+    border-color: rgba(37, 99, 235, 0.30);
+}
+body.light .pas-diff-badge-unchanged,
+[data-theme="light"] .pas-diff-badge-unchanged {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.light .pas-diff-badge-modified,
+[data-theme="light"] .pas-diff-badge-modified {
+    background: rgba(217, 119, 6, 0.12);
+    color: #b45309;
+    border-color: rgba(217, 119, 6, 0.35);
+}
+body.light .pas-diff-badge-added,
+[data-theme="light"] .pas-diff-badge-added {
+    background: rgba(22, 163, 74, 0.12);
+    color: #15803d;
+    border-color: rgba(22, 163, 74, 0.35);
+}
+body.light .pas-diff-badge-deleted,
+[data-theme="light"] .pas-diff-badge-deleted {
+    background: rgba(220, 38, 38, 0.12);
+    color: #b91c1c;
+    border-color: rgba(220, 38, 38, 0.35);
+}
+
+/* Diff 值颜色 */
+body.light .pas-diff-val-old,
+[data-theme="light"] .pas-diff-val-old {
+    background: rgba(220, 38, 38, 0.12);
+    color: #991b1b;
+    border-color: rgba(220, 38, 38, 0.15);
+}
+body.light .pas-diff-val-new,
+[data-theme="light"] .pas-diff-val-new {
+    background: rgba(22, 163, 74, 0.12);
+    color: #166534;
+    border-color: rgba(22, 163, 74, 0.15);
+}
+body.light .pas-diff-val-same,
+[data-theme="light"] .pas-diff-val-same {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+/* Diff 行级内容对比 */
+body.light .pas-diff-content-table,
+[data-theme="light"] .pas-diff-content-table {
+    border-color: rgba(0, 0, 0, 0.08);
+}
+body.light .pas-diff-cline,
+[data-theme="light"] .pas-diff-cline {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+body.light .pas-diff-cdel,
+[data-theme="light"] .pas-diff-cdel {
+    background: rgba(220, 38, 38, 0.20);
+    color: #991b1b;
+}
+body.light .pas-diff-cadd,
+[data-theme="light"] .pas-diff-cadd {
+    background: rgba(22, 163, 74, 0.20);
+    color: #166534;
+}
+
+/* Diff 参数/排序行 hover */
+body.light .pas-diff-param-row:hover,
+body.light .pas-diff-order-row:hover,
+[data-theme="light"] .pas-diff-param-row:hover,
+[data-theme="light"] .pas-diff-order-row:hover {
+    background: rgba(0, 0, 0, 0.03);
+}
+body.light .pas-diff-param-key,
+[data-theme="light"] .pas-diff-param-key {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+/* Diff pills */
+body.light .pas-diff-pill-edit,
+[data-theme="light"] .pas-diff-pill-edit {
+    background: rgba(217, 119, 6, 0.10);
+    color: #b45309;
+    border-color: rgba(217, 119, 6, 0.30);
+}
+body.light .pas-diff-pill-add,
+[data-theme="light"] .pas-diff-pill-add {
+    background: rgba(22, 163, 74, 0.10);
+    color: #15803d;
+    border-color: rgba(22, 163, 74, 0.30);
+}
+body.light .pas-diff-pill-del,
+[data-theme="light"] .pas-diff-pill-del {
+    background: rgba(220, 38, 38, 0.10);
+    color: #b91c1c;
+    border-color: rgba(220, 38, 38, 0.30);
+}
+body.light .pas-diff-pill-settings,
+[data-theme="light"] .pas-diff-pill-settings {
+    background: rgba(37, 99, 235, 0.10);
+    color: #1d4ed8;
+    border-color: rgba(37, 99, 235, 0.30);
+}
+body.light .pas-diff-pill-order,
+[data-theme="light"] .pas-diff-pill-order {
+    background: rgba(147, 51, 234, 0.10);
+    color: #7c3aed;
+    border-color: rgba(147, 51, 234, 0.30);
+}
+
+/* Diff delta 数值 */
+body.light .pas-diff-delta-up,
+[data-theme="light"] .pas-diff-delta-up {
+    color: #15803d;
+    background: rgba(22, 163, 74, 0.10);
+}
+body.light .pas-diff-delta-down,
+[data-theme="light"] .pas-diff-delta-down {
+    color: #b91c1c;
+    background: rgba(220, 38, 38, 0.10);
+}
+
+/* Diff 排序箭头 */
+body.light .pas-diff-order-up,
+[data-theme="light"] .pas-diff-order-up {
+    color: #15803d;
+    background: rgba(22, 163, 74, 0.10);
+}
+body.light .pas-diff-order-down,
+[data-theme="light"] .pas-diff-order-down {
+    color: #b91c1c;
+    background: rgba(220, 38, 38, 0.10);
+}
+
+/* Diff 参数状态图标 */
+body.light .pas-diff-param-changed .pas-diff-param-status-icon,
+[data-theme="light"] .pas-diff-param-changed .pas-diff-param-status-icon {
+    color: #d97706;
+}
+body.light .pas-diff-param-only-a .pas-diff-param-status-icon,
+[data-theme="light"] .pas-diff-param-only-a .pas-diff-param-status-icon {
+    color: #dc2626;
+}
+body.light .pas-diff-param-only-b .pas-diff-param-status-icon,
+[data-theme="light"] .pas-diff-param-only-b .pas-diff-param-status-icon {
+    color: #16a34a;
+}
+
+/* --- 12. 日志 Tab --- */
+body.light .pas-log-row,
+[data-theme="light"] .pas-log-row {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+body.light .pas-log-row:hover,
+[data-theme="light"] .pas-log-row:hover {
+    background: rgba(0, 0, 0, 0.03);
+}
+body.light .pas-log-level-debug,
+[data-theme="light"] .pas-log-level-debug {
+    color: #64748b;
+    background: rgba(100, 116, 139, 0.10);
+}
+body.light .pas-log-level-info,
+[data-theme="light"] .pas-log-level-info {
+    color: #2563eb;
+    background: rgba(37, 99, 235, 0.10);
+}
+body.light .pas-log-level-success,
+[data-theme="light"] .pas-log-level-success {
+    color: #16a34a;
+    background: rgba(22, 163, 74, 0.10);
+}
+body.light .pas-log-level-warn,
+[data-theme="light"] .pas-log-level-warn {
+    color: #d97706;
+    background: rgba(217, 119, 6, 0.10);
+}
+body.light .pas-log-level-error,
+[data-theme="light"] .pas-log-level-error {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.10);
+}
+body.light .pas-log-filter-debug.pas-filter-active,
+[data-theme="light"] .pas-log-filter-debug.pas-filter-active {
+    background: #64748b;
+    border-color: #64748b;
+    color: white;
+}
+body.light .pas-log-filter-warn.pas-filter-active,
+[data-theme="light"] .pas-log-filter-warn.pas-filter-active {
+    background: #d97706;
+    border-color: #d97706;
+    color: white;
+}
+
+/* --- 13. 自定义下拉组件 --- */
+body.light .pas-dd-trigger,
+[data-theme="light"] .pas-dd-trigger {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.90));
+    border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.15));
+    color: var(--SmartThemeBodyColor, #1a1a2e);
+}
+body.light .pas-dd-trigger:hover,
+[data-theme="light"] .pas-dd-trigger:hover {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: var(--SmartThemeQuoteColor, #7c3aed);
+}
+body.light .pas-dd-chevron,
+[data-theme="light"] .pas-dd-chevron {
+    color: rgba(0, 0, 0, 0.40);
+}
+body.light .pas-dd-trigger:hover .pas-dd-chevron,
+[data-theme="light"] .pas-dd-trigger:hover .pas-dd-chevron {
+    color: var(--SmartThemeQuoteColor, #7c3aed);
+}
+body.light .pas-dd-panel,
+[data-theme="light"] .pas-dd-panel {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.97));
+    border-color: var(--SmartThemeBorderColor, rgba(0, 0, 0, 0.15));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15),
+                0 2px 6px rgba(0, 0, 0, 0.08);
+}
+body.light .pas-dd-panel::-webkit-scrollbar-thumb,
+[data-theme="light"] .pas-dd-panel::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.18);
+}
+body.light .pas-dd-panel::-webkit-scrollbar-thumb:hover,
+[data-theme="light"] .pas-dd-panel::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.30);
+}
+body.light .pas-dd-group,
+[data-theme="light"] .pas-dd-group {
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+body.light .pas-dd-group-header,
+[data-theme="light"] .pas-dd-group-header {
+    color: var(--SmartThemeBodyColor, #1a1a2e);
+}
+body.light .pas-dd-group-header:hover,
+[data-theme="light"] .pas-dd-group-header:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.light .pas-dd-group-chevron,
+[data-theme="light"] .pas-dd-group-chevron {
+    color: rgba(0, 0, 0, 0.35);
+}
+body.light .pas-dd-group-header:hover .pas-dd-group-chevron,
+[data-theme="light"] .pas-dd-group-header:hover .pas-dd-group-chevron {
+    color: rgba(0, 0, 0, 0.60);
+}
+body.light .pas-dd-badge,
+[data-theme="light"] .pas-dd-badge {
+    background: rgba(0, 0, 0, 0.08);
+    color: rgba(0, 0, 0, 0.55);
+}
+body.light .pas-dd-item,
+[data-theme="light"] .pas-dd-item {
+    color: var(--SmartThemeBodyColor, #1a1a2e);
+}
+body.light .pas-dd-item:hover,
+[data-theme="light"] .pas-dd-item:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.light .pas-dd-standalone:hover,
+[data-theme="light"] .pas-dd-standalone:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.light .pas-dd-item--active,
+[data-theme="light"] .pas-dd-item--active {
+    background: rgba(217, 119, 6, 0.08);
+}
+body.light .pas-dd-item--active:hover,
+[data-theme="light"] .pas-dd-item--active:hover {
+    background: rgba(217, 119, 6, 0.14);
+}
+body.light .pas-dd-group-header.pas-dd-group--has-active .pas-dd-series-name,
+[data-theme="light"] .pas-dd-group-header.pas-dd-group--has-active .pas-dd-series-name {
+    color: #b45309;
+}
+body.light .pas-dd-version-tag,
+[data-theme="light"] .pas-dd-version-tag {
+    background: rgba(37, 99, 235, 0.08);
+    color: #2563eb;
+    border-color: rgba(37, 99, 235, 0.20);
+}
+
+/* --- 14. 面板标题图标渐变 --- */
+body.light .pas-panel-title i,
+[data-theme="light"] .pas-panel-title i {
+    background:
+        radial-gradient(circle at 30% 30%,
+            rgba(124, 58, 237, 0.18) 0%,
+            rgba(124, 58, 237, 0.06) 70%,
+            transparent 100%);
+    border-color: rgba(124, 58, 237, 0.25);
+}
+
+/* --- 15. 视图切换按钮 --- */
+body.light .pas-view-btn.pas-view-btn-active,
+[data-theme="light"] .pas-view-btn.pas-view-btn-active {
+    background: var(--pas-accent);
+    color: white;
+}
+body.light .pas-view-btn-active:hover,
+[data-theme="light"] .pas-view-btn-active:hover {
+    background: var(--pas-accent);
+    color: white;
+}
+
+/* --- 16. Diff 行级背景（亮色模式下更鲜明的红/绿底色） --- */
+body.light .pas-diff-cline-del .pas-diff-cline-a,
+[data-theme="light"] .pas-diff-cline-del .pas-diff-cline-a {
+    background: rgba(220, 38, 38, 0.12);
+}
+body.light .pas-diff-cline-del .pas-diff-cline-b,
+[data-theme="light"] .pas-diff-cline-del .pas-diff-cline-b {
+    background: rgba(220, 38, 38, 0.04);
+}
+body.light .pas-diff-cline-add .pas-diff-cline-b,
+[data-theme="light"] .pas-diff-cline-add .pas-diff-cline-b {
+    background: rgba(22, 163, 74, 0.12);
+}
+body.light .pas-diff-cline-add .pas-diff-cline-a,
+[data-theme="light"] .pas-diff-cline-add .pas-diff-cline-a {
+    background: rgba(22, 163, 74, 0.04);
+}
+body.light .pas-diff-cline-moddel,
+[data-theme="light"] .pas-diff-cline-moddel {
+    background: rgba(220, 38, 38, 0.10) !important;
+}
+body.light .pas-diff-cline-modadd,
+[data-theme="light"] .pas-diff-cline-modadd {
+    background: rgba(22, 163, 74, 0.10) !important;
+}
+
+/* --- 17. 关闭按钮 hover 背景 --- */
+body.light .popup:has(.pas-panel) .popup-button-close:hover,
+body.light .popup:has(.pas-view-popup) .popup-button-close:hover,
+body.light .popup:has(.pas-diff-popup) .popup-button-close:hover,
+body.light .popup:has(.pas-grouping-manager) .popup-button-close:hover,
+body.light .popup:has(.pas-firstscan) .popup-button-close:hover,
+[data-theme="light"] .popup:has(.pas-panel) .popup-button-close:hover,
+[data-theme="light"] .popup:has(.pas-view-popup) .popup-button-close:hover,
+[data-theme="light"] .popup:has(.pas-diff-popup) .popup-button-close:hover,
+[data-theme="light"] .popup:has(.pas-grouping-manager) .popup-button-close:hover,
+[data-theme="light"] .popup:has(.pas-firstscan) .popup-button-close:hover {
+    background: rgba(220, 38, 38, 0.10) !important;
+}
+
+/* --- 18. 摘要行语义背景（亮色下调淡） --- */
+body.light .pas-summary-line-add,
+[data-theme="light"] .pas-summary-line-add {
+    background: rgba(22, 163, 74, 0.06);
+}
+body.light .pas-summary-line-del,
+[data-theme="light"] .pas-summary-line-del {
+    background: rgba(220, 38, 38, 0.06);
+}
+body.light .pas-summary-line-edit,
+[data-theme="light"] .pas-summary-line-edit {
+    background: rgba(147, 51, 234, 0.06);
+}
+body.light .pas-summary-line-toggle-on,
+[data-theme="light"] .pas-summary-line-toggle-on {
+    background: rgba(22, 163, 74, 0.05);
+}
+body.light .pas-summary-line-reorder,
+[data-theme="light"] .pas-summary-line-reorder {
+    background: rgba(37, 99, 235, 0.06);
+}
+body.light .pas-summary-line-field,
+[data-theme="light"] .pas-summary-line-field {
+    background: rgba(99, 102, 241, 0.06);
+}
