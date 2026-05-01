@@ -955,6 +955,15 @@ function setIgnoreInput(value, autoResetMs = 5000) {
 }
 
 function bindPresetEvents() {
+    // 防止重复绑定：先清理已有的事件订阅
+    if (_eventUnsubscribers.length > 0) {
+        logger.warn(`bindPresetEvents: clearing ${_eventUnsubscribers.length} existing subscriptions before re-binding`);
+        for (const unsub of _eventUnsubscribers) {
+            try { typeof unsub === 'function' && unsub(); } catch (_) {}
+        }
+        _eventUnsubscribers = [];
+    }
+
     // ----- SETTINGS_UPDATED：所有内部 state 变化的可靠信号 -----
     const settingsUpdated = getEventType('SETTINGS_UPDATED', 'settings_updated');
     _eventUnsubscribers.push(on(settingsUpdated, () => {

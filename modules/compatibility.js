@@ -264,20 +264,50 @@ export function getSelectedPresetName() {
         if (!apiId) return null;
         const pm = getPresetManager(apiId);
         if (!pm) return null;
-        const select = pm.select;
-        if (!select) return null;
-        // 关键：必须显式校验 select.options 是 HTMLOptionsCollection / Array-like，
-        //   且 select.selectedIndex 是有效数字。
-        const options = select.options;
-        if (!options) return null;
-        const idx = select.selectedIndex;
-        if (typeof idx !== 'number' || idx < 0) return null;
-        const selected = options[idx];
-        if (!selected) return null;
-        const text = (typeof selected.textContent === 'string') ? selected.textContent.trim() : '';
-        return text || null;
+
+        // pm.select 是 jQuery 对象，需要 [0] 取原生 HTMLSelectElement
+        const select = pm.select?.[0];
+
+        // 路径 1：从 select.options[selectedIndex] 获取
+        if (select?.options && select.selectedIndex >= 0) {
+            const opt = select.options[select.selectedIndex];
+            if (opt && typeof opt.textContent === 'string') {
+                const name = opt.textContent.trim();
+                if (name) return name;
+            }
+        }
+
+        // 路径 2：从 jQuery .val() + 遍历 option 获取
+        //   preset-takeover 隐藏 select 后 selectedIndex 可能为 -1，
+        //   但 jQuery .val() 仍能拿到内部记录的值
+        if (pm.select) {
+            const val = pm.select.val();
+            if (val != null && val !== '') {
+                // val 是 option.value（通常是数字索引字符串）
+                if (select?.options) {
+                    for (const opt of select.options) {
+                        if (opt.value === String(val)) {
+                            const name = opt.textContent?.trim();
+                            if (name) return name;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 路径 3：从 getPresetList().preset_names 获取
+        //   适用于 select 完全不可用的场景
+        if (typeof pm.getPresetList === 'function') {
+            const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList-name');
+            if (list?.preset_names && list?.settings?.preset != null) {
+                const name = list.preset_names[list.settings.preset];
+                if (name && typeof name === 'string') return name;
+            }
+        }
+
+        return null;
     } catch (e) {
-        logger.debug('[getSelectedPresetName] failed:', e);
+        logger.warn('[getSelectedPresetName] fallback failed:', e?.message);
         return null;
     }
 }

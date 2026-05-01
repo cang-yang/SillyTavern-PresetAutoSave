@@ -551,9 +551,18 @@ function bindDiffEvents(a, b) {
 
     let curA = a, curB = b, curDiff = computeDiff(curA, curB);
 
+    // T8 fix: 使用事件委托处理 section toggle，而非直接绑定到元素上。
+    // 这样即使 refresh() 重建 innerHTML，事件也不会丢失。
+    root.addEventListener('click', (e) => {
+        const toggle = e.target.closest('.pas-diff-section-toggle');
+        if (!toggle) return;
+        const sec = toggle.closest('.pas-diff-section');
+        if (sec) sec.classList.toggle('pas-diff-section-collapsed');
+    });
+
     const refresh = () => {
         if (body) body.innerHTML = bodyHTML(curDiff, !!showAllCb?.checked);
-        bindToggles(root);
+        // T8 fix: 不再需要 bindToggles()，事件委托已在 root 上处理
     };
 
     showAllCb?.addEventListener('change', refresh);
@@ -588,19 +597,6 @@ function bindDiffEvents(a, b) {
             logger.error('Diff export failed:', e);
             toast.error(t('Export Failed'));
         }
-    });
-
-    bindToggles(root);
-}
-
-function bindToggles(root) {
-    root.querySelectorAll('.pas-diff-section-toggle').forEach(h => {
-        if (h._bound) return;
-        h._bound = true;
-        h.addEventListener('click', () => {
-            const sec = h.closest('.pas-diff-section');
-            if (sec) sec.classList.toggle('pas-diff-section-collapsed');
-        });
     });
 }
 

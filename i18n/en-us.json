@@ -186,6 +186,7 @@
     "Diff No Content": "(no content)",
     "Diff Order Enabled": "Enabled",
     "Diff Order Disabled": "Disabled",
+    "Diff Cross Series Not Allowed": "Cannot compare snapshots from different series. Please select two snapshots within the same series.",
 
     "Fallback Polling": "Fallback polling",
     "Fallback Polling Desc": "Periodically scan the preset for changes (off by default; only enable if events miss saves on your ST version)",

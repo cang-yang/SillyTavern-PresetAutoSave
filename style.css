@@ -1972,7 +1972,9 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    max-height: 64vh;
+    /* T9 fix: 放宽 max-height 限制，让弹窗内容可充分滚动 */
+    max-height: calc(80vh - 180px);
+    min-height: 120px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -2051,9 +2053,10 @@
 }
 .pas-diff-prompt-card:last-child { margin-bottom: 0; }
 .pas-diff-prompt-card:hover { border-color: var(--pas-border-strong); }
-.pas-diff-prompt-added { border-left: 3px solid var(--pas-c-add); }
-.pas-diff-prompt-deleted { border-left: 3px solid var(--pas-c-del); }
-.pas-diff-prompt-modified { border-left: 3px solid var(--pas-c-edit); }
+/* T10 增强：prompt card 左侧边框 + 淡色背景呼应状态 */
+.pas-diff-prompt-added { border-left: 3px solid var(--pas-c-add); background: rgba(74, 222, 128, 0.04); }
+.pas-diff-prompt-deleted { border-left: 3px solid var(--pas-c-del); background: rgba(248, 113, 113, 0.04); }
+.pas-diff-prompt-modified { border-left: 3px solid var(--pas-c-edit); background: rgba(251, 191, 36, 0.04); }
 .pas-diff-prompt-unchanged { border-left: 3px solid var(--pas-border); opacity: 0.7; }
 
 .pas-diff-prompt-header {
@@ -2103,20 +2106,24 @@
     text-transform: uppercase;
     border: 1px solid transparent;
 }
+/* T10 增强：badge 颜色更鲜明 */
 .pas-diff-badge-modified {
-    background: rgba(192, 132, 252, 0.16);
-    color: #d8b4fe;
-    border-color: rgba(192, 132, 252, 0.40);
+    background: rgba(251, 191, 36, 0.22);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.45);
+    font-weight: 700;
 }
 .pas-diff-badge-added {
-    background: rgba(74, 222, 128, 0.16);
-    color: #86efac;
-    border-color: rgba(74, 222, 128, 0.40);
+    background: rgba(74, 222, 128, 0.22);
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.45);
+    font-weight: 700;
 }
 .pas-diff-badge-deleted {
-    background: rgba(248, 113, 113, 0.16);
-    color: #fca5a5;
-    border-color: rgba(248, 113, 113, 0.40);
+    background: rgba(248, 113, 113, 0.22);
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.45);
+    font-weight: 700;
 }
 .pas-diff-badge-unchanged {
     background: rgba(255, 255, 255, 0.05);
@@ -2151,21 +2158,25 @@
     margin: 0 2px;
     flex-shrink: 0;
 }
+/* T10 增强：参数值 old/new 背景更醒目 */
 .pas-diff-val-old {
     font-family: 'SF Mono', Consolas, monospace;
     font-size: 0.92em;
     padding: 1px 5px;
     border-radius: 3px;
-    background: rgba(239, 68, 68, 0.10);
-    color: rgba(248, 180, 180, 0.95);
+    background: rgba(239, 68, 68, 0.18);
+    color: #fca5a5;
+    text-decoration: line-through;
+    text-decoration-color: rgba(252, 165, 165, 0.5);
 }
 .pas-diff-val-new {
     font-family: 'SF Mono', Consolas, monospace;
     font-size: 0.92em;
     padding: 1px 5px;
     border-radius: 3px;
-    background: rgba(74, 222, 128, 0.10);
-    color: rgba(170, 230, 170, 0.95);
+    background: rgba(74, 222, 128, 0.18);
+    color: #86efac;
+    font-weight: 600;
 }
 .pas-diff-val-same {
     font-family: 'SF Mono', Consolas, monospace;
@@ -2240,37 +2251,39 @@
 .pas-diff-cline-same .pas-diff-cline-b {
     background: transparent;
 }
-/* 删除行 */
+/* T10 增强：删除行 — 更明显的红色背景 */
 .pas-diff-cline-del .pas-diff-cline-a {
-    background: rgba(239, 68, 68, 0.10);
+    background: rgba(239, 68, 68, 0.18);
 }
 .pas-diff-cline-del .pas-diff-cline-b {
-    background: rgba(239, 68, 68, 0.03);
+    background: rgba(239, 68, 68, 0.04);
 }
-/* 新增行 */
+/* T10 增强：新增行 — 更明显的绿色背景 */
 .pas-diff-cline-add .pas-diff-cline-b {
-    background: rgba(74, 222, 128, 0.10);
+    background: rgba(74, 222, 128, 0.18);
 }
 .pas-diff-cline-add .pas-diff-cline-a {
-    background: rgba(74, 222, 128, 0.03);
+    background: rgba(74, 222, 128, 0.04);
 }
-/* 修改行 */
+/* T10 增强：修改行 — 更强的背景对比 */
 .pas-diff-cline-moddel {
-    background: rgba(239, 68, 68, 0.08) !important;
+    background: rgba(239, 68, 68, 0.14) !important;
 }
 .pas-diff-cline-modadd {
-    background: rgba(74, 222, 128, 0.08) !important;
+    background: rgba(74, 222, 128, 0.14) !important;
 }
-/* 字符级高亮 */
+/* T10 增强：字符级高亮 — 更高对比度 + 删除线 */
 .pas-diff-cdel {
-    background: rgba(239, 68, 68, 0.30);
+    background: rgba(239, 68, 68, 0.40);
     color: #fca5a5;
     border-radius: 2px;
     padding: 0 1px;
+    text-decoration: line-through;
+    text-decoration-color: rgba(252, 165, 165, 0.6);
 }
 .pas-diff-cadd {
-    background: rgba(74, 222, 128, 0.30);
-    color: #bbf7d0;
+    background: rgba(74, 222, 128, 0.40);
+    color: #86efac;
     border-radius: 2px;
     padding: 0 1px;
 }
@@ -2951,18 +2964,29 @@
     background: rgba(255, 255, 255, 0.06);
 }
 
-/* --- 选中态 --- */
+/* --- 选中态（T6 fix: 金色高亮，明确区分当前预设） --- */
 .pas-dd-item--active {
-    border-left-color: var(--SmartThemeQuoteColor, #a78bfa);
-    background: rgba(167, 139, 250, 0.08);
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.10);
+    font-weight: 600;
 }
 .pas-dd-item--active:hover {
-    background: rgba(167, 139, 250, 0.12);
+    background: rgba(245, 158, 11, 0.16);
+}
+.pas-dd-item--active .pas-dd-item-name::before {
+    content: "●";
+    margin-right: 6px;
+    font-size: 0.6em;
+    vertical-align: middle;
+    color: #f59e0b;
 }
 
-/* --- 默认预设标记 --- */
-.pas-dd-item--default {
-    /* 通过 default-badge 显示，无需额外卡片样式 */
+/* --- 分组头含当前预设时的标记 --- */
+.pas-dd-group-header.pas-dd-group--has-active {
+    border-left: 3px solid rgba(245, 158, 11, 0.55);
+}
+.pas-dd-group-header.pas-dd-group--has-active .pas-dd-series-name {
+    color: rgba(252, 211, 77, 1);
 }
 
 /* --- 独立预设（无分组） --- */
@@ -2975,8 +2999,8 @@
     background: rgba(255, 255, 255, 0.06);
 }
 .pas-dd-standalone.pas-dd-item--active {
-    border-left-color: var(--SmartThemeQuoteColor, #a78bfa);
-    background: rgba(167, 139, 250, 0.08);
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.10);
 }
 
 /* --- 条目名称 --- */

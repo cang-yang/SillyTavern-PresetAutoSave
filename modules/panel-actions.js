@@ -32,6 +32,8 @@ import { showDiffPopup } from './diff-viewer.js';
 import {
     parsePresetName,
     groupNamesBySeries,
+    getSeriesInfo,
+    normalizeSeriesKey,
 } from './preset-grouping.js';
 import {
     escapeHtml, formatTime,
@@ -525,6 +527,20 @@ export async function onStartDiff(panelCtx) {
         toast.error(t('Snapshot Not Found'));
         return;
     }
+
+    // T11: 限制对比只能在同系列（same series）内进行
+    const settings = getSettings();
+    const overrides = settings.groupingManualOverrides || {};
+    const excluded = settings.groupingExcluded || {};
+    const infoA = getSeriesInfo(snapA.presetName, overrides, excluded);
+    const infoB = getSeriesInfo(snapB.presetName, overrides, excluded);
+    const seriesA = normalizeSeriesKey(infoA.series || snapA.presetName);
+    const seriesB = normalizeSeriesKey(infoB.series || snapB.presetName);
+    if (seriesA !== seriesB) {
+        toast.warning(t('Diff Cross Series Not Allowed'));
+        return;
+    }
+
     await showDiffPopup(snapA, snapB);
 }
 

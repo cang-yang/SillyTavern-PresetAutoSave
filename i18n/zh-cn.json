@@ -186,6 +186,7 @@
     "Diff No Content": "（无内容）",
     "Diff Order Enabled": "已启用",
     "Diff Order Disabled": "已禁用",
+    "Diff Cross Series Not Allowed": "只能对比同一系列组内的快照，请选择同系列的两个快照。",
 
     "Fallback Polling": "兜底轮询",
     "Fallback Polling Desc": "定期扫描预设是否变化（默认关闭，仅当事件触发不可靠时再开启）",

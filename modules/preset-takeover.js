@@ -30,6 +30,7 @@ import {
     getSeriesInfo,
     pickRepresentativeVersion,
     pickLatestVersion,
+    normalizeSeriesKey,
 } from './preset-grouping.js';
 import {
     initArchiveStore,
@@ -429,8 +430,9 @@ function renderDropdownContent(panel, select, apiId, overrides, excluded, series
 
     // 收集有效预设名
 
-    // 按系列分组
-    const seriesGroups = new Map();
+    // 按系列分组（T4 fix: 使用 normalizeSeriesKey 确保与历史面板分组一致）
+    const seriesGroups = new Map();          // normKey → items[]
+    const seriesDisplayNames = new Map();    // normKey → 首次出现的原始大小写名
     const standaloneOptions = []; // 不参与分组的
 
     for (const option of optionList) {
@@ -449,12 +451,14 @@ function renderDropdownContent(panel, select, apiId, overrides, excluded, series
         }
 
         const info = getSeriesInfo(realName, overrides, excluded);
-        const seriesKey = info.series || realName;
+        const rawSeriesKey = info.series || realName;
+        const normKey = normalizeSeriesKey(rawSeriesKey);
 
-        if (!seriesGroups.has(seriesKey)) {
-            seriesGroups.set(seriesKey, []);
+        if (!seriesGroups.has(normKey)) {
+            seriesGroups.set(normKey, []);
+            seriesDisplayNames.set(normKey, rawSeriesKey); // 保留首次出现的大小写形式
         }
-        seriesGroups.get(seriesKey).push({
+        seriesGroups.get(normKey).push({
             presetName: realName,
             value,
             version: info.version,
@@ -471,13 +475,14 @@ function renderDropdownContent(panel, select, apiId, overrides, excluded, series
         a[0].localeCompare(b[0])
     );
 
-    for (const [seriesKey, items] of sortedSeries) {
+    for (const [normKey, items] of sortedSeries) {
+        const displayName = seriesDisplayNames.get(normKey) || normKey;
+
         // 单版本系列 → 作为独立项
         if (items.length === 1) {
             const it = items[0];
             const isActive = it.value === currentValue;
-            const isDefault = seriesDefaults[seriesKey] === it.presetName;
-            html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}${isDefault ? ' pas-dd-item--default' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+            html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
                 <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
             </div>`;
             continue;
@@ -487,13 +492,12 @@ function renderDropdownContent(panel, select, apiId, overrides, excluded, series
         // 版本按版本号倒序（最新在前）
         items.sort((a, b) => _compareVersionInline(b.version, a.version));
 
-        // 判断默认版本
-        const defaultPresetName = seriesDefaults[seriesKey] || items[0]?.presetName || '';
         const hasActiveInGroup = items.some(it => it.value === currentValue);
 
-        html += `<div class="pas-dd-group" data-series-key="${escapeAttr(seriesKey)}">
+        // T7: 移除 ⭐ 默认预设标记；T5: group-body 默认 display:none（收起）
+        html += `<div class="pas-dd-group" data-series-key="${escapeAttr(normKey)}">
             <div class="pas-dd-group-header${hasActiveInGroup ? ' pas-dd-group--has-active' : ''}">
-                <span class="pas-dd-series-name">${escapeHtml(seriesKey)}</span>
+                <span class="pas-dd-series-name">${escapeHtml(displayName)}</span>
                 <span class="pas-dd-badge pas-dd-version-count">${items.length}</span>
                 <i class="fas fa-chevron-right pas-dd-group-chevron"></i>
             </div>
@@ -501,11 +505,9 @@ function renderDropdownContent(panel, select, apiId, overrides, excluded, series
 
         for (const it of items) {
             const isActive = it.value === currentValue;
-            const isDefault = it.presetName === defaultPresetName;
-            html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}${isDefault ? ' pas-dd-item--default' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+            html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
                     <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
                     ${it.version ? `<span class="pas-dd-version-tag">${escapeHtml(it.version)}</span>` : ''}
-                    ${isDefault ? '<span class="pas-dd-badge pas-dd-default-badge" title="默认">⭐</span>' : ''}
                 </div>`;
         }
 
@@ -689,7 +691,22 @@ function openPanel(panel, trigger) {
         }
     }
 
-    // 滚动到 active item
+    // T6: 打开面板时更新 active 状态，确保高亮正确
+    const wrapper = panel.closest('.pas-dd-wrapper');
+    if (wrapper) {
+        const select = wrapper.querySelector('select');
+        if (select) {
+            updateActiveState(select, wrapper);
+        }
+    }
+
+    // T5: 先收起所有组，再只展开当前选中预设所在的组
+    const allGroups = panel.querySelectorAll('.pas-dd-group.pas-dd-group--open');
+    for (const g of allGroups) {
+        toggleGroup(g); // 收起已展开的组
+    }
+
+    // 滚动到 active item，仅展开其所在组
     requestAnimationFrame(() => {
         const active = panel.querySelector('.pas-dd-item--active');
         if (active) {
@@ -991,13 +1008,19 @@ export function listSeriesFromNativeSelects() {
             .filter(Boolean);
         const unique = [...new Set(allNames)];
 
+        // T4 fix: 使用 normalizeSeriesKey 确保与 renderDropdownContent 分组一致
         const seriesGroups = new Map();
+        const seriesDisplayKeys = new Map(); // normKey → first-seen original case
         for (const name of unique) {
             if (excluded[name]) continue;
             const info = getSeriesInfo(name, overrides, excluded);
-            const seriesKey = info.series || name;
-            if (!seriesGroups.has(seriesKey)) seriesGroups.set(seriesKey, []);
-            seriesGroups.get(seriesKey).push({
+            const rawSeriesKey = info.series || name;
+            const normKey = normalizeSeriesKey(rawSeriesKey);
+            if (!seriesGroups.has(normKey)) {
+                seriesGroups.set(normKey, []);
+                seriesDisplayKeys.set(normKey, rawSeriesKey);
+            }
+            seriesGroups.get(normKey).push({
                 presetName: name,
                 version: info.version,
                 duplicate: info.duplicate,
@@ -1008,14 +1031,15 @@ export function listSeriesFromNativeSelects() {
         if (!seenSeriesByApi.has(apiId)) seenSeriesByApi.set(apiId, new Set());
         const seenSet = seenSeriesByApi.get(apiId);
 
-        for (const [seriesKey, items] of seriesGroups) {
-            if (seenSet.has(seriesKey)) continue;
-            seenSet.add(seriesKey);
+        for (const [normKey, items] of seriesGroups) {
+            if (seenSet.has(normKey)) continue;
+            seenSet.add(normKey);
 
-            const rep = pickRepresentativeVersion(seriesKey, items, settings.seriesDefaultApply || {});
+            const displayKey = seriesDisplayKeys.get(normKey) || normKey;
+            const rep = pickRepresentativeVersion(displayKey, items, settings.seriesDefaultApply || {});
             out.push({
                 apiId,
-                seriesKey,
+                seriesKey: displayKey,
                 items,
                 representativeName: rep ? rep.presetName : (items[0]?.presetName || ''),
                 versionCount: items.length,
