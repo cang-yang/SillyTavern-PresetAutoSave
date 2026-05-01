@@ -250,17 +250,36 @@ export function getCurrentApiId() {
  *
  * Custom Dropdown Overlay 架构下，option.textContent 始终是真实预设名，
  * 不再需要 data-pas-orig-text 修正。
+ *
+ * ⚠️ 防御要点：
+ *   某些 ST 版本下 PresetManager.select 可能是非 HTMLSelectElement 对象
+ *   （如 sysprompt / reasoning / instruct 这些"非 chat completion" API），
+ *   它没有 .options 属性。直接 select.options[select.selectedIndex] 会触发
+ *   `undefined[undefined]` → TypeError: Cannot read properties of undefined (reading 'undefined')
+ *   这个错误会把面板初始化、auto-save 初始化、面板首次渲染全部打挂。
  */
 export function getSelectedPresetName() {
-    const apiId = getCurrentApiId();
-    if (!apiId) return null;
-    const pm = getPresetManager(apiId);
-    if (!pm) return null;
-    const select = pm.select;
-    if (!select) return null;
-    const selected = select.options[select.selectedIndex];
-    if (!selected) return null;
-    return selected.textContent.trim() || null;
+    try {
+        const apiId = getCurrentApiId();
+        if (!apiId) return null;
+        const pm = getPresetManager(apiId);
+        if (!pm) return null;
+        const select = pm.select;
+        if (!select) return null;
+        // 关键：必须显式校验 select.options 是 HTMLOptionsCollection / Array-like，
+        //   且 select.selectedIndex 是有效数字。
+        const options = select.options;
+        if (!options) return null;
+        const idx = select.selectedIndex;
+        if (typeof idx !== 'number' || idx < 0) return null;
+        const selected = options[idx];
+        if (!selected) return null;
+        const text = (typeof selected.textContent === 'string') ? selected.textContent.trim() : '';
+        return text || null;
+    } catch (e) {
+        logger.debug('[getSelectedPresetName] failed:', e);
+        return null;
+    }
 }
 
 /**
@@ -611,6 +630,51 @@ export async function confirmSafe(title, message) {
         .replace(/\n{3,}/g, '\n\n')
         .trim();
     return window.confirm(`${stripHtml(title)}\n\n${stripHtml(message)}`);
+}
+
+/**
+ * 安全创建 Popup 实例
+ *
+ * 集中防御 5+ 处 `new ctx.Popup(html, ctx.POPUP_TYPE.XXX, ...)` 调用，
+ * 避免任一调用点因 ctx / Popup / POPUP_TYPE / 指定 type 缺失而抛出。
+ *
+ * ⚠️ 调用方必须检查返回值是否为 null，并按业务回退：
+ *   - 显示用：可改为 `toast.warning(...)` 或 `confirmSafe(...)`
+ *   - 输入用：可改为 `prompt(...)` 或直接 return
+ *
+ * SillyTavern Popup 构造签名：
+ *   `new Popup(content, type, inputValue = '', options = {})`
+ *
+ * 第三个参数 inputValue：
+ *   - INPUT 类型：作为输入框的默认值
+ *   - 其他类型：通常被忽略（部分版本作为 inlineMessage）
+ *
+ * @param {string} html - Popup 显示的 HTML 内容
+ * @param {string} [type='DISPLAY'] - POPUP_TYPE 键名，如 'DISPLAY' / 'INPUT' / 'CONFIRM' / 'TEXT'
+ * @param {object} [options={}] - 透传给 ctx.Popup 构造函数的选项（wide / large / okButton 等）
+ * @param {string} [inputValue=''] - INPUT 类型的默认输入值（其他类型通常忽略）
+ * @returns {object|null} Popup 实例，失败时返回 null
+ */
+export function createPopupSafe(html, type = 'DISPLAY', options = {}, inputValue = '') {
+    try {
+        const ctx = window.SillyTavern?.getContext?.();
+        if (!ctx || typeof ctx.Popup !== 'function' || !ctx.POPUP_TYPE) {
+            logger.warn('[createPopupSafe] Popup API not available · ctx/Popup/POPUP_TYPE missing');
+            return null;
+        }
+        // 优先用调用方指定的 type，未定义时回退到 DISPLAY
+        const popupType = (typeof ctx.POPUP_TYPE[type] !== 'undefined')
+            ? ctx.POPUP_TYPE[type]
+            : ctx.POPUP_TYPE.DISPLAY;
+        if (typeof popupType === 'undefined') {
+            logger.warn(`[createPopupSafe] POPUP_TYPE['${type}'] and DISPLAY both undefined`);
+            return null;
+        }
+        return new ctx.Popup(html, popupType, inputValue || '', options || {});
+    } catch (e) {
+        logger.error('[createPopupSafe] failed:', e);
+        return null;
+    }
 }
 
 /**

@@ -24,6 +24,7 @@ import {
     getCurrentApiId, getSelectedPresetName,
     getAllPresetNames,
     on as onEvent, off as offEvent, getEventType,
+    createPopupSafe,
 } from './compatibility.js';
 import {
     parsePresetName,
@@ -160,15 +161,22 @@ export async function showHistoryPanel() {
 
     // Step 1: 创建 popup（简单操作，不太可能失败）
     const html = buildPanelHTML();
-    const ctx = SillyTavern.getContext();
 
-    _popup = new ctx.Popup(html, ctx.POPUP_TYPE.DISPLAY, '', {
+    // 通过 createPopupSafe 集中防御 ctx / Popup / POPUP_TYPE 缺失
+    _popup = createPopupSafe(html, 'DISPLAY', {
         wide: true,
         large: true,
         allowVerticalScrolling: true,
         okButton: false,
         cancelButton: t('Close'),
     });
+
+    if (!_popup) {
+        // Popup API 不可用：写日志 + 兜底提示，不再继续渲染（否则会触发 _popup.show() crash）
+        logger.error('[Panel] showHistoryPanel: Popup API unavailable, abort');
+        try { toast.error(t('Panel Open Failed', { message: 'Popup API unavailable' })); } catch (_) {}
+        return;
+    }
 
     const promise = _popup.show();
 
@@ -185,19 +193,52 @@ export async function showHistoryPanel() {
         return;
     }
 
-    // Step 2: 数据加载和渲染（可能失败，在面板内部显示错误）
+    // Step 2: 数据加载和渲染（任一阶段失败都不会让面板成黑屏）
+    //
+    // 拆分成 4 个 stage（loadData / bindEvents / renderActiveTab / updateStats），
+    // 任一阶段抛错时：
+    //   1) 日志写出确切失败 stage + 完整 stack + state 快照（便于诊断同类问题）
+    //   2) 把列表区域换成"打开失败"提示并标注 stage（用户也能看到出错位置）
+    let _failedStage = null;
     try {
+        _failedStage = 'loadData';
         await loadData();
+        _failedStage = 'bindEvents';
         bindEvents();
+        _failedStage = 'renderActiveTab';
         renderActiveTab();
+        _failedStage = 'updateStats';
         await updateStats(_panelCtx());
+        _failedStage = null;
     } catch (err) {
-        logger.error('[Panel] render failed:', err);
-        const listEl = _root?.querySelector('.pas-panel-list') || _root?.querySelector('.pas-tab-content');
+        logger.error(`[Panel] render failed at stage="${_failedStage}":`, err);
+        if (err && err.stack) {
+            logger.error('[Panel] stack:', err.stack);
+        }
+        try {
+            logger.error('[Panel] state snapshot:', JSON.stringify({
+                hasRoot: !!_root,
+                hasState: !!_state,
+                stateTab: _state?.tab,
+                stateFilter: _state?.filter,
+                stateViewMode: _state?.viewMode,
+                snapshotsLen: Array.isArray(_state?.snapshots) ? _state.snapshots.length : 'N/A',
+                hasExpandedSeries: _state?.expandedSeries instanceof Set,
+                hasExpandedVersions: _state?.expandedVersions instanceof Set,
+                hasExpandedPresets: _state?.expandedPresets instanceof Set,
+                hasDiffSel: !!_state?.diffSel,
+                archivedCacheLen: Array.isArray(_archivedCache) ? _archivedCache.length : 'N/A',
+            }));
+        } catch (_) { /* 序列化失败不重要 */ }
+        // 注意：原代码用 `.pas-panel-list`（不存在的 class），fallback 到 `.pas-tab-content`
+        //       会把所有三个 tab 区域全清空。改成精确选择 `.pas-snapshot-list`。
+        const listEl = _root?.querySelector('.pas-snapshot-list')
+            || _root?.querySelector('[data-content="list"]');
         if (listEl) {
             listEl.innerHTML = `<div class="pas-empty">
                 <div class="pas-empty-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
                 <p class="pas-empty-text">${t('Panel Open Failed', { message: err?.message || String(err) })}</p>
+                <p class="pas-empty-hint" style="opacity:0.7;font-size:0.85em;margin-top:8px;">stage: ${escapeHtml(_failedStage || 'unknown')}</p>
             </div>`;
         }
     }

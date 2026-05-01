@@ -293,7 +293,12 @@ export function bindSettingsEvents(container, panelCtx) {
     // 复选框
     container.querySelectorAll('input[type="checkbox"][data-setting]').forEach(input => {
         input.addEventListener('change', () => {
-            updateSetting(input.getAttribute('data-setting'), input.checked);
+            const key = input.getAttribute('data-setting');
+            updateSetting(key, input.checked);
+            // takeoverEnabled 变更后刷新面板，使 UI 即时反映接管状态变化
+            if (key === 'takeoverEnabled') {
+                panelCtx.refreshData();
+            }
         });
     });
 

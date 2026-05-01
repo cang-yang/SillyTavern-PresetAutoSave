@@ -25,6 +25,7 @@ import {
     savePresetSafe, selectPresetSafe,
     getAllPresetNames,
     deletePresetSafe,
+    createPopupSafe,
 } from './compatibility.js';
 import { saveNow } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
@@ -247,27 +248,29 @@ async function onRename(snapshotId, panelCtx) {
     const snapshot = await getSnapshotById(snapshotId);
     if (!snapshot) return toast.error(t('Snapshot Not Found'));
 
-    const ctx = SillyTavern.getContext();
     const current = (snapshot.name || '').trim();
 
+    // P2 fix: 通过 createPopupSafe 集中防御 ctx / Popup / POPUP_TYPE.INPUT 缺失
+    // 第四参数 inputValue 即 INPUT popup 的默认值
     let result;
     try {
-        if (ctx.POPUP_TYPE && typeof ctx.POPUP_TYPE.INPUT !== 'undefined') {
-            const popup = new ctx.Popup(
-                `<div class="pas-rename-popup">
-                    <div><strong>${escapeHtml(t('Rename Snapshot'))}</strong></div>
-                    <div class="pas-rename-popup-hint">${escapeHtml(t('Rename Hint'))}</div>
-                </div>`,
-                ctx.POPUP_TYPE.INPUT,
-                current,
-                {
-                    okButton: t('Confirm'),
-                    cancelButton: t('Cancel'),
-                    rows: 1,
-                }
-            );
+        const popup = createPopupSafe(
+            `<div class="pas-rename-popup">
+                <div><strong>${escapeHtml(t('Rename Snapshot'))}</strong></div>
+                <div class="pas-rename-popup-hint">${escapeHtml(t('Rename Hint'))}</div>
+            </div>`,
+            'INPUT',
+            {
+                okButton: t('Confirm'),
+                cancelButton: t('Cancel'),
+                rows: 1,
+            },
+            current
+        );
+        if (popup) {
             result = await popup.show();
         } else {
+            // Popup 不可用：回退到原生 prompt
             result = window.prompt(t('Rename Snapshot'), current);
         }
     } catch (e) {
@@ -344,7 +347,6 @@ async function onView(snapshotId) {
     const time = formatTime(snapshot.timestamp);
     const triggerLabel = t(TRIGGER_LABEL_KEYS[snapshot.trigger] || 'Trigger Auto');
     const summaryHtml = renderSummary(snapshot.summary, { compact: false });
-    const ctx = SillyTavern.getContext();
 
     const html = `
 <div class="pas-view-popup">
@@ -370,11 +372,17 @@ async function onView(snapshotId) {
     </div>
 </div>`;
 
-    _viewPopup = new ctx.Popup(html, ctx.POPUP_TYPE.DISPLAY, '', {
+    _viewPopup = createPopupSafe(html, 'DISPLAY', {
         wide: true, large: true,
         allowVerticalScrolling: true,
         okButton: false, cancelButton: t('Close'),
     });
+
+    if (!_viewPopup) {
+        logger.error('[onView] createPopupSafe returned null');
+        toast.error(t('Snapshot Not Found'));
+        return;
+    }
 
     const showPromise = _viewPopup.show();
 
@@ -692,16 +700,21 @@ export async function showGroupingManager(panelCtx) {
     const sortedNames = Array.from(allNames).sort((a, b) => a.localeCompare(b));
     const grouped = groupNamesBySeries(sortedNames, overrides, excluded);
 
-    const ctx = SillyTavern.getContext();
     const html = buildGroupingManagerHTML(grouped, sortedNames, overrides, excluded);
 
-    _groupingManagerPopup = new ctx.Popup(html, ctx.POPUP_TYPE.DISPLAY, '', {
+    _groupingManagerPopup = createPopupSafe(html, 'DISPLAY', {
         wide: true,
         large: true,
         allowVerticalScrolling: true,
         okButton: t('Grouping Manage Save'),
         cancelButton: t('Cancel'),
     });
+
+    if (!_groupingManagerPopup) {
+        logger.error('[showGroupingManager] createPopupSafe returned null');
+        toast.error(t('Grouping Empty Series'));
+        return;
+    }
 
     const promise = _groupingManagerPopup.show();
     setTimeout(() => bindGroupingManagerEvents(), 50);
@@ -854,10 +867,15 @@ export async function showGroupingFirstScanWizard(opts = {}) {
     </div>
 </div>`;
 
-    _firstScanWizardPopup = new ctx.Popup(html, ctx.POPUP_TYPE.CONFIRM, '', {
+    _firstScanWizardPopup = createPopupSafe(html, 'CONFIRM', {
         okButton: t('Grouping First Scan Confirm'),
         cancelButton: t('Grouping First Scan Skip'),
     });
+
+    if (!_firstScanWizardPopup) {
+        logger.error('[showGroupingFirstScanWizard] createPopupSafe returned null');
+        return;
+    }
 
     let result = false;
     try {

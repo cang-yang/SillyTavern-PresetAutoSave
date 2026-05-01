@@ -154,28 +154,35 @@ export async function onDelete() {
         if (archiveResult.status === 'rejected') logger.error('Clear archives failed:', archiveResult.reason);
     };
 
+    let dataCleanupSuccess = false;
     try {
         await Promise.race([
             dataOps(),
             new Promise((_, reject) => setTimeout(() => reject(new Error('onDelete timeout (4s)')), 4000)),
         ]);
+        dataCleanupSuccess = true;
     } catch (e) {
         logger.warn('onDelete: data ops incomplete:', e.message || e);
     }
 
-    // ── Step 3: 重置扩展设置（快速同步操作，始终执行） ──
-    try {
-        resetSettings();
-        const ctx = SillyTavern.getContext();
-        if (ctx.extensionSettings) {
-            delete ctx.extensionSettings['preset_auto_save'];
-            if (typeof ctx.saveSettingsDebounced === 'function') {
-                ctx.saveSettingsDebounced();
+    // ── Step 3: 重置扩展设置（仅在数据清理成功时执行，避免残留数据但无设置的不一致状态） ──
+    if (!dataCleanupSuccess) {
+        logger.warn('onDelete: skipping resetSettings because data cleanup did not complete');
+    }
+    if (dataCleanupSuccess) {
+        try {
+            resetSettings();
+            const ctx = SillyTavern.getContext();
+            if (ctx.extensionSettings) {
+                delete ctx.extensionSettings['preset_auto_save'];
+                if (typeof ctx.saveSettingsDebounced === 'function') {
+                    ctx.saveSettingsDebounced();
+                }
+                logger.debug('onDelete: extensionSettings.preset_auto_save cleared');
             }
-            logger.debug('onDelete: extensionSettings.preset_auto_save cleared');
+        } catch (e) {
+            logger.warn('onDelete: failed to clear extensionSettings:', e);
         }
-    } catch (e) {
-        logger.warn('onDelete: failed to clear extensionSettings:', e);
     }
 
     // ── Step 4: 同步模块拆除（始终执行，即使上面超时） ──
@@ -456,10 +463,23 @@ export function onDisable() {
                 group: (names) => groupNamesBySeries(names || [], {}, {}),
                 listAllOptions: () => {
                     const out = [];
-                    for (const s of document.querySelectorAll('select[data-preset-manager-for]')) {
-                        const apiId = s.getAttribute('data-preset-manager-for');
-                        const opts = Array.from(s.options).map(o => o.value || o.textContent);
-                        out.push({ apiId, count: opts.length, presetNames: opts });
+                    try {
+                        for (const s of document.querySelectorAll('select[data-preset-manager-for]')) {
+                            const apiId = s.getAttribute('data-preset-manager-for');
+                            // P1 fix: select.options 在某些 ST 版本/API 类型下可能为 undefined
+                            const optsCol = (s && s.options) ? Array.from(s.options) : [];
+                            const opts = optsCol
+                                .map(o => {
+                                    if (!o) return '';
+                                    const v = (typeof o.value === 'string') ? o.value : '';
+                                    const t = (typeof o.textContent === 'string') ? o.textContent.trim() : '';
+                                    return v || t;
+                                })
+                                .filter(Boolean);
+                            out.push({ apiId, count: opts.length, presetNames: opts });
+                        }
+                    } catch (e) {
+                        logger.warn('[debug.listAllOptions] failed:', e);
                     }
                     return out;
                 },

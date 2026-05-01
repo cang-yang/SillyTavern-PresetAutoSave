@@ -27,7 +27,7 @@ import {
     toast,
     t,
 } from './compatibility.js';
-import { addSnapshot, TRIGGER, hashPreset } from './history-store.js';
+import { addSnapshot, deleteSnapshot, TRIGGER, hashPreset } from './history-store.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -841,8 +841,19 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
             return null;
         }
 
-        // 写入磁盘
-        await savePresetSafe(presetName, preset, { skipUpdate: true, apiId });
+        // 写入磁盘 — 如果失败，回滚刚写入的快照避免历史与磁盘不一致
+        try {
+            await savePresetSafe(presetName, preset, { skipUpdate: true, apiId });
+        } catch (diskErr) {
+            logger.error('[doSave] savePresetSafe failed, rolling back snapshot:', diskErr);
+            try {
+                await deleteSnapshot(snapshot.id, { force: true });
+                logger.info(`[doSave] Rolled back snapshot ${snapshot.id} after disk write failure`);
+            } catch (rollbackErr) {
+                logger.error('[doSave] Snapshot rollback also failed:', rollbackErr);
+            }
+            throw diskErr; // 重新抛出，让外层 catch 处理状态 & toast
+        }
 
         _lastSavedHash = snapshot.hash;
         _dirty = false;

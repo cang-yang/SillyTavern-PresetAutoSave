@@ -12,7 +12,7 @@
  */
 
 import { logger } from './logger.js';
-import { t, toast, escapeHtml as esc, formatTime } from './compatibility.js';
+import { t, toast, escapeHtml as esc, formatTime, createPopupSafe } from './compatibility.js';
 import { stableStringify, formatBytes } from './history-store.js';
 
 let _popup = null;
@@ -38,12 +38,15 @@ export async function showDiffPopup(snapA, snapB) {
     if (a.timestamp > b.timestamp) [a, b] = [b, a];
 
     try {
-        const ctx = SillyTavern.getContext();
         const html = buildDiffHTML(a, b);
-        _popup = new ctx.Popup(html, ctx.POPUP_TYPE.DISPLAY, '', {
+        _popup = createPopupSafe(html, 'DISPLAY', {
             wide: true, large: true, allowVerticalScrolling: true,
             okButton: false, cancelButton: t('Close'),
         });
+        if (!_popup) {
+            toast.error(t('Diff Failed', { message: 'Popup API not available' }));
+            return;
+        }
         const p = _popup.show();
         setTimeout(() => bindDiffEvents(a, b), 50);
         p.finally(() => { _popup = null; });

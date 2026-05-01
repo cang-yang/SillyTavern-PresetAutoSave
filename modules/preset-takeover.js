@@ -303,6 +303,12 @@ function applyTakeoverToSelect(select) {
         return;
     }
 
+    // P1 fix: 防御性检查 — select 必须有 parentNode 才能 insertBefore
+    if (!select.parentNode) {
+        logger.warn('[Takeover] select has no parentNode, skipping wrapper creation');
+        return;
+    }
+
     // 创建 wrapper，包裹 select
     wrapper = document.createElement('div');
     wrapper.className = 'pas-dd-wrapper';
@@ -561,6 +567,12 @@ function onItemClick(select, value, panel) {
             select.value = String(value);
             select.dispatchEvent(new Event('change', { bubbles: true }));
         }
+        // 验证 val 是否实际生效（option 不存在时 jQuery 会静默失败）
+        const actual = select.value;
+        if (actual !== String(value)) {
+            logger.warn(`[Takeover] onItemClick: val mismatch — expected="${value}" actual="${actual}"`);
+            toast.warning(t('Preset Switch Failed'));
+        }
     } catch (e) {
         logger.warn('[Takeover] onItemClick failed:', e);
     }
@@ -606,14 +618,23 @@ function updateTriggerDisplay(select, wrapper) {
     const label = wrapper.querySelector('.pas-dd-label');
     if (!label) return;
 
-    const selectedOpt = select.options[select.selectedIndex];
-    if (!selectedOpt) {
+    // P0 fix: 防御性获取 selectedOpt — 与 compatibility.js:getSelectedPresetName() 同模式
+    // 某些 ST 版本下 select 可能不是真正的 HTMLSelectElement（如 sysprompt/reasoning/instruct），
+    // 没有 .options 属性，直接 select.options[select.selectedIndex] 会触发 TypeError。
+    let selectedOpt = null;
+    try {
+        if (select && select.options && Number.isInteger(select.selectedIndex) && select.selectedIndex >= 0) {
+            selectedOpt = select.options[select.selectedIndex];
+        }
+    } catch (_) { /* fallback null */ }
+
+    if (!selectedOpt || typeof selectedOpt.textContent !== 'string') {
         label.textContent = '—';
         label.title = '';
         return;
     }
 
-    const presetName = (selectedOpt.textContent || '').trim();
+    const presetName = selectedOpt.textContent.trim();
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
     const excluded = settings.groupingExcluded || {};
