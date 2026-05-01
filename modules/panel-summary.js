@@ -5,19 +5,16 @@
  * All functions are stateless; the only external dependency is `t()` from compatibility.
  */
 
-import { t, escapeHtml, formatTime } from './compatibility.js';
+import { t, escapeHtml, escapeAttr, formatTime } from './compatibility.js';
 
 // Re-export：保持其他模块 `from './panel-summary.js'` 的导入不变
-export { escapeHtml, formatTime };
+export { escapeHtml, escapeAttr, formatTime };
 
 // =====================================================
 // Utility
 // =====================================================
 
-/** 属性转义（当前实现 = escapeHtml） */
-function escapeAttr(s) {
-    return escapeHtml(s);
-}
+// escapeAttr 已从 compatibility.js 导入并 re-export
 
 // =====================================================
 // Label dictionaries

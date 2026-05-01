@@ -312,6 +312,146 @@ export function getSelectedPresetName() {
     }
 }
 
+// =====================================================
+// S-1: 预设字段过滤（从 history-store.js 迁移至此，避免循环依赖）
+// =====================================================
+
+/**
+ * OpenAI 特有字段 → 规范字段名的同义映射。
+ * ST 的 oai_settings 中同时存在两套字段名（如 `top_p` 和 `top_p_openai`），
+ * 但磁盘 presets[] 数据可能只包含其中一套。
+ * 对比前先将 alt 名统一到 canonical 名，避免"从有值变空 / 从空变有值"的误导。
+ *
+ * 基于 ST openai.js settingsToUpdate 中的映射关系。
+ */
+export const FIELD_SYNONYMS = new Map([
+    ['temp_openai',                  'temperature'],
+    ['freq_pen_openai',              'frequency_penalty'],
+    ['pres_pen_openai',              'presence_penalty'],
+    ['top_p_openai',                 'top_p'],
+    ['top_k_openai',                 'top_k'],
+    ['top_a_openai',                 'top_a'],
+    ['min_p_openai',                 'min_p'],
+    ['repetition_penalty_openai',    'repetition_penalty'],
+]);
+
+/**
+ * 规范化预设字段名：将 OpenAI 特有变体合并到规范名称。
+ * 确保来自不同数据源（presets[] 磁盘数据 vs oai_settings 内存数据）的快照可正确比较。
+ *
+ * 规则：
+ *   - alt 字段存在但 canonical 不存在 → 将 alt 值赋给 canonical，删除 alt
+ *   - alt 和 canonical 都存在 → 保留 canonical，删除 alt（canonical 是通用显示名）
+ *   - 只有 canonical 存在 → 不变
+ */
+export function normalizePresetFields(preset) {
+    if (!preset || typeof preset !== 'object') return preset || {};
+    const result = { ...preset };
+    for (const [alt, canonical] of FIELD_SYNONYMS) {
+        if (alt in result) {
+            if (!(canonical in result)) {
+                result[canonical] = result[alt];
+            }
+            delete result[alt];
+        }
+    }
+    return result;
+}
+
+// =====================================================
+// R-1 / S-1: 导出预设时排除的敏感/环境配置字段（黑名单）
+// 基于 ST openai.js getChatCompletionPreset() 中不包含的字段。
+// 比 HASH_EXCLUDED_FIELDS 更全面，覆盖所有 provider-specific 配置。
+// =====================================================
+export const EXPORT_EXCLUDED_FIELDS = new Set([
+    // ---- 安全：绝对不能导出 ----
+    'api_key_openai', 'proxy_password',
+
+    // ---- 环境/连接配置 ----
+    'reverse_proxy', 'chat_completion_source',
+    'api_url_scale', 'custom_url',
+    'custom_api_format', 'custom_include_body', 'custom_exclude_body',
+    'custom_include_headers', 'custom_claude_prompt_caching',
+    'custom_prompt_post_processing',
+
+    // ---- 模型选择（所有 provider） ----
+    'openai_model', 'openrouter_model', 'claude_model', 'google_model',
+    'ai21_model', 'mistralai_model', 'cohere_model', 'perplexity_model',
+    'groq_model', 'zerooneai_model', 'blockentropy_model', 'custom_model',
+    'vertexai_model', 'deepseek_model', 'aimlapi_model', 'xai_model',
+    'pollinations_model', 'cometapi_model', 'moonshot_model', 'fireworks_model',
+    'zai_model', 'azure_openai_model',
+    'chutes_model', 'siliconflow_model', 'electronhub_model', 'nanogpt_model',
+
+    // ---- 模型列表（大数组，可能含用户配额信息） ----
+    'model_list', 'openrouter_model_list',
+
+    // ---- Azure 配置 ----
+    'azure_base_url', 'azure_deployment_name', 'azure_api_version',
+
+    // ---- VertexAI 配置 ----
+    'vertexai_auth_mode', 'vertexai_region', 'vertexai_express_project_id',
+
+    // ---- OpenRouter 配置 ----
+    'openrouter_use_fallback', 'openrouter_group_models', 'openrouter_sort_models',
+    'openrouter_providers', 'openrouter_quantizations',
+    'openrouter_allow_fallbacks', 'openrouter_middleout',
+
+    // ---- 其他 provider 配置 ----
+    'chutes_sort_models',
+    'electronhub_sort_models', 'electronhub_group_models',
+    'zai_endpoint',
+
+    // ---- 内部/UI 状态 ----
+    'show_external_models', 'bypass_status_check',
+    'bind_preset_to_connection',
+    'preset_settings_openai',
+]);
+
+// =====================================================
+// 显示/对比时统一忽略的字段集合
+// 是 EXPORT_EXCLUDED_FIELDS 的超集，额外包含仅用于"显示过滤"的字段
+// （如 prompts / prompt_order 由专门的 diff 区段处理，不在标量对比中出现）
+// =====================================================
+export const DISPLAY_IGNORED_FIELDS = new Set([
+    ...EXPORT_EXCLUDED_FIELDS,
+
+    // ---- 由 diff / summary 专门处理，不作为标量字段对比 ----
+    'prompts', 'prompt_order', 'extensions',
+
+    // ---- 显示为标题/标签，不参与字段级对比 ----
+    'name',
+
+    // ---- 内部/噪音字段 ----
+    'bias_presets', 'bias_preset_selected',
+    'names_behavior',
+]);
+
+/**
+ * R-1 / S-1: 清理预设数据——过滤掉敏感信息和环境配置字段。
+ *
+ * 处理流程：
+ *   1. 浅拷贝预设对象
+ *   2. 通过 normalizePresetFields() 将同义字段名统一为规范名称
+ *   3. 删除 EXPORT_EXCLUDED_FIELDS 中的所有字段
+ *
+ * 导出结果与 ST 原生 getChatCompletionPreset() 保存的格式一致，
+ * 只包含预设参数（采样参数、prompts、prompt_order、extensions 等）。
+ *
+ * @param {object} preset - 原始预设对象（oai_settings 快照）
+ * @returns {object} 清理后的安全预设对象
+ */
+export function sanitizePresetForExport(preset) {
+    if (!preset || typeof preset !== 'object') return {};
+    // 1. 规范化字段名（temp_openai → temperature 等）
+    const cleaned = normalizePresetFields(preset);
+    // 2. 删除所有敏感/环境字段
+    for (const field of EXPORT_EXCLUDED_FIELDS) {
+        delete cleaned[field];
+    }
+    return cleaned;
+}
+
 /**
  * 安全获取预设设置（不含被过滤字段的"干净"数据）
  *
@@ -375,7 +515,7 @@ export function getPresetSnapshot(presetName) {
                 logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (live memory data)`);
                 _lastSnapshotPath = `live:${apiId}`;
             }
-            return cloneDeepSafe(live);
+            return sanitizePresetForExport(cloneDeepSafe(live));
         }
     }
 
@@ -389,7 +529,7 @@ export function getPresetSnapshot(presetName) {
                     logger.debug('[getPresetSnapshot] using ctx.chatCompletionSettings (fallback)');
                     _lastSnapshotPath = 'ctx-ccs';
                 }
-                return cloneDeepSafe(ctx.chatCompletionSettings);
+                return sanitizePresetForExport(cloneDeepSafe(ctx.chatCompletionSettings));
             }
         } catch (_) { /* ignore */ }
     }
@@ -404,7 +544,7 @@ export function getPresetSnapshot(presetName) {
                     logger.debug('[getPresetSnapshot] using window.oai_settings (fallback)');
                     _lastSnapshotPath = 'oai-global';
                 }
-                return cloneDeepSafe(oai);
+                return sanitizePresetForExport(cloneDeepSafe(oai));
             }
         } catch (_) { /* ignore */ }
     }
@@ -431,7 +571,7 @@ export function getPresetSnapshot(presetName) {
                 }
 
                 if (isUsable(presetData)) {
-                    return cloneDeepSafe(presetData);
+                    return sanitizePresetForExport(cloneDeepSafe(presetData));
                 }
             }
         } catch (e) {
@@ -444,7 +584,7 @@ export function getPresetSnapshot(presetName) {
     if (typeof pm.getPresetSettings === 'function') {
         const raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
         if (isUsable(raw)) {
-            return cloneDeepSafe(raw);
+            return sanitizePresetForExport(cloneDeepSafe(raw));
         }
     }
 
@@ -850,6 +990,15 @@ export function escapeHtml(s) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+/**
+ * HTML 属性转义 — 当前实现等价于 escapeHtml，语义别名便于模板中区分用途
+ * @param {*} s
+ * @returns {string}
+ */
+export function escapeAttr(s) {
+    return escapeHtml(s);
 }
 
 /**

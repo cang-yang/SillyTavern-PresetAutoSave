@@ -12,8 +12,8 @@
  */
 
 import { logger } from './logger.js';
-import { t, toast, escapeHtml as esc, formatTime, createPopupSafe } from './compatibility.js';
-import { stableStringify, formatBytes, normalizePresetFields } from './history-store.js';
+import { t, toast, escapeHtml as esc, formatTime, createPopupSafe, normalizePresetFields, sanitizePresetForExport, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
+import { stableStringify, formatBytes } from './history-store.js';
 
 let _popup = null;
 
@@ -180,25 +180,10 @@ const IMPORTANT = new Set([
     'openai_max_tokens', 'openai_max_context', 'openai_model',
     'reasoning_effort', 'seed',
 ]);
-const SKIP = new Set([
-    'prompts', 'prompt_order', 'extensions', 'preset_settings_openai',
-    'name', 'bias_presets', 'bias_preset_selected',
-    'bind_preset_to_connection',
-    // Q-2: API 链接 / 代理
-    'reverse_proxy', 'chat_completion_source', 'api_url_scale', 'custom_url',
-    // Q-2: 模型列表（大数组，对比无意义且暴露配置）
-    'model_list', 'openrouter_model_list',
-    // Q-2: Key / 密码（敏感信息）
-    'api_key_openai', 'proxy_password',
-    // Q-2: 模型选择（高频切换，不属于预设参数）
-    'openai_model', 'openrouter_model', 'claude_model', 'google_model',
-    'ai21_model', 'mistralai_model', 'cohere_model', 'perplexity_model',
-    'groq_model', 'zerooneai_model', 'blockentropy_model', 'custom_model',
-    // Q-2: 其他内部 / 环境配置
-    'names_behavior', 'show_external_models', 'bypass_status_check',
-]);
+// 使用 DISPLAY_IGNORED_FIELDS（从 compatibility.js 导入），与导出排除字段保持同步
+const SKIP = DISPLAY_IGNORED_FIELDS;
 
-// N-3: normalizePresetFields 和 FIELD_SYNONYMS 已移至 history-store.js 作为共享工具函数
+// normalizePresetFields 和 FIELD_SYNONYMS 从 history-store.js 导入
 const PFIELDS = ['name', 'role', 'content', 'system_prompt', 'marker',
     'injection_position', 'injection_depth', 'forbid_overrides'];
 
@@ -220,7 +205,7 @@ function computeDiff(a, b) {
 }
 
 function diffSettings(A, B) {
-    // N-3: 规范化字段名后再比较，避免同义字段产生虚假 diff
+    // 规范化字段名后再比较，避免同义字段产生虚假 diff
     const nA = normalizePresetFields(A);
     const nB = normalizePresetFields(B);
     const keys = [...new Set([...Object.keys(nA), ...Object.keys(nB)].filter(k => !SKIP.has(k)))].sort();
@@ -654,7 +639,8 @@ function downloadSnapshotAsPreset(snapshot) {
         toast.warning(t('Export Failed'));
         return;
     }
-    const data = snapshot.preset;
+    // R-1: 过滤敏感/环境配置字段，只导出预设参数
+    const data = sanitizePresetForExport(snapshot.preset);
     const safeName = (snapshot.presetName || 'preset').replace(/[<>:"/\\|?*]/g, '_');
     const dateStr = new Date(snapshot.timestamp).toISOString().slice(0, 10);
     const fileName = `${safeName}_${dateStr}.json`;
@@ -712,4 +698,4 @@ function fmtV(v) {
 
 function rd(d) { return parseFloat(d.toFixed(4)); }
 
-// esc / escA / fmtTime 已统一为 escapeHtml / formatTime，从 compatibility.js 导入（见文件顶部）
+

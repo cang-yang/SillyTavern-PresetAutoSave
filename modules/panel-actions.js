@@ -20,6 +20,7 @@ import {
     renameSnapshot, togglePinSnapshot,
     TRIGGER_LABEL_KEYS, formatBytes,
 } from './history-store.js';
+import { sanitizePresetForExport } from './compatibility.js';
 import {
     confirmSafe, toast, t,
     savePresetSafe, selectPresetSafe,
@@ -36,7 +37,7 @@ import {
     normalizeSeriesKey,
 } from './preset-grouping.js';
 import {
-    escapeHtml, formatTime,
+    escapeHtml, escapeAttr, formatTime,
     renderSummary,
 } from './panel-summary.js';
 import { parsePresetKey } from './panel-list-render.js';
@@ -50,10 +51,7 @@ let _firstScanWizardPopup = null;
 
 // =====================================================
 // 工具函数
-// =====================================================
-function escapeAttr(s) {
-    return escapeHtml(s);
-}
+// escapeAttr 已从 compatibility.js 导入
 
 // =====================================================
 // 清理弹窗（供 teardown / panel-close 调用）
@@ -103,7 +101,7 @@ export async function handleListClick(e, panelCtx) {
         return;
     }
 
-    // 1.1) "应用此版本"按钮（圆勾）（M-2A: "设为默认"按钮已移除）
+    // 1.1) "应用此版本"按钮（圆勾）
     if (applyVersionBtn) {
         e.preventDefault();
         e.stopPropagation();
@@ -334,7 +332,9 @@ async function onView(snapshotId) {
     const snapshot = await getSnapshotById(snapshotId);
     if (!snapshot) return toast.error(t('Snapshot Not Found'));
 
-    const json = JSON.stringify(snapshot.preset, null, 2);
+    // 显示前过滤敏感字段，避免 API key 等泄露到 UI
+    const safePreset = sanitizePresetForExport(snapshot.preset);
+    const json = JSON.stringify(safePreset, null, 2);
     const time = formatTime(snapshot.timestamp);
     const triggerLabel = t(TRIGGER_LABEL_KEYS[snapshot.trigger] || 'Trigger Auto');
     const summaryHtml = renderSummary(snapshot.summary, { compact: false });
@@ -417,7 +417,8 @@ async function onExportPreset(snapshotId) {
         return;
     }
 
-    const data = snapshot.preset;
+    // R-1: 过滤敏感/环境配置字段，只导出预设参数
+    const data = sanitizePresetForExport(snapshot.preset);
     const safeName = (snapshot.presetName || 'preset').replace(/[<>:"/\\|?*]/g, '_');
     const dateStr = new Date(snapshot.timestamp).toISOString().slice(0, 10);
     const fileName = `${safeName}_${dateStr}.json`;

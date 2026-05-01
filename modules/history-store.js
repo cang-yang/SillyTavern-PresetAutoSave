@@ -23,7 +23,7 @@
 
 import { logger } from './logger.js';
 import { getSettings } from './settings.js';
-import { createStorage } from './compatibility.js';
+import { createStorage, normalizePresetFields, sanitizePresetForExport, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 
 const STORAGE_NAME = 'PresetAutoSave';
 const STORE_NAME = 'history';
@@ -158,54 +158,20 @@ function fnv1aHash(str) {
 
 /**
  * 计算预设内容哈希（FNV-1a 32-bit）
- * 现在直接复用 stableStringify 的缓存
+ *
+ * 注：getPresetSnapshot → sanitizePresetForExport 已在源头过滤了所有
+ * 非预设字段，传入的 obj 已经是干净数据，无需再做条件过滤。
  */
 export function hashPreset(obj) {
-    if (!obj) return '';
+    if (!obj || typeof obj !== 'object') return '';
     return fnv1aHash(stableStringify(obj));
 }
 
-/**
- * N-3: OpenAI 特有字段 → 规范字段名的同义映射。
- * ST 的 oai_settings 中同时存在两套字段名（如 `top_p` 和 `top_p_openai`），
- * 但磁盘 presets[] 数据可能只包含其中一套。
- * 对比前先将 alt 名统一到 canonical 名，避免"从有值变空 / 从空变有值"的误导。
- *
- * 基于 ST openai.js settingsToUpdate 中的映射关系。
- */
-export const FIELD_SYNONYMS = new Map([
-    ['temp_openai',                  'temperature'],
-    ['freq_pen_openai',              'frequency_penalty'],
-    ['pres_pen_openai',              'presence_penalty'],
-    ['top_p_openai',                 'top_p'],
-    ['top_k_openai',                 'top_k'],
-    ['top_a_openai',                 'top_a'],
-    ['min_p_openai',                 'min_p'],
-    ['repetition_penalty_openai',    'repetition_penalty'],
-]);
-
-/**
- * 规范化预设字段名：将 OpenAI 特有变体合并到规范名称。
- * 确保来自不同数据源（presets[] 磁盘数据 vs oai_settings 内存数据）的快照可正确比较。
- *
- * 规则：
- *   - alt 字段存在但 canonical 不存在 → 将 alt 值赋给 canonical，删除 alt
- *   - alt 和 canonical 都存在 → 保留 canonical，删除 alt（canonical 是通用显示名）
- *   - 只有 canonical 存在 → 不变
- */
-export function normalizePresetFields(preset) {
-    if (!preset || typeof preset !== 'object') return preset || {};
-    const result = { ...preset };
-    for (const [alt, canonical] of FIELD_SYNONYMS) {
-        if (alt in result) {
-            if (!(canonical in result)) {
-                result[canonical] = result[alt];
-            }
-            delete result[alt];
-        }
-    }
-    return result;
-}
+// S-1: FIELD_SYNONYMS, normalizePresetFields, sanitizePresetForExport, EXPORT_EXCLUDED_FIELDS
+// 已迁移至 compatibility.js（底层模块），避免循环依赖。
+// 从 compatibility.js 导入并重新导出，保持向后兼容。
+// @deprecated — 请直接从 './compatibility.js' 导入，此处 re-export 仅为向后兼容，将在未来版本移除。
+export { normalizePresetFields, sanitizePresetForExport, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS };
 
 export function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
@@ -462,29 +428,11 @@ function compareEnabledDetail(prevOrder, currOrder, currPrompts, prevPrompts) {
 /**
  * 标量字段比较 - 排除明显属于 prompt 范畴或内部用途的键
  */
-const SUMMARY_IGNORED_KEYS = new Set([
-    'prompts', 'prompt_order', 'extensions',
-    // 噪音
-    'preset_settings_openai', 'name',
-    // 内部
-    'bias_presets', 'bias_preset_selected',
-    'bind_preset_to_connection',
-    // Q-2: API 链接 / 代理（环境配置，非预设参数）
-    'reverse_proxy', 'chat_completion_source', 'api_url_scale', 'custom_url',
-    // Q-2: 模型列表（大数组，摘要无意义且暴露配置）
-    'model_list', 'openrouter_model_list',
-    // Q-2: Key / 密码（敏感信息）
-    'api_key_openai', 'proxy_password',
-    // Q-2: 模型选择（高频切换，不属于预设参数）
-    'openai_model', 'openrouter_model', 'claude_model', 'google_model',
-    'ai21_model', 'mistralai_model', 'cohere_model', 'perplexity_model',
-    'groq_model', 'zerooneai_model', 'blockentropy_model', 'custom_model',
-    // Q-2: 其他内部 / 环境配置
-    'names_behavior', 'show_external_models', 'bypass_status_check',
-]);
+// 使用 DISPLAY_IGNORED_FIELDS（从 compatibility.js 导入），与导出排除字段保持同步
+const SUMMARY_IGNORED_KEYS = DISPLAY_IGNORED_FIELDS;
 
 function compareScalars(prev, curr) {
-    // N-3: 规范化字段名后再比较，避免同义字段产生虚假 diff
+    // 规范化字段名后再比较，避免同义字段产生虚假 diff
     const nPrev = normalizePresetFields(prev);
     const nCurr = normalizePresetFields(curr);
     const out = [];

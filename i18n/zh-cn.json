@@ -190,8 +190,6 @@
 
     "Fallback Polling": "兜底轮询",
     "Fallback Polling Desc": "定期扫描预设是否变化（默认关闭，仅当事件触发不可靠时再开启）",
-    "Watch Model Api Key": "监听模型/API/密钥变更",
-    "Watch Model Api Key Desc": "开启后，切换模型、修改 API 地址或密钥也会触发自动保存。默认关闭——这些属于环境配置，不属于预设参数。",
 
     "Summary Initial": "初始基线（首次记录）",
     "Summary Minor": "细微改动（无明显字段差异）",

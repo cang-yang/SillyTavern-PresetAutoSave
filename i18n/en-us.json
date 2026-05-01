@@ -190,8 +190,6 @@
 
     "Fallback Polling": "Fallback polling",
     "Fallback Polling Desc": "Periodically scan the preset for changes (off by default; only enable if events miss saves on your ST version)",
-    "Watch Model Api Key": "Track model / API / key changes",
-    "Watch Model Api Key Desc": "When enabled, switching models, changing API URLs, or editing API keys will also trigger auto-save. Off by default — these are environment settings, not preset parameters.",
 
     "Summary Initial": "Initial baseline (first snapshot)",
     "Summary Minor": "Minor changes (no notable field diff)",

@@ -61,7 +61,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // 高级
     debugMode: false,               // 启用详细日志
     fallbackPolling: false,         // 兜底轮询（默认关闭，仅当事件触发不可靠时启用）
-    watchModelApiKeyChanges: false, // 模型/API链接/key变更时是否触发自动保存（默认不触发）
 });
 
 // =====================================================
@@ -93,7 +92,6 @@ const VALIDATORS = {
     seedSnapshotsDone: (v) => Boolean(v),
     debugMode: (v) => Boolean(v),
     fallbackPolling: (v) => Boolean(v),
-    watchModelApiKeyChanges: (v) => Boolean(v),
 };
 
 /**

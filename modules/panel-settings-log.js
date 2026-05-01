@@ -24,16 +24,13 @@ import {
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { forceReseedSnapshots } from './preset-takeover.js';
-import { escapeHtml } from './panel-summary.js';
+import { escapeHtml, escapeAttr } from './panel-summary.js';
 
 // =====================================================
 // 内部工具函数
 // =====================================================
 
-/** HTML 属性转义（与 escapeHtml 等价） */
-function escapeAttr(s) {
-    return escapeHtml(s);
-}
+// escapeAttr 已从 panel-summary.js（→ compatibility.js）导入
 
 function formatLogTime(ts) {
     const d = new Date(ts);
@@ -194,7 +191,6 @@ export function renderSettingsTab(panelCtx) {
     ${group(t('Advanced Group'), [
         toggle('debugMode', t('Debug Mode'), t('Debug Mode Desc'), s.debugMode),
         toggle('fallbackPolling', t('Fallback Polling'), t('Fallback Polling Desc'), s.fallbackPolling),
-        toggle('watchModelApiKeyChanges', t('Watch Model Api Key'), t('Watch Model Api Key Desc'), s.watchModelApiKeyChanges),
     ])}
 
     <div class="pas-settings-actions">

@@ -29,15 +29,12 @@ import {
     listAllPresetsIncludingDetached,
 } from './preset-takeover.js';
 import {
-    renderSummary, escapeHtml, formatTime,
+    renderSummary, escapeHtml, escapeAttr, formatTime,
 } from './panel-summary.js';
 
 // =====================================================
 // 工具函数
-// =====================================================
-function escapeAttr(s) {
-    return escapeHtml(s);
-}
+// escapeAttr 已从 panel-summary.js（→ compatibility.js）导入
 
 export function presetKey(apiId, presetName) {
     return `${apiId}::${presetName}`;
@@ -387,7 +384,6 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     const isCurrent = (ver.presetName === currentName && ver.apiId === currentApi);
     const isEmpty = (ver.snapshotCount || 0) === 0;
 
-    // M-2A: seriesDefaultApply UI 已移除
 
     // 版本号胶囊：仅在解析出版本号时才显示（去掉了"未识别版本"占位）
     const versionPillHtml = ver.version
@@ -405,7 +401,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         ? `<span class="pas-version-pill pas-version-pill-dup" title="${escapeAttr(t('Duplicate Version Title'))}"><i class="fa-solid fa-copy"></i> ${escapeHtml(ver.duplicate)}</span>`
         : '';
 
-    // 标签徽章（M-2A: 移除了 isDefaultApply 标签）
+    // 标签徽章
     const tagsHtml = [
         isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : '',
         ver.manualOverride ? `<span class="pas-tag pas-tag-manual-override" title="${escapeAttr(t('Grouping Manual Tag Title'))}">${escapeHtml(t('Grouping Manual Tag'))}</span>` : '',
@@ -416,7 +412,6 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         ? `<div class="pas-version-header-row pas-version-header-row-tags">${tagsHtml}</div>`
         : '';
 
-    // M-2A: "设为默认"按钮已移除
 
     // 应用版本按钮（已归档版本不可应用）
     const applyBtn = ver.archived

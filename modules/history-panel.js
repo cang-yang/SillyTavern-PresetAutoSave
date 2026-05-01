@@ -47,7 +47,7 @@ import {
     renderSummary, renderSection,
     describePromptFieldDiffs, describeFieldChange,
     renderLegacySummary, formatSummaryValue,
-    escapeHtml, formatTime,
+    escapeHtml, escapeAttr, formatTime,
 } from './panel-summary.js';
 import {
     renderSettingsTab, renderLogTab,
@@ -1017,6 +1017,4 @@ function updateBadge(count) {
 // =====================================================
 // 工具函数
 // =====================================================
-function escapeAttr(s) {
-    return escapeHtml(s);
-}
+// escapeAttr 已从 panel-summary.js（→ compatibility.js）导入

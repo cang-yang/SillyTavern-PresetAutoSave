@@ -22,7 +22,7 @@
 import { logger } from './logger.js';
 import { getSettings, onSettingChange, updateSetting } from './settings.js';
 import {
-    on, getEventType, getCurrentApiId, escapeHtml,
+    on, getEventType, getCurrentApiId, escapeHtml, escapeAttr,
     getPresetSnapshot, savePresetSafe,
     toast, t,
 } from './compatibility.js';
@@ -411,7 +411,6 @@ function applyTakeoverToSelect(select) {
     // 设置 select observer
     setupSelectObserver(select);
 
-    // M-2A: autoSetSeriesDefaults 调用已移除（默认预设功能已移除）
 
     logger.debug(`[Takeover] overlay applied to [${apiId}]`);
 }
@@ -861,11 +860,7 @@ function getApiIdOfSelect(select) {
     return apiIds[0] || 'openai';
 }
 
-// escapeHtml 已统一从 compatibility.js 导入（见文件顶部）
-/** 属性转义（当前实现 = escapeHtml） */
-function escapeAttr(str) {
-    return escapeHtml(str);
-}
+// escapeAttr 已从 compatibility.js 导入（见文件顶部）
 
 /** 内联版本比较 */
 function _compareVersionInline(va, vb) {

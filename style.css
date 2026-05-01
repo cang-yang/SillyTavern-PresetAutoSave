@@ -96,14 +96,6 @@
     50%      { opacity: 0.45; transform: scale(0.85); }
 }
 
-/* P-2: 用户系统设置"减少动画"时，禁用所有 PAS 动画 */
-@media (prefers-reduced-motion: reduce) {
-    .pas-pulse,
-    [class*="pas-"] {
-        animation: none !important;
-        transition-duration: 0.01ms !important;
-    }
-}
 
 /* =========================================================
  * 历史按钮（预设栏内）
@@ -1889,7 +1881,6 @@
     justify-content: flex-end;
     margin-top: 4px;
 }
-.pas-view-copy-btn { /* 沿用 .menu_button */ }
 
 /* =========================================================
  * Diff 对比弹窗 v2 — N-4 现代化重构
@@ -2920,7 +2911,6 @@
 
 /* =========================================================
  * 预设接管：版本卡标记
- * M-2A: "默认应用" 标签及图钉按钮相关样式已移除
  * ========================================================= */
 
 /* "无快照" 标签 */
@@ -2979,12 +2969,6 @@
     font-size: 0.92em;
 }
 
-/* prefers-reduced-motion 适配 */
-@media (prefers-reduced-motion: reduce) {
-    .pas-btn-apply-version {
-        transition: none;
-    }
-}
 
 /* =========================================================
  * Custom Dropdown Overlay（pas-dd-*）
