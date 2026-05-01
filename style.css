@@ -1296,14 +1296,8 @@
 /* ⚡ C3 修复：弹窗内 select 的 z-index 保护
  *   ST Popup 的 overlay 在 z-index 较高层级，但浏览器原生 <select> 下拉
  *   在某些渲染引擎下会被 overlay 遮挡或点击后触发 overlay 的 mousedown → 关闭弹窗。
- *   提升弹窗容器层级 + 确保 select 获焦时不被截断。
+ *   仅提升 select 自身层级，不修改 .popup-content 的 overflow 以免破坏滚动。
  */
-.popup:has(.pas-panel) .popup-content,
-.popup:has(.pas-diff-popup) .popup-content,
-.popup:has(.pas-view-popup) .popup-content,
-.popup:has(.pas-grouping-manager) .popup-content {
-    overflow: visible;
-}
 .pas-panel select,
 .pas-diff-popup select,
 .pas-grouping-manager select {
