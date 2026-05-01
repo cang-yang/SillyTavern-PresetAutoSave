@@ -33,6 +33,7 @@ import {
 } from './modules/preset-takeover.js';
 import { clearAllArchived } from './modules/archive-store.js';
 import { runGroupingSelfTest, parsePresetName, groupNamesBySeries } from './modules/preset-grouping.js';
+import { initThemeDetector, teardownThemeDetector } from './modules/theme-detector.js';
 
 const VERSION = '1.0.0';
 
@@ -53,6 +54,7 @@ async function runPhase1() {
     _phase1Done = true;
     try {
         logger.debug('--- Phase 1: UI infrastructure ---');
+        initThemeDetector();
         await initSettings();
         await initHistoryStore();
         await initUIInjector(showHistoryPanel);
@@ -188,6 +190,7 @@ export async function onDelete() {
     }
 
     // ── Step 4: 同步模块拆除（始终执行，即使上面超时） ──
+    try { teardownThemeDetector(); } catch (_) { /* best-effort */ }
     try { teardownAutoSave(); } catch (_) { /* best-effort */ }
     try { teardownUI(); } catch (_) { /* best-effort */ }
     try { teardownHistoryPanel(); } catch (_) { /* best-effort */ }
@@ -331,6 +334,7 @@ export function onDisable() {
         }
     })();
     try {
+        teardownThemeDetector();
         teardownTakeover();
         teardownAutoSave();
         teardownUI();

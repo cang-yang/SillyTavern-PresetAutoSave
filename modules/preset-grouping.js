@@ -182,6 +182,30 @@ const _BUILTIN_VERSION_PATTERNS = [
         captureGroup: 1,
     },
 
+    // 1.11) V/v版本号 + 下划线/短横 + ISO日期后缀（提前，避免被 sep-num 截胡）
+    //       例：v1.1_2026-05-01 / V2.0-2024-12-31
+    {
+        re: /[Vv]\d+(?:\.\d+)+[_\-]\d{4}-\d{1,2}-\d{1,2}\s*$/,
+        kind: 'v-dot-date',
+        captureGroup: 0,
+    },
+
+    // 1.12) V/v版本号 + 下划线/短横 + 日期4-8位后缀（提前，避免被 sep-num 截胡）
+    //       例：V1-0425_20260501 / v2.0_0501
+    {
+        re: /[Vv]\d+(?:[\.\-]\d+)*[_\-](\d{4,8})\s*$/,
+        kind: 'v-num-date-suffix',
+        captureGroup: 0,
+    },
+
+    // 1.13) V/v版本号 + 语言后缀（提前，避免 sep-suffix-dot / sep-num 截胡）
+    //       例：NekoAssistant-v1.0-cn / Helper-v2.0-jp / Tool_v1.0_EN
+    {
+        re: /[\-_]([Vv]\d+(?:\.\d+)*[\-_](?:cn|en|jp|ja|kr|ko|tw|fr|de|es|ru|pt|zh|chs|cht))\s*$/i,
+        kind: 'v-dot-lang',
+        captureGroup: 1,
+    },
+
     // ============================================================
     // 优先级 2：标准模式
     // ============================================================
@@ -294,7 +318,31 @@ const _BUILTIN_VERSION_PATTERNS = [
         captureGroup: 1,
     },
 
-    // 2.16) 末尾 _数字 / -数字（单独）         例：preset_2 / preset-3
+    // 2.16) LOG/log + 分隔符 + 数字（在 sep-num 之前，避免被截胡）
+    //       例：开发日志 LOG_001 / 实验 log-42
+    {
+        re: /\s+((?:LOG|log)[\s_\-\.]*\d+)\s*$/,
+        kind: 'log-num',
+        captureGroup: 1,
+    },
+
+    // 2.17) build + 分隔符 + 数字（在 sep-num 之前，避免被截胡）
+    //       例：MyPreset build-42 / 测试 build.001
+    {
+        re: /\s+(build[\s_\-\.]*\d+)\s*$/i,
+        kind: 'build-num',
+        captureGroup: 1,
+    },
+
+    // 2.18) rev/revision + 分隔符 + 数字（在 sep-num 之前，避免被截胡）
+    //       例：文档 rev.1 / 草案 revision-3
+    {
+        re: /\s+((?:rev|revision)[\s_\-\.]*\d+(?:\.\d+)?)\s*$/i,
+        kind: 'rev-num',
+        captureGroup: 1,
+    },
+
+    // 2.19) 末尾 _数字 / -数字（单独）         例：preset_2 / preset-3
     {
         re: /[\-_](\d+)\s*$/,
         kind: 'sep-num',
@@ -425,6 +473,55 @@ const _BUILTIN_VERSION_PATTERNS = [
     {
         re: /\s+((?:Beta|Alpha|RC|Final|Preview)版)\s*$/i,
         kind: 'phase-cn-version',
+        captureGroup: 1,
+    },
+
+    // 3.18) EP + 数字                              例：冒险日志 EP01 / 探索者 EP.5
+    {
+        re: /\s+(EP\.?\s*\d+(?:\.\d+)?)\s*$/i,
+        kind: 'ep-num',
+        captureGroup: 1,
+    },
+
+    // 3.19) Part/Chapter + 数字                     例：故事 Part.1 / 传说 Chapter.3
+    {
+        re: /\s+((?:Part|Chapter|Ch)[\.\s]*\d+(?:\.\d+)?)\s*$/i,
+        kind: 'part-num',
+        captureGroup: 1,
+    },
+
+    // 3.20) Phase + 数字                            例：计划 Phase1 / 行动 Phase 2
+    {
+        re: /\s+(Phase[\s]*\d+)\s*$/i,
+        kind: 'phase-num-standalone',
+        captureGroup: 1,
+    },
+
+    // 3.24) MK-I/MK-II 等罗马数字变体              例：铁人 MK-III / 战甲 Mk.II
+    {
+        re: /\s+(MK[\.\-\s]*(?:I{1,3}|IV|VI{0,3}|IX|X{1,2}))\s*$/i,
+        kind: 'mk-roman',
+        captureGroup: 1,
+    },
+
+    // 3.25) 中文大写数字版本                        例：守护者 壹 / 守护者 贰
+    {
+        re: /\s+([壹贰叁肆伍陆柒捌玖拾])\s*$/,
+        kind: 'cn-formal-num',
+        captureGroup: 1,
+    },
+
+    // 3.26) 希腊字母版本                            例：计划 α / 实验 β / 终版 γ
+    {
+        re: /\s+([αβγδεζηθικλμ])\s*$/,
+        kind: 'greek-letter',
+        captureGroup: 1,
+    },
+
+    // 3.27) ver. + 任意（宽松版本标记）             例：助手 ver.春 / 工具 ver.2024
+    {
+        re: /\s+(ver\.\s*\S+)\s*$/i,
+        kind: 'ver-dot',
         captureGroup: 1,
     },
 ];
@@ -585,6 +682,14 @@ export function parsePresetName(name) {
             duplicate = `(${dupMatch[1]})`;
             working = working.slice(0, dupMatch.index).trim();
         }
+
+        // ---- 1.5) 副本/拷贝/备份标记剥离 ----
+        // "Copy of 暗夜之歌 V1" → "暗夜之歌 V1"
+        // "暗夜之歌 V1 - 副本" → "暗夜之歌 V1"
+        // "暗夜之歌 V1（备份）" / "暗夜之歌 V1 (旧)" → "暗夜之歌 V1"
+        working = working.replace(/^(?:Copy\s+of)\s+/i, '');
+        working = working.replace(/\s*[\-\u2014]\s*(?:副本|拷贝|备份|copy)\s*$/i, '');
+        working = working.replace(/\s*[（(]\s*(?:副本|拷贝|备份|旧|新|old|new|copy|bak|backup)\s*[）)]\s*$/i, '');
 
         // ---- 2) 尾部版本号匹配（按优先级）----
         // 关键：根据模式的特性判断 working 应该切到哪：
@@ -1032,6 +1137,7 @@ export function suggestSeriesForName(name, existingSeries = []) {
 // 自检 / Smoke Test（仅在调试模式下打印）
 // =====================================================
 const _SAMPLES = Object.freeze([
+    // ---- 原有用例（不可改变预期结果）----
     ['【DarkSide-小猫之神】v1.1',          '【DarkSide-小猫之神】', 'v1.1'],
     ['北棱预设2.4',                          '北棱预设',              '2.4'],
     ['梦境思客V1-0425',                      '梦境思客',              'V1-0425'],
@@ -1047,6 +1153,33 @@ const _SAMPLES = Object.freeze([
     ['Deepseek 官方提示词指南预设 (5)',     'Deepseek 官方提示词指南预设', ''],
     ['Default',                              'Default',               ''],
     ['Izumi 0318',                           'Izumi',                 '0318'],
+
+    // ---- X-0+X-1 增强用例 ----
+    // 核心问题：日期后缀 _YYYY-MM-DD
+    ['【DarkSide-小猫之神】v1.1_2026-05-01', '【DarkSide-小猫之神】', 'v1.1_2026-05-01'],
+    // 语言后缀
+    ['NekoAssistant-v1.0-cn',               'NekoAssistant',         'v1.0-cn'],
+    ['NekoAssistant-v2.0-jp',               'NekoAssistant',         'v2.0-jp'],
+    // 副本标记剥离
+    ['Copy of 暗夜之歌 V1',                 '暗夜之歌',              'V1'],
+    ['暗夜之歌 V1 - 副本',                  '暗夜之歌',              'V1'],
+    ['暗夜之歌 V1（备份）',                  '暗夜之歌',              'V1'],
+    // 全角/半角归一化
+    ['守护者Ｖ１',                            '守护者',                'V1'],
+    ['守护者Ｖ２',                            '守护者',                'V2'],
+    // EP/Part/Chapter/LOG/build/rev/Phase/MK
+    ['冒险日志 EP01',                        '冒险日志',              'EP01'],
+    ['故事 Part.1',                          '故事',                  'Part.1'],
+    ['开发日志 LOG_001',                     '开发日志',              'LOG_001'],
+    ['MyPreset build-42',                    'MyPreset',              'build-42'],
+    ['文档 rev.1',                           '文档',                  'rev.1'],
+    ['计划 Phase1',                          '计划',                  'Phase1'],
+    ['铁人 MK-III',                          '铁人',                  'MK-III'],
+    // 阶段词 + 版本
+    ['暗夜之歌 V3 Beta',                     '暗夜之歌',              'V3 Beta'],
+    ['暗夜之歌 终焉版',                      '暗夜之歌',              '终焉版'],
+    ['月影狼魂 V5 Final',                    '月影狼魂',              'V5 Final'],
+    ['深海水母 v2.0 Stable',                 '深海水母',              'v2.0 Stable'],
 ]);
 
 /**
