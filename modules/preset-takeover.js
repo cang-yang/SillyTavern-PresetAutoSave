@@ -347,7 +347,7 @@ export async function initPresetTakeover() {
     // 启动种子：让"未修改的存量预设"立即出现在三级面板里
     // 不阻塞主流程：发起异步种子，悄悄完成
     setTimeout(() => {
-        seedSnapshotsIfNeeded().catch(e =>
+        seedSnapshotsIfNeeded({ silent: true }).catch(e =>
             logger.warn('[Takeover] seed snapshots failed:', e)
         );
     }, 3000);
@@ -1413,7 +1413,11 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
             return { skipped: true, total: 0 };
         }
 
-        logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots (DOM+detached)...`);
+        if (silent) {
+            logger.debug(`[Seed] checking ${allNames.length} presets for missing initial snapshots (DOM+detached)...`);
+        } else {
+            logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots (DOM+detached)...`);
+        }
         if (!silent) {
             try { toast.info(t('Seed Snapshots Start', { count: allNames.length })); } catch (_) {}
         }
@@ -1457,11 +1461,16 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
             }
         }
 
-        logger.success(
+        // added=0 时降级为 debug（所有预设已有快照 → 不必在控制台刷屏）
+        const seedLogMsg =
             `[Seed] complete: added=${added}, skipped=${skipped}` +
             (failed > 0 ? `, failed=${failed}` : '') +
-            ` (total=${total})`
-        );
+            ` (total=${total})`;
+        if (added > 0) {
+            logger.success(seedLogMsg);
+        } else {
+            logger.debug(seedLogMsg);
+        }
         if (!silent) {
             try {
                 if (added > 0) {
