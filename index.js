@@ -132,61 +132,59 @@ export async function onActivate() {
 
 export async function onDelete() {
     logger.info('Uninstalling: restoring presets → clearing all plugin data');
-    try {
-        // ⚡ C2 重写：卸载语义 —— 干干净净地移除插件所有痕迹
-        //
-        //   1) 先还原 DOM 接管（把被 detach 的 option 放回 select）
-        //   2) 恢复数据接管归档的预设（被 deletePresetSafe 删除的）
-        //   3) 用最新快照补回 ST 中缺失的预设（排除系列名幽灵快照，不覆盖已存在的）
-        //   4) 清空所有插件存储（history-store + archive-store）
-        //   5) 重置扩展设置
-        //   6) 拆除所有模块
 
-        // 1) 还原 DOM 接管
-        teardownTakeover();
+    // ── Step 1: 同步 DOM 还原（瞬时，把被 detach 的 option 放回 select） ──
+    try { teardownTakeover(); } catch (e) { logger.warn('teardownTakeover:', e); }
 
-        // 2) 恢复数据接管模式下被归档的预设
+    // ── Step 2: 异步数据恢复 + 存储清理（带 4s 超时保护，防止超出 ST ~5s 限制） ──
+    const dataOps = async () => {
+        // 2a. 顺序执行：先恢复归档 → 再用快照补缺（有依赖关系）
         await restoreAllFromArchive().catch(e =>
             logger.error('Archive restore on onDelete failed:', e)
         );
-
-        // 3) 用最新快照恢复 ST 中缺失的真实预设（跳过已存在 + 过滤幽灵快照）
         const r = await _writeBackLatestSnapshots({ skipExisting: true, filterGhosts: true });
         logger.success(`onDelete: snapshot writeback · ${r.written || 0} restored · ${r.skipped || 0} skipped`);
 
-        // 4) 清空所有插件存储
-        await clearAllSnapshots().catch(e =>
-            logger.error('Clear snapshots on onDelete failed:', e)
-        );
-        await clearAllArchived().catch(e =>
-            logger.error('Clear archives on onDelete failed:', e)
-        );
+        // 2b. 并行执行：清空两个存储（互不依赖）
+        const [snapResult, archiveResult] = await Promise.allSettled([
+            clearAllSnapshots(),
+            clearAllArchived(),
+        ]);
+        if (snapResult.status === 'rejected') logger.error('Clear snapshots failed:', snapResult.reason);
+        if (archiveResult.status === 'rejected') logger.error('Clear archives failed:', archiveResult.reason);
+    };
 
-        // 5) 重置扩展设置 + 直接清除 ST 的 extensionSettings 条目
-        resetSettings();
-        try {
-            const ctx = SillyTavern.getContext();
-            if (ctx.extensionSettings) {
-                delete ctx.extensionSettings['preset_auto_save'];
-                if (typeof ctx.saveSettingsDebounced === 'function') {
-                    ctx.saveSettingsDebounced();
-                }
-                logger.debug('onDelete: extensionSettings.preset_auto_save cleared');
-            }
-        } catch (e) {
-            logger.warn('onDelete: failed to clear extensionSettings:', e);
-        }
-
-        // 6) 拆除其他模块
-        teardownAutoSave();
-        teardownUI();
-        teardownHistoryPanel();
-        offAll();
-
-        logger.success('onDelete: cleanup complete — all plugin data cleared');
+    try {
+        await Promise.race([
+            dataOps(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('onDelete timeout (4s)')), 4000)),
+        ]);
     } catch (e) {
-        logger.error('onDelete cleanup error:', e);
+        logger.warn('onDelete: data ops incomplete:', e.message || e);
     }
+
+    // ── Step 3: 重置扩展设置（快速同步操作，始终执行） ──
+    try {
+        resetSettings();
+        const ctx = SillyTavern.getContext();
+        if (ctx.extensionSettings) {
+            delete ctx.extensionSettings['preset_auto_save'];
+            if (typeof ctx.saveSettingsDebounced === 'function') {
+                ctx.saveSettingsDebounced();
+            }
+            logger.debug('onDelete: extensionSettings.preset_auto_save cleared');
+        }
+    } catch (e) {
+        logger.warn('onDelete: failed to clear extensionSettings:', e);
+    }
+
+    // ── Step 4: 同步模块拆除（始终执行，即使上面超时） ──
+    try { teardownAutoSave(); } catch (_) { /* best-effort */ }
+    try { teardownUI(); } catch (_) { /* best-effort */ }
+    try { teardownHistoryPanel(); } catch (_) { /* best-effort */ }
+    try { offAll(); } catch (_) { /* best-effort */ }
+
+    logger.success('onDelete: cleanup complete — all plugin data cleared');
 }
 
 export function onEnable() {
@@ -432,21 +430,6 @@ export function onDisable() {
             }
             bootstrapIfReady();
         }, 1000);
-    }
-
-    // ============ 兜底：浏览器关闭/页面卸载时尝试还原归档 ============
-    // 这是关键安全网：即使用户没正确卸载插件，下次启动时如果发现归档没还原，
-    // 也会自动还原以防数据丢失
-    if (typeof window !== 'undefined') {
-        window.addEventListener('beforeunload', () => {
-            // 不能 await，但可以发起 Promise（成功率较低，主要靠 onDelete/onDisable）
-            try {
-                if (getSettings && getSettings().takeoverMode === 'data') {
-                    // 注意：这是 best-effort，浏览器可能不会等
-                    restoreAllFromArchive();
-                }
-            } catch (_) {}
-        });
     }
 
     // ============ 调试接口 ============

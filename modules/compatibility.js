@@ -53,21 +53,6 @@ export const ENV = {
 // =====================================================
 const _registeredListeners = []; // { eventName, handler } - 便于卸载
 let _lastSnapshotPath = null;    // 上一次 getPresetSnapshot 走的路径，用于日志降噪
-let _presetDataResolver = null;  // 外部注册的预设数据解析器（接管模块用于查找 detached 预设）
-
-/**
- * 注册外部的预设数据解析器
- * 接管模块在初始化时注册此回调，使 getPresetSnapshot 能从 detached options 获取预设数据。
- *
- * ⚡ 背景：DOM 接管后 pm.findPreset(name) 搜索 <select>.options，
- *   但被 detach 的 option 已不在 select 中 → findPreset 返回 undefined。
- *   接管模块保留了 detached option 的引用，能通过 option.value 反查原始数组索引。
- *
- * @param {function(string, string): object|null} fn (apiId, presetName) => presetData
- */
-export function registerPresetDataResolver(fn) {
-    _presetDataResolver = typeof fn === 'function' ? fn : null;
-}
 
 // =====================================================
 // 初始化探测
@@ -263,40 +248,19 @@ export function getCurrentApiId() {
 /**
  * 获取当前选中的预设名
  *
- * ⚡ B26 修复：DOM 接管后 representative option 的 textContent 被改为系列名，
- *   ST 的 pm.getSelectedPresetName() 读取 textContent → 返回系列名（如"梦境思客"）。
- *   我们需要检查 ORIGINAL_TEXT_DATA_ATTR 取回真实预设名（如"梦境思客V2-0429"）。
- *   否则 auto-save 会把快照存到系列名下，与 seed 产生的真实名快照不一致。
+ * Custom Dropdown Overlay 架构下，option.textContent 始终是真实预设名，
+ * 不再需要 data-pas-orig-text 修正。
  */
 export function getSelectedPresetName() {
-    const pm = getPresetManager();
-    if (!pm || typeof pm.getSelectedPresetName !== 'function') return null;
-    let name = safeCall(() => pm.getSelectedPresetName(), null, 'getSelectedPresetName');
-
-    // 修正接管后的系列名 → 真实预设名
-    if (name) {
-        try {
-            const apiId = getCurrentApiId();
-            const selects = document.querySelectorAll('select[data-preset-manager-for]');
-            for (const sel of selects) {
-                const selApiId = (sel.getAttribute('data-preset-manager-for') || '')
-                    .split(',').map(s => s.trim()).filter(Boolean)[0] || '';
-                if (selApiId !== apiId) continue;
-                const selectedOpt = sel.options[sel.selectedIndex];
-                if (selectedOpt) {
-                    const orig = selectedOpt.getAttribute('data-pas-orig-text');
-                    if (orig) {
-                        name = orig;
-                    }
-                }
-                break;
-            }
-        } catch (_) {
-            // 降级：保持 PM 返回的名字
-        }
-    }
-
-    return name;
+    const apiId = getCurrentApiId();
+    if (!apiId) return null;
+    const pm = getPresetManager(apiId);
+    if (!pm) return null;
+    const select = pm.select;
+    if (!select) return null;
+    const selected = select.options[select.selectedIndex];
+    if (!selected) return null;
+    return selected.textContent.trim() || null;
 }
 
 /**
@@ -355,46 +319,11 @@ export function getPresetSnapshot(presetName) {
         }
     }
 
-    // 路径 2（针对特定预设）：用 findPreset 拿选项值
-    //   ST 源码：findPreset(name) = $(select).find('option').filter(text===name).val()
-    //   返回值是 option.value（对 openai 是字符串索引 "15"，对其他可能是名字）
-    //   ⚠️ DOM 接管后 detached 的 option 不在 select 中 → findPreset 返回 undefined
-    //      所以这条路径只对 select 中仍存在的 option 有效
-    if (typeof pm.findPreset === 'function') {
-        const found = safeCall(() => pm.findPreset(name), null, 'findPreset');
-        if (found !== undefined && found !== null) {
-            // 对 openai：found 是字符串形式的数组索引（如 "15"）
-            // 用 getPresetList 拿到 presets 数组，用索引取数据
-            const idx = parseInt(String(found), 10);
-            if (!isNaN(idx) && typeof pm.getPresetList === 'function') {
-                try {
-                    const { presets } = pm.getPresetList(apiId);
-                    if (Array.isArray(presets) && presets[idx] && isUsable(presets[idx])) {
-                        return cloneDeepSafe(presets[idx]);
-                    }
-                } catch (_) {}
-            }
-            // 对其他 API：found 可能直接就是可用的对象
-            if (isUsable(found)) {
-                return cloneDeepSafe(found);
-            }
-        }
-    }
-
-    // ⚡ 路径 2.5（B28 关键修复）：通过 pm.getPresetList() 直接查内部数据数组
-    //
-    //   根本原因（从 ST 源码确认）：
-    //     - findPreset(name) 搜索 $(select).find('option').text() === name → DOM 搜索
-    //     - DOM 接管后被 detach 的 option 不在 select 中 → findPreset 返回 undefined
-    //     - getPresetSettings(name) 对 openai 返回 oai_settings（当前设置），跟 name 无关
-    //     - oai_settings.preset_settings_openai 是字符串（当前预设名），不是数组！
-    //
-    //   正确方案（从 ST 源码 preset-manager.js getCompletionPresetByName 确认）：
-    //     pm.getPresetList(apiId) 返回：
-    //       - presets = openai_settings（预设数据数组，ES 模块内部变量）
-    //       - preset_names = openai_setting_names（{name: index} 映射）
-    //     然后用 preset_names[name] 查索引 → presets[index] 取数据
-    //     这完全绕过 DOM，不受接管影响！
+    // 路径 2：通过 pm.getPresetList() 直接查内部数据数组
+    //   pm.getPresetList(apiId) 返回：
+    //     - presets = 预设数据数组
+    //     - preset_names = {name: index} 映射或名字数组
+    //   用 preset_names[name] 查索引 → presets[index] 取数据
     if (typeof pm.getPresetList === 'function') {
         try {
             const { presets, preset_names } = pm.getPresetList(apiId);
@@ -403,14 +332,12 @@ export function getPresetSnapshot(presetName) {
 
                 if (Array.isArray(preset_names)) {
                     // 键值 API（instruct / context / sysprompt / reasoning）
-                    // preset_names 是名字数组
                     const idx = preset_names.indexOf(name);
                     if (idx >= 0 && presets[idx]) {
                         presetData = presets[idx];
                     }
                 } else if (typeof preset_names === 'object') {
                     // 非键值 API（openai / kobold / novel）
-                    // preset_names = {presetName: arrayIndex}
                     const idx = preset_names[name];
                     if (idx !== undefined && presets[idx]) {
                         presetData = presets[idx];
@@ -422,23 +349,15 @@ export function getPresetSnapshot(presetName) {
                 }
             }
         } catch (e) {
-            logger.debug('[getPresetSnapshot] path 2.5 getPresetList error:', e);
+            logger.debug('[getPresetSnapshot] path 2 getPresetList error:', e);
         }
     }
 
-    // 路径 2.5b：通过 getCompletionPresetByName（某些 ST 版本可能有此方法）
+    // 路径 2.5：通过 getCompletionPresetByName（某些 ST 版本可能有此方法）
     if (typeof pm.getCompletionPresetByName === 'function') {
         const preset = safeCall(() => pm.getCompletionPresetByName(name), null, 'getCompletionPresetByName');
         if (isUsable(preset)) {
             return cloneDeepSafe(preset);
-        }
-    }
-
-    // 路径 2.5c: 通过接管模块注册的回调解析器（最后后备路径）
-    if (_presetDataResolver) {
-        const resolved = safeCall(() => _presetDataResolver(apiId, name), null, 'presetDataResolver');
-        if (isUsable(resolved)) {
-            return cloneDeepSafe(resolved);
         }
     }
 
@@ -527,124 +446,25 @@ export async function savePresetSafe(presetName, settings = null, options = {}) 
 
 /**
  * 安全选中预设
+ *
+ * Custom Dropdown Overlay 架构下，所有 option 始终存在于 select 中，
+ * findPreset() 一定能找到。不再需要临时 option、detached option 查找等。
  */
 export function selectPresetSafe(presetName) {
-    const pm = getPresetManager();
-    if (!pm) return false;
+    const apiId = getCurrentApiId();
+    if (!apiId) { logger.warn('[selectPresetSafe] no apiId'); return false; }
+    const pm = getPresetManager(apiId);
+    if (!pm) { logger.warn('[selectPresetSafe] no PM for', apiId); return false; }
 
-    // ⚡ 关键：ST 的 selectPreset 可能在 ST 内部 onChange 链中抛错
-    //   （如 mistralai_model undefined 等历史遗留迁移代码失败），
-    //   但实际预设已经切换了。所以不能直接看 safeCall 的 catch 结果，
-    //   要"切换后再读 selected preset name 是否变成目标值"作为最终判定。
-    if (typeof pm.selectPreset !== 'function') {
-        return false;
-    }
-    let value = (typeof pm.findPreset === 'function') ? pm.findPreset(presetName) : undefined;
-
-    // ⚡ C1 修复：如果 findPreset 返回 undefined（预设被 detach / 不在 select 中），
-    //   通过 pm.getPresetList() 的 preset_names 映射直接获取索引值
-    if (value === undefined || value === null) {
-        try {
-            const apiId = getCurrentApiId();
-            if (typeof pm.getPresetList === 'function') {
-                const { preset_names } = pm.getPresetList(apiId);
-                if (preset_names) {
-                    let idx;
-                    if (Array.isArray(preset_names)) {
-                        idx = preset_names.indexOf(presetName);
-                        if (idx < 0) idx = undefined;
-                    } else if (typeof preset_names === 'object') {
-                        idx = preset_names[presetName];
-                    }
-                    if (idx !== undefined && idx !== null) {
-                        value = String(idx);
-                    }
-                }
-            }
-        } catch (e) {
-            logger.debug('[selectPresetSafe] getPresetList fallback failed:', e);
-        }
-    }
-
-    if (value === undefined || value === null) {
+    const value = pm.findPreset(presetName);
+    if (value == null) {
+        logger.warn('[selectPresetSafe] preset not found:', presetName);
         return false;
     }
 
-    // ⚡ D2 修复：DOM 接管可能已将目标 option 从 select 中 detach，
-    //   导致 $(select).val(value) 静默失败 → .trigger('change') 读到旧预设。
-    //   在调用 pm.selectPreset(value) 前，确保目标 option 存在于 select 中。
-    //   插入临时 option（value + textContent 正确），scheduleRefresh 会自动重新接管。
-    //
-    // ⚡ P2 修复：临时 option 必须在 change handler 处理完后清理，
-    //   否则 detached 数量单调递增（每次 applyTakeoverToSelect 将其当正常 option 处理）。
-    //   用 requestAnimationFrame 延迟移除，确保 ST change handler 已读取完 option 信息。
-    let _d2TempOption = null;
-    let _d2TempSelect = null;
-    try {
-        const _apiId = getCurrentApiId();
-        const _selects = document.querySelectorAll('select[data-preset-manager-for]');
-        for (const _sel of _selects) {
-            const _selApiId = (_sel.getAttribute('data-preset-manager-for') || '')
-                .split(',').map(s => s.trim()).filter(Boolean)[0] || '';
-            if (_selApiId !== _apiId) continue;
-            const _optExists = Array.from(_sel.options).some(o => o.value === String(value));
-            if (!_optExists) {
-                _d2TempOption = document.createElement('option');
-                _d2TempOption.value = String(value);
-                _d2TempOption.textContent = presetName;
-                _d2TempOption.setAttribute('data-pas-temp', 'true');
-                _sel.appendChild(_d2TempOption);
-                _d2TempSelect = _sel;
-            }
-            break;
-        }
-    } catch (_) {}
-
-    try {
-        pm.selectPreset(value);
-    } catch (e) {
-        // ST 内部抛错不代表切换失败 —— 验证下面的最终状态
-    } finally {
-        // ⚡ P2 修复：用 requestAnimationFrame 延迟移除临时 option
-        //   确保 ST 的 change handler（同步执行）已读取完 option 信息后再清理
-        if (_d2TempOption) {
-            const tempOpt = _d2TempOption;
-            requestAnimationFrame(() => {
-                try {
-                    if (tempOpt.parentNode) {
-                        tempOpt.parentNode.removeChild(tempOpt);
-                    }
-                } catch (_) {}
-            });
-        }
-    }
-    // 验证：切换后再问 ST 选中的是不是目标
-    try {
-        const cur = pm.getSelectedPresetName?.();
-        if (cur && String(cur) === String(presetName)) {
-            return true;
-        }
-    } catch (_) {}
-    // ⚡ B29 修复：退一步验证 select 元素的选中项文本
-    //   openai 的 sel.value 是数组索引（如 "15"），不能与预设名比较
-    //   改为读选中 option 的 textContent（或 data-pas-orig-text 属性）
-    try {
-        const apiId = getCurrentApiId();
-        const selects = document.querySelectorAll('select[data-preset-manager-for]');
-        for (const sel of selects) {
-            const selApiId = (sel.getAttribute('data-preset-manager-for') || '')
-                .split(',').map(s => s.trim()).filter(Boolean)[0] || '';
-            if (selApiId !== apiId) continue;
-            const selectedOpt = sel.options[sel.selectedIndex];
-            if (selectedOpt) {
-                const origText = selectedOpt.getAttribute('data-pas-orig-text');
-                const realName = (origText || selectedOpt.textContent || '').trim();
-                if (realName === presetName) return true;
-            }
-            break;
-        }
-    } catch (_) {}
-    return false;
+    pm.selectPreset(value);
+    logger.debug('[selectPresetSafe] switched to', presetName, 'value=', value);
+    return true;
 }
 
 /**
@@ -903,6 +723,41 @@ function createLocalStorageAdapter(prefix) {
             }
         },
     };
+}
+
+// =====================================================
+// 通用 HTML / 时间工具
+// =====================================================
+
+/**
+ * HTML 转义 — 防止 XSS，适用于标签内文本与属性值
+ * @param {*} s
+ * @returns {string}
+ */
+export function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+/**
+ * 格式化时间戳为 YYYY-MM-DD HH:mm:ss
+ * @param {number} ts  Unix 毫秒时间戳
+ * @returns {string}
+ */
+export function formatTime(ts) {
+    if (!ts) return '\u2014';
+    try {
+        const d = new Date(ts);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    } catch (_) {
+        return String(ts);
+    }
 }
 
 // =====================================================

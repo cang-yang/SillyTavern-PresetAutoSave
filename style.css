@@ -1441,18 +1441,6 @@
     border-color: rgba(251, 191, 36, 0.42);
     text-shadow: none;
 }
-/* ⚡ B29: 一级系列的"当前系列"标记 —— 小圆点指示器，不显示文字 */
-.pas-tag-current-series {
-    background: rgba(251, 191, 36, 0.10);
-    color: #fbbf24;
-    border-color: rgba(251, 191, 36, 0.30);
-    padding: 2px 5px;
-    font-size: 0.65em;
-}
-.pas-tag-current-series::before {
-    display: none;  /* 去掉通用 .pas-tag 的彩色小圆点（已经用 <i> 图标） */
-}
-
 /* 系列副标题：→ 实际预设名 */
 .pas-series-subtitle {
     font-size: 0.85em;
@@ -2763,5 +2751,293 @@
     .pas-btn-set-default i,
     .pas-btn-apply-version {
         transition: none;
+    }
+}
+
+/* =========================================================
+ * Custom Dropdown Overlay（pas-dd-*）
+ * 替代原生 <select> 的自定义下拉组件，用于预设接管功能
+ * ========================================================= */
+
+/* --- 容器 --- */
+.pas-dd-wrapper {
+    position: relative;
+    display: inline-flex;
+    width: 100%;
+}
+
+/* --- 触发器（模拟 select 外观） --- */
+.pas-dd-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 4px 10px;
+    cursor: pointer;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.10));
+    border-radius: 6px;
+    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.40));
+    color: var(--SmartThemeBodyColor, #e2e8f0);
+    font-size: inherit;
+    font-family: inherit;
+    line-height: 1.6;
+    gap: 8px;
+    transition: border-color 0.18s cubic-bezier(0.4, 0, 0.2, 1),
+                background 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+    outline: none;
+    box-sizing: border-box;
+}
+.pas-dd-trigger:hover {
+    border-color: var(--SmartThemeQuoteColor, #a78bfa);
+    background: rgba(255, 255, 255, 0.04);
+}
+.pas-dd-trigger:focus-visible {
+    border-color: var(--SmartThemeQuoteColor, #a78bfa);
+    box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.30);
+}
+
+.pas-dd-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pas-dd-chevron {
+    font-size: 0.72em;
+    color: rgba(255, 255, 255, 0.45);
+    flex-shrink: 0;
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                color 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pas-dd-trigger:hover .pas-dd-chevron {
+    color: var(--SmartThemeQuoteColor, #a78bfa);
+}
+/* JS 控制面板打开时切换 FA 图标（chevron-down ↔ chevron-up），
+   同时也支持 aria-expanded 方式触发旋转作为 fallback */
+.pas-dd-trigger[aria-expanded="true"] .pas-dd-chevron {
+    transform: rotate(180deg);
+}
+
+/* --- 下拉面板 --- */
+.pas-dd-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    max-height: 400px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 30, 0.96));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45),
+                0 2px 6px rgba(0, 0, 0, 0.25);
+    padding: 4px 0;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+.pas-dd-panel::-webkit-scrollbar { width: 6px; }
+.pas-dd-panel::-webkit-scrollbar-track { background: transparent; }
+.pas-dd-panel::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 3px;
+}
+.pas-dd-panel::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+/* --- 分组（多版本系列） --- */
+.pas-dd-group {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.pas-dd-group:last-child {
+    border-bottom: none;
+}
+
+/* --- 分组头 --- */
+.pas-dd-group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    font-size: 0.92em;
+    color: var(--SmartThemeBodyColor, #e2e8f0);
+    transition: background 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pas-dd-group-header:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* --- 分组折叠箭头 --- */
+.pas-dd-group-chevron {
+    font-size: 0.68em;
+    color: rgba(255, 255, 255, 0.40);
+    width: 12px;
+    text-align: center;
+    flex-shrink: 0;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* 展开态：旋转 90° — JS 在展开时给 group-header 添加 .pas-dd-group-open */
+.pas-dd-group--open .pas-dd-group-chevron {
+    transform: rotate(90deg);
+}
+.pas-dd-group-header:hover .pas-dd-group-chevron {
+    color: rgba(255, 255, 255, 0.65);
+}
+
+/* --- 系列名 --- */
+.pas-dd-series-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* --- 版本数量徽章 --- */
+.pas-dd-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.10);
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 0.72em;
+    font-weight: 700;
+    font-family: 'SF Mono', Consolas, monospace;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+/* --- 默认星标 --- */
+.pas-dd-default-star {
+    flex-shrink: 0;
+    font-size: 0.82em;
+    cursor: help;
+    filter: saturate(0.85);
+}
+
+/* --- 分组内容体 --- */
+.pas-dd-group-body {
+    padding-left: 14px;
+}
+
+/* --- 选项条目 --- */
+.pas-dd-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    color: var(--SmartThemeBodyColor, #e2e8f0);
+    font-size: 0.90em;
+    transition: background 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    border-left: 3px solid transparent;
+}
+.pas-dd-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* --- 选中态 --- */
+.pas-dd-item--active {
+    border-left-color: var(--SmartThemeQuoteColor, #a78bfa);
+    background: rgba(167, 139, 250, 0.08);
+}
+.pas-dd-item--active:hover {
+    background: rgba(167, 139, 250, 0.12);
+}
+
+/* --- 默认预设标记 --- */
+.pas-dd-item--default {
+    /* 通过 default-badge 显示，无需额外卡片样式 */
+}
+
+/* --- 独立预设（无分组） --- */
+.pas-dd-standalone {
+    padding: 7px 12px;
+    font-weight: 500;
+    border-left: 3px solid transparent;
+}
+.pas-dd-standalone:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+.pas-dd-standalone.pas-dd-item--active {
+    border-left-color: var(--SmartThemeQuoteColor, #a78bfa);
+    background: rgba(167, 139, 250, 0.08);
+}
+
+/* --- 条目名称 --- */
+.pas-dd-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* --- 版本号标签 --- */
+.pas-dd-version-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: 'SF Mono', Consolas, monospace;
+    background: rgba(96, 165, 250, 0.12);
+    color: rgba(147, 197, 253, 0.95);
+    border: 1px solid rgba(96, 165, 250, 0.22);
+    line-height: 1.4;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* --- "默认" 文字徽章 --- */
+.pas-dd-item-default-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.72em;
+    font-weight: 700;
+    background: rgba(250, 204, 21, 0.14);
+    color: rgba(252, 211, 77, 0.95);
+    border: 1px solid rgba(250, 204, 21, 0.28);
+    line-height: 1.4;
+    flex-shrink: 0;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+}
+
+/* --- 减少动画偏好（无障碍） --- */
+@media (prefers-reduced-motion: reduce) {
+    .pas-dd-trigger,
+    .pas-dd-chevron,
+    .pas-dd-group-chevron,
+    .pas-dd-item {
+        transition: none;
+    }
+}
+
+/* --- 移动端适配 --- */
+@media (max-width: 768px) {
+    .pas-dd-panel {
+        max-height: 320px;
+    }
+    .pas-dd-group-header {
+        padding: 8px 10px;
+    }
+    .pas-dd-item {
+        padding: 7px 10px;
     }
 }

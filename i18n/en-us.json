@@ -351,16 +351,6 @@
     "No Snapshots Yet Title": "This version has no snapshots yet (will be created automatically when modified)",
     "No Snapshots Yet Hint": "No history snapshots for this version yet. Modify any parameter to create the first snapshot.",
 
-    "Takeover Mode": "Takeover Method",
-    "Takeover Mode Desc": "DOM takeover: only modifies dropdown display, no data changes, safely reversible.\\nData takeover: directly removes non-representative presets from ST and archives them locally — dropdown permanently clean, but you must disable before uninstalling to restore.",
-    "Takeover Mode DOM": "DOM takeover (lightweight · recommended)",
-    "Takeover Mode Data": "Data takeover (permanent · use caution)",
-    "Takeover Data Confirm Title": "⚠ Enable Data Takeover",
-    "Takeover Data Confirm Hint": "<b>This will directly delete non-representative presets from SillyTavern</b>, archiving their data to a local database.<br><br>📌 <b>Benefit</b>: Native preset dropdown stays permanently clean, no need to reapply takeover on each startup.<br>📌 <b>Impact</b>: Those versions will actually disappear from SillyTavern's preset list.<br>📌 <b>Recovery</b>:<br>　• Uninstalling the extension automatically restores all archived presets<br>　• Switching back to DOM takeover automatically restores them<br>　• Manual restore is available in Settings tab<br><br>Please confirm you understand these effects. Continue?",
-
-    "Takeover Data Processing": "Archiving {{count}} non-representative preset(s)…",
-    "Takeover Data Done": "Data takeover complete: archived {{archived}} / deleted {{deleted}}",
-
     "Auto Seed Enabled": "Auto-seed initial snapshots",
     "Auto Seed Enabled Desc": "When takeover/grouping is first enabled, automatically create an \"initial snapshot\" for every existing preset so they appear in the three-level panel right away (no need to modify them first).",
 

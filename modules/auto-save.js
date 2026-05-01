@@ -670,7 +670,13 @@ const SAVE_TIMEOUT_MS = 15_000;  // 单次保存最大允许时长，超时强�
 let _saveStartedAt = 0;
 let _saveTimeoutId = null;
 
-async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null) {
+/**
+ * 检查保存前置条件（锁、挂起窗口等）
+ * @param {string} reason 触发原因（用于日志）
+ * @param {object|null} explicitTarget 显式目标（switch-guard 场景）
+ * @returns {boolean} true = 可以继续保存, false = 应中止
+ */
+function _validateSaveConditions(reason, explicitTarget) {
     if (_isInternalSave) {
         // 自愈：检测是否长时间被卡住
         const stuck = _saveStartedAt && (Date.now() - _saveStartedAt > SAVE_TIMEOUT_MS);
@@ -686,11 +692,11 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
             }
             // 让本次也跳过；下次调度会重新触发
             _stats.aborted++;
-            return null;
+            return false;
         }
         logger.debug('Save skipped (internal save in progress)');
         _stats.aborted++;
-        return null;
+        return false;
     }
 
     // 入口防御：切换沉默期内只允许 explicitTarget 路径（switch-guard）
@@ -699,6 +705,98 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
             `doSave aborted: in switch suspend window (reason=${reason}, ignoreInput=${_ignoreInput}, suspended=${Date.now() < _suspendUntil})`
         );
         _stats.aborted++;
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * 构建保存数据：解析目标预设、获取快照、计算哈希并验证
+ * @param {string} reason 触发原因（用于日志）
+ * @param {object|null} explicitTarget 显式目标（switch-guard 场景）
+ * @returns {{ apiId: string, presetName: string, preset: object, newHash: string, fingerprint: string, fieldCount: number, promptCount: number, promptOrderCount: number } | null}
+ *   返回 null 表示不需要保存（无变化/异常/切换中）
+ */
+function _buildSavePayload(reason, explicitTarget) {
+    // explicitTarget 用于切换前保护：明确指定要保存的预设名
+    // 否则用当前选中的（可能在切换过程中已经变了）
+    const apiId = explicitTarget?.apiId || getCurrentApiId();
+    const presetName = explicitTarget?.presetName || getSelectedPresetName();
+
+    if (!apiId || !presetName) {
+        logger.warn('Cannot save: API or preset not available');
+        _setStatus('error');
+        _stats.aborted++;
+        return null;
+    }
+
+    // 仅在非显式目标的情况下才做"切换中"中止逻辑
+    // （显式 target 通常来自 switch-guard，必须强制保存到指定预设）
+    if (!explicitTarget && _currentPresetName && _currentPresetName !== presetName) {
+        logger.debug(
+            `Preset changed during save: "${_currentPresetName}" -> "${presetName}", aborting old save`
+        );
+        _currentPresetName = presetName;
+        _currentApiId = apiId;
+        _lastSavedHash = null;
+        _dirty = false;
+        _setStatus('idle');
+        _stats.aborted++;
+        return null;
+    }
+
+    const preset = getPresetSnapshot(presetName);
+    if (!preset) {
+        logger.warn('Cannot read current preset:', presetName);
+        _setStatus('error');
+        _stats.aborted++;
+        return null;
+    }
+
+    // 计算 hash 并诊断
+    const newHash = hashPreset(preset);
+    const promptCount = Array.isArray(preset.prompts) ? preset.prompts.length : 0;
+    const promptOrderCount = Array.isArray(preset.prompt_order)
+        ? (preset.prompt_order[0]?.order?.length || 0)
+        : 0;
+    const fieldCount = Object.keys(preset).length;
+    // 关键字段指纹（便于排查"toggle 改了但 hash 没变"这类幻觉）
+    const fingerprint = computeFingerprint(preset);
+
+    // 异常预设检测：字段过少强烈暗示快照获取失败
+    if (fieldCount < 5) {
+        logger.warn(
+            `[doSave] Suspicious preset: only ${fieldCount} fields, reason=${reason}. ` +
+            `Snapshot may be incomplete. Aborting to avoid corruption.`
+        );
+        _stats.aborted++;
+        _setStatus('error');
+        return null;
+    }
+
+    if (_lastSavedHash && newHash === _lastSavedHash) {
+        // 与上次比较没变化（可能是 SETTINGS_UPDATED 重复触发）
+        // 仅在前 3 次相同 hash 内打日志，超出后采样降噪
+        _noChangeCount++;
+        if (_noChangeCount <= 3 || _noChangeCount % 20 === 0) {
+            logger.debug(
+                `[doSave] No change reason=${reason} hash=${newHash} (×${_noChangeCount} consecutive)`
+            );
+        }
+        _stats.skippedUnchanged++;
+        _dirty = false;
+        _setStatus('idle');
+        return null;
+    }
+    // 重置无变化计数器
+    _noChangeCount = 0;
+
+    return { apiId, presetName, preset, newHash, fingerprint, fieldCount, promptCount, promptOrderCount };
+}
+
+async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null) {
+    if (!_validateSaveConditions(reason, explicitTarget)) {
         return null;
     }
 
@@ -723,78 +821,10 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
         // 让出一个微任务，确保上层（PromptManager / oai_settings 同步）已完成
         await new Promise(resolve => setTimeout(resolve, 0));
 
-        // explicitTarget 用于切换前保护：明确指定要保存的预设名
-        // 否则用当前选中的（可能在切换过程中已经变了）
-        const apiId = explicitTarget?.apiId || getCurrentApiId();
-        const presetName = explicitTarget?.presetName || getSelectedPresetName();
+        const payload = _buildSavePayload(reason, explicitTarget);
+        if (!payload) return null;
 
-        if (!apiId || !presetName) {
-            logger.warn('Cannot save: API or preset not available');
-            _setStatus('error');
-            _stats.aborted++;
-            return null;
-        }
-
-        // 仅在非显式目标的情况下才做"切换中"中止逻辑
-        // （显式 target 通常来自 switch-guard，必须强制保存到指定预设）
-        if (!explicitTarget && _currentPresetName && _currentPresetName !== presetName) {
-            logger.debug(
-                `Preset changed during save: "${_currentPresetName}" -> "${presetName}", aborting old save`
-            );
-            _currentPresetName = presetName;
-            _currentApiId = apiId;
-            _lastSavedHash = null;
-            _dirty = false;
-            _setStatus('idle');
-            _stats.aborted++;
-            return null;
-        }
-
-        const preset = getPresetSnapshot(presetName);
-        if (!preset) {
-            logger.warn('Cannot read current preset:', presetName);
-            _setStatus('error');
-            _stats.aborted++;
-            return null;
-        }
-
-        // 计算 hash 并诊断
-        const newHash = hashPreset(preset);
-        const promptCount = Array.isArray(preset.prompts) ? preset.prompts.length : 0;
-        const promptOrderCount = Array.isArray(preset.prompt_order)
-            ? (preset.prompt_order[0]?.order?.length || 0)
-            : 0;
-        const fieldCount = Object.keys(preset).length;
-        // 关键字段指纹（便于排查"toggle 改了但 hash 没变"这类幻觉）
-        const fingerprint = computeFingerprint(preset);
-
-        // 异常预设检测：字段过少强烈暗示快照获取失败
-        if (fieldCount < 5) {
-            logger.warn(
-                `[doSave] Suspicious preset: only ${fieldCount} fields, reason=${reason}. ` +
-                `Snapshot may be incomplete. Aborting to avoid corruption.`
-            );
-            _stats.aborted++;
-            _setStatus('error');
-            return null;
-        }
-
-        if (_lastSavedHash && newHash === _lastSavedHash) {
-            // 与上次比较没变化（可能是 SETTINGS_UPDATED 重复触发）
-            // 仅在前 3 次相同 hash 内打日志，超出后采样降噪
-            _noChangeCount++;
-            if (_noChangeCount <= 3 || _noChangeCount % 20 === 0) {
-                logger.debug(
-                    `[doSave] No change reason=${reason} hash=${newHash} (×${_noChangeCount} consecutive)`
-                );
-            }
-            _stats.skippedUnchanged++;
-            _dirty = false;
-            _setStatus('idle');
-            return null;
-        }
-        // 重置无变化计数器
-        _noChangeCount = 0;
+        const { apiId, presetName, preset, newHash, fingerprint, fieldCount, promptCount, promptOrderCount } = payload;
 
         logger.debug(
             `[doSave] Snapshotting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`

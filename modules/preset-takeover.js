@@ -1,47 +1,40 @@
 /**
  * SillyTavern Preset Auto Save - Preset Takeover
- * 预设接管模块（核心特性）
+ * 预设接管模块（核心特性）— Custom Dropdown Overlay 架构
  *
- * 职责：
- *   1. 把原生预设下拉列表从"扁平的所有预设"改造成"系列名一览"
- *      - 同系列的多个版本只保留一个"代表 option"（value 仍是预设名以保证 DOM 兼容）
- *      - 代表 option 的 textContent 显示系列名
- *      - 其余版本的 option 暂时从 DOM 树中摘除（保留引用以便还原）
+ * ⚠️ 核心原则（严格遵守）：
+ *   1. 绝不修改 option.textContent — ST 的 text() 始终返回真实预设名
+ *   2. 绝不从 select 中 detach/remove option — ST 的 find('option') 始终能找到所有预设
+ *   3. 绝不拦截 select 的 change 事件 — ST 的原生 handler 始终正常执行
+ *   4. 只通过 CSS 隐藏原生 select — opacity:0; pointer-events:none; position:absolute
+ *   5. 用自定义 UI 替代视觉层 — 用户看到的是分组下拉，实际操作的是原生 select
  *
- *   2. 拦截 select 的 change 事件：
- *      - 当用户选中某个代表 option 时，
- *        如果该系列有"用户指定的默认版本"，则把 select.value 改写为那个版本的预设名
- *        然后再触发原生 change，让 ST 加载真正的目标版本
- *
- *   3. 监听 SillyTavern 事件 + MutationObserver：
- *      - 当原生重新渲染下拉时，重做 takeover
- *      - 设置变化（takeoverEnabled / seriesDefaultApply / groupingManualOverrides）实时刷新
- *
- * 设计原则：
- *   - 不破坏原生数据：永远不修改 PresetManager 的预设数据本身
- *   - 全 DOM 层接管：还原时把保存的原始 option 节点重新插回，状态一致
- *   - 防御性编程：select 不存在 / value 未变 / 接管已开关时都不抛错
+ * 数据流：
+ *   select.options[] ──→ preset-grouping.js ──→ Custom Dropdown UI
+ *                                                       │
+ *                                                       ↓ (用户点击)
+ *   $(select).val(targetValue).trigger('change') ──→ ST 原生 handler
+ *                                                       │
+ *                                                       ↓ (ST 事件)
+ *   oai_preset_changed_after ──→ 更新 Custom Dropdown trigger 显示
  */
 
 import { logger } from './logger.js';
 import { getSettings, onSettingChange, updateSetting } from './settings.js';
 import {
-    on, getEventType, getCurrentApiId, selectPresetSafe,
-    getPresetManager, getPresetSnapshot, savePresetSafe, deletePresetSafe, getAllPresetNames,
-    toast, t, registerPresetDataResolver,
+    on, getEventType, getCurrentApiId, escapeHtml,
+    getPresetSnapshot, savePresetSafe,
+    toast, t,
 } from './compatibility.js';
 import {
-    parsePresetName,
     getSeriesInfo,
     pickRepresentativeVersion,
     pickLatestVersion,
 } from './preset-grouping.js';
 import {
     initArchiveStore,
-    archivePreset,
     listArchivedPresets,
     removeArchivedPreset,
-    getArchiveCount,
 } from './archive-store.js';
 import { getSnapshots, addSnapshot, TRIGGER } from './history-store.js';
 
@@ -50,20 +43,12 @@ import { getSnapshots, addSnapshot, TRIGGER } from './history-store.js';
 // =====================================================
 const SELECT_SELECTOR = 'select[data-preset-manager-for]';
 const TAKEOVER_DATA_ATTR = 'data-pas-takeover';        // 标记此 select 已被接管
-const REP_OPTION_DATA_ATTR = 'data-pas-rep';           // 该 option 是代表项 = "1"
-const ORIGINAL_TEXT_DATA_ATTR = 'data-pas-orig-text';  // 原始 textContent（接管前）
-const SERIES_KEY_DATA_ATTR = 'data-pas-series-key';    // 该代表 option 对应的系列名
 
 // =====================================================
 // 模块状态
 // =====================================================
 let _initialized = false;
 let _takeoverActive = false;
-
-// 每个 select（按 apiId 索引）的"被摘除的非代表 option 列表"
-//   _detachedOptions[apiId] = [{ option: HTMLOptionElement, prevSibling: HTMLElement | null }]
-//   还原时按这个表插回去
-const _detachedOptions = new Map();
 
 // 事件取消订阅句柄
 let _eventUnsubscribers = [];
@@ -78,169 +63,33 @@ let _docObserver = null;
 // 我们是否在写入 DOM（用于让自己的 mutation 不触发自己的 observer）
 let _selfMutating = false;
 
-// 我们正在以"代表项策略"切换预设（用于 change 拦截避免递归）
-let _selfChangingValue = false;
-
-// ⚡ P1 修复：编程式预设切换标志
-//   当我们主动调用 selectPresetSafe 时设为 true，
-//   使 onSelectChangeIntercept 对内部触发的 change 事件放行（不阻止），
-//   让 ST 原生 handler 能正常处理（此时 option textContent 已被修正为真实名）。
-let _inProgrammaticSwitch = false;
+// 管理的 select 集合（用于 teardown 时清理）
+const _managedSelects = new Set();
 
 // ⚡ 防抖与去重缓存
-let _refreshTimer = null;          // 当前调度中的 timer id（用于取消）
-const _selectFingerprints = new WeakMap();  // select → 上一次接管时计算的指纹
-let _lastSettingsFingerprint = '';          // 上一次接管时关联的设置指纹
-let _lastRefreshTs = 0;             // 上一次实际执行 refresh 的时间
-let _refreshSuppressUntil = 0;      // 在该时间点之前禁止再次 refresh（防 ST 事件风暴）
-const REFRESH_DEBOUNCE_MS = 220;    // 防抖窗口（合并 ST 连续触发的多次事件）
-const REFRESH_MIN_INTERVAL_MS = 350; // 真正执行 refresh 的最小间隔
+let _refreshTimer = null;
+let _lastRefreshTs = 0;
+let _refreshSuppressUntil = 0;
+const REFRESH_DEBOUNCE_MS = 220;
+const REFRESH_MIN_INTERVAL_MS = 350;
+
+// 每个 select 对应的 option 指纹（用于判断是否需要重新渲染 dropdown）
+const _selectFingerprints = new WeakMap();
 
 // =====================================================
-// B26 关键修复：预设数据解析器
-// ⚡ DOM 接管后 pm.findPreset(name) 搜索 <select>.options，
-//   但被 detach 的 option 已不在 select 中 → findPreset 返回 undefined。
-//   此解析器从 _detachedOptions 引用 + DOM 中的 option 反查 oai_settings 数组。
+// 预设名有效性检查（模块级，消除重复定义）
 // =====================================================
-
 /**
- * 通过预设名从 DOM option（含 detached）反查预设数据
- * - OpenAI: option.value 是数组索引 → 通过 getPresetList() 查 presets[idx]
- * - 其他 API: pm.findPreset(name) 搜 select options，但 detached 不在 select 中
- *   → 需要先暂时还原 option 到 DOM，或直接搜索内部数据
- *
- * @param {string} apiId
- * @param {string} presetName
- * @returns {object|null}
+ * 判断预设名是否"无效"（空白、纯数字占位符等）
+ * @param {*} name
+ * @returns {boolean}
  */
-function resolvePresetDataFromDetached(apiId, presetName) {
-    if (!presetName) return null;
-
-    // 1) 先在 detached options 中搜索
-    const detached = _detachedOptions.get(apiId) || [];
-    let targetOption = null;
-    for (const d of detached) {
-        const opt = d.option;
-        if (!opt) continue;
-        // detached option 的 textContent 是原始预设名（未被接管改写）
-        const text = (opt.textContent || '').trim();
-        if (text === presetName) {
-            targetOption = opt;
-            break;
-        }
-    }
-
-    // 2) 如果 detached 中没找到，在当前 DOM select 中搜索
-    //    （代表 option 的 textContent 已改为系列名，需要用 data-pas-orig-text 匹配）
-    if (!targetOption) {
-        try {
-            const selects = document.querySelectorAll(SELECT_SELECTOR);
-            for (const sel of selects) {
-                const selApiId = getApiIdOfSelect(sel);
-                if (selApiId !== apiId) continue;
-                for (const opt of sel.options) {
-                    const origText = opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
-                    const text = (origText || opt.textContent || '').trim();
-                    if (text === presetName) {
-                        targetOption = opt;
-                        break;
-                    }
-                }
-                if (targetOption) break;
-            }
-        } catch (_) {}
-    }
-
-    if (!targetOption) return null;
-
-    // 3) ⚡ B29 修复：优先通过 pm.getPresetList() 按预设名查内部数据数组
-    //   原代码错误地引用 window.oai_settings.preset_settings_openai（那是字符串，不是数组！）
-    //   正确方式：pm.getPresetList(apiId) → { presets, preset_names } → preset_names[name] → presets[idx]
-    try {
-        const pm0 = getPresetManager(apiId);
-        if (pm0 && typeof pm0.getPresetList === 'function') {
-            const { presets, preset_names } = pm0.getPresetList(apiId);
-            if (presets && preset_names) {
-                let idx = -1;
-                if (Array.isArray(preset_names)) {
-                    idx = preset_names.indexOf(presetName);
-                } else if (typeof preset_names === 'object') {
-                    const v = preset_names[presetName];
-                    if (v !== undefined) idx = v;
-                }
-                if (idx >= 0 && presets[idx] && typeof presets[idx] === 'object' && Object.keys(presets[idx]).length > 0) {
-                    return presets[idx];
-                }
-            }
-        }
-    } catch (_) {}
-
-    // 3b) 回退：用 option.value（对 openai 是数组索引）直接查 presets 数组
-    const optValue = targetOption.value;
-    if (apiId === 'openai') {
-        const idx = parseInt(optValue, 10);
-        if (!isNaN(idx)) {
-            try {
-                const pm0 = getPresetManager(apiId);
-                if (pm0 && typeof pm0.getPresetList === 'function') {
-                    const { presets } = pm0.getPresetList(apiId);
-                    if (Array.isArray(presets) && presets[idx] && typeof presets[idx] === 'object') {
-                        return presets[idx];
-                    }
-                }
-            } catch (_) {}
-        }
-    }
-
-    // 4) 对非 openai API：尝试通过暂时插回 option 让 findPreset 工作
-    //    或直接搜索 ST 内部数据结构
-    try {
-        const pm = getPresetManager(apiId);
-        if (pm && typeof pm.findPreset === 'function') {
-            // 如果 option 不在 DOM 中，暂时插回让 findPreset 搜索
-            const wasDetached = !targetOption.parentNode;
-            let tempParent = null;
-            if (wasDetached) {
-                // 找到对应的 select
-                const selects = document.querySelectorAll(SELECT_SELECTOR);
-                for (const sel of selects) {
-                    if (getApiIdOfSelect(sel) === apiId) {
-                        tempParent = sel;
-                        break;
-                    }
-                }
-                if (tempParent) {
-                    tempParent.appendChild(targetOption);
-                }
-            }
-            try {
-                const found = pm.findPreset(presetName);
-                if (found !== undefined && found !== null) {
-                    // findPreset 返回 option.val()（字符串），对 openai 是数组索引如 "15"
-                    const idx = parseInt(String(found), 10);
-                    if (!isNaN(idx)) {
-                        try {
-                            const list = pm.getPresetList && pm.getPresetList(apiId);
-                            if (list && list.presets && list.presets[idx]) {
-                                return list.presets[idx];
-                            }
-                        } catch (_) {}
-                    }
-                    // 对非 openai API：found 可能本身就是可用的对象（理论上不会，但防御性保留）
-                    if (found && typeof found === 'object' && Object.keys(found).length > 0) {
-                        return found;
-                    }
-                }
-            } finally {
-                // 还原：把临时插回的 option 移除
-                if (wasDetached && tempParent && targetOption.parentNode === tempParent) {
-                    tempParent.removeChild(targetOption);
-                }
-            }
-        }
-    } catch (_) {}
-
-    return null;
+function _isInvalidPresetName(name) {
+    if (typeof name !== 'string') return true;
+    const s = name.trim();
+    if (!s) return true;
+    if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
+    return false;
 }
 
 // =====================================================
@@ -252,26 +101,18 @@ export async function initPresetTakeover() {
         return;
     }
 
-    // ⚡ P8 修复：立即设置 _initialized = true（claim-first），
-    //   防止并发调用导致事件被重复订阅。失败时在 catch 中回滚。
     _initialized = true;
+    logger.info('[Takeover] Starting initialization (Custom Dropdown Overlay)...');
 
-    logger.info('[Takeover] Starting initialization...');
-
-    // ⚡ B26: 注册预设数据解析器 —— 让 getPresetSnapshot 能从 detached options 获取数据
-    registerPresetDataResolver(resolvePresetDataFromDetached);
-
-    // 初始化归档存储（数据接管模式需要）
+    // 初始化归档存储
     try {
         await initArchiveStore();
     } catch (e) {
-        logger.warn('[Takeover] archive store init failed (data mode unavailable):', e);
+        logger.warn('[Takeover] archive store init failed:', e);
     }
 
-    // 监听设置变化（仅响应"会改变接管布局"的字段）
-    // ⚡ 关键：seriesDefaultApply 不在此列 —— 用户只是改"默认版本"，
-    //   不应该触发接管刷新，否则 DOM 重写会让 ST 误以为用户切换了预设
-    _settingUnsubscribe = onSettingChange(({ key, newValue, oldValue }) => {
+    // 监听设置变化
+    _settingUnsubscribe = onSettingChange(({ key }) => {
         if (
             key === 'takeoverEnabled'
             || key === 'groupingManualOverrides'
@@ -281,28 +122,9 @@ export async function initPresetTakeover() {
         ) {
             scheduleRefresh();
         }
-
-        // 模式切换：dom ↔ data
-        if (key === 'takeoverMode') {
-            logger.info(`[Takeover] mode changed: ${oldValue} → ${newValue}`);
-            if (oldValue === 'data' && newValue === 'dom') {
-                // 从数据接管退回 DOM 接管 → 必须先把所有归档预设回写到 ST
-                restoreAllFromArchive().catch(e =>
-                    logger.error('[Takeover] failed to restore archives:', e)
-                );
-            } else if (oldValue === 'dom' && newValue === 'data') {
-                // 从 DOM 接管 → 数据接管：先还原 DOM，再做归档
-                if (_takeoverActive) restoreAllDom();
-                applyDataTakeover().catch(e =>
-                    logger.error('[Takeover] failed to apply data takeover:', e)
-                );
-            }
-        }
     });
 
-    // 监听 ST 事件：原生重新渲染预设下拉时重做 takeover
-    // ⚡ 关键：SETTINGS_UPDATED 在 ST 内部高频触发（每次 settings 更新都发），
-    //     这是导致 refresh 风暴的根本原因之一 —— 用 throttle 单独处理它
+    // 监听 ST 事件
     const events = [
         'OAI_PRESET_CHANGED_AFTER',
         'PRESET_CHANGED',
@@ -324,8 +146,7 @@ export async function initPresetTakeover() {
         }
     }
 
-    // SETTINGS_UPDATED：单独 throttle 到至少 2 秒间隔
-    // 因为 ST 自己保存设置（自动保存）会触发，频率非常高，对接管来说没意义
+    // SETTINGS_UPDATED：独立 throttle 到至少 2 秒间隔
     let _lastSettingsEvtTs = 0;
     try {
         const evt = getEventType('SETTINGS_UPDATED', 'settings_updated');
@@ -345,42 +166,32 @@ export async function initPresetTakeover() {
 
     setupDocObserver();
 
-    // 立即应用一次 + 800ms 兜底（让 ST 完成首次渲染）
-    // 注意：不再 4 次密集 refresh —— 那是导致刷新风暴的主因之一
+    // 立即应用一次 + 800ms 兜底
     refresh();
     setTimeout(() => refresh(), 800);
 
-    // 启动种子：让"未修改的存量预设"立即出现在三级面板里
-    // 不阻塞主流程：发起异步种子，悄悄完成
+    // 启动种子
     setTimeout(() => {
         seedSnapshotsIfNeeded({ silent: true }).catch(e =>
             logger.warn('[Takeover] seed snapshots failed:', e)
         );
     }, 3000);
 
-    logger.success('[Takeover] Ready ✓');
+    logger.success('[Takeover] Ready ✓ (Custom Dropdown Overlay)');
 }
 
 // =====================================================
-// 调度刷新（强防抖 + 最小间隔节流）
-// 关键：之前 50ms 触发完全不足以挡 ST 自己事件风暴的速度
-// 现在 220ms 防抖 + 350ms 最小间隔，所有连续事件合并到 1 次
+// 调度刷新（防抖 + 最小间隔节流）
 // =====================================================
 function scheduleRefresh() {
+    if (_refreshTimer) return;
     const now = Date.now();
-    // 在最小间隔窗口内：直接合并到下一次（不再开新 timer）
-    if (_refreshTimer) {
-        return;
-    }
-    // 计算到下次允许执行的最早时间
     const earliest = Math.max(now + REFRESH_DEBOUNCE_MS,
                                _lastRefreshTs + REFRESH_MIN_INTERVAL_MS);
     const wait = Math.max(0, earliest - now);
     _refreshTimer = setTimeout(() => {
         _refreshTimer = null;
-        if (Date.now() < _refreshSuppressUntil) {
-            return; // 抑制窗口内：忽略本次（如刚做完接管，避免立即又触发）
-        }
+        if (Date.now() < _refreshSuppressUntil) return;
         try {
             refresh();
         } catch (e) {
@@ -389,58 +200,24 @@ function scheduleRefresh() {
     }, wait);
 }
 
-/**
- * 计算单个 select 的内容指纹（用于幂等判断：内容没变就不再 reapply）
- * 用 length + 头/尾 option value + 第一/中间/末尾 textContent 组合
- */
+// =====================================================
+// 计算 select 的 option 列表指纹（幂等判断）
+// =====================================================
 function computeSelectFingerprint(select) {
     if (!select) return '';
     const opts = select.options;
     const len = opts ? opts.length : 0;
     if (len === 0) return `${select.id || ''}::0`;
-    // ⚡ P7 修复：用 textContent（或 data-pas-orig-text）计算指纹，而非 option.value
-    //   原因：OpenAI 的 option.value 是数组索引（如 "15"），ST 重新渲染 select 时
-    //   索引可能不变但内容变了 → 用 value 计算的指纹会漏检变化。
-    //   textContent 是真实预设名，能准确反映内容是否变化。
-    const getText = (opt) => {
-        if (!opt) return '';
-        return opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR) || opt.textContent || '';
-    };
+    const getText = (opt) => opt ? (opt.textContent || '') : '';
     const firstT = getText(opts[0]);
     const lastT = getText(opts[len - 1]);
     const midT = getText(opts[Math.floor(len / 2)]);
     return `${select.id || select.getAttribute('data-preset-manager-for') || ''}::${len}::${firstT}::${midT}::${lastT}::${select.value}`;
 }
 
-/**
- * 计算与接管相关的设置指纹
- */
-function computeSettingsFingerprint() {
-    try {
-        const s = getSettings();
-        return [
-            s.enabled ? 1 : 0,
-            s.groupingEnabled ? 1 : 0,
-            s.takeoverEnabled ? 1 : 0,
-            s.takeoverMode || 'dom',
-            // overrides 的键集合
-            Object.keys(s.groupingManualOverrides || {}).sort().join('|'),
-            Object.keys(s.groupingExcluded || {}).sort().join('|'),
-            Object.keys(s.seriesDefaultApply || {}).sort().join('|'),
-        ].join('#');
-    } catch (_) {
-        return '';
-    }
-}
-
-/**
- * 主刷新逻辑：根据当前 settings 决定开 / 关，并作用到所有 select
- *
- * ⚡ 性能关键：用指纹机制做幂等判断
- *   每个 select 在接管后会缓存（settings 指纹 + DOM 指纹）；
- *   如果再次 refresh 时两者都未变 → 直接跳过，不再读写 DOM
- *   这从根本上消除"refresh → DOM 变 → ST 事件 → refresh"的死循环
- */
+// =====================================================
+// 主刷新逻辑
+// =====================================================
 function refresh() {
     const s = getSettings();
     const shouldActive = !!(s.enabled && s.groupingEnabled && s.takeoverEnabled);
@@ -448,27 +225,13 @@ function refresh() {
 
     if (!shouldActive) {
         if (_takeoverActive) {
-            logger.info(`[Takeover] disabling (enabled=${s.enabled} grouping=${s.groupingEnabled} takeover=${s.takeoverEnabled}) → restore native dropdown`);
-            // 数据接管模式 → 必须先把归档恢复回 ST，再退出
-            if (s.takeoverMode === 'data') {
-                restoreAllFromArchive().catch(e => logger.error('[Takeover] data restore failed:', e));
-            }
-            restoreAllDom();
+            logger.info('[Takeover] disabling → removing custom dropdowns, restoring native selects');
+            teardownAllDropdowns();
             _takeoverActive = false;
-            _lastSettingsFingerprint = '';
-        } else {
-            // 状态稳定：不打 debug log（避免被 logger 订阅再次触发面板渲染）
         }
         return;
     }
 
-    // 模式分流：数据接管单独走异步流程
-    if (s.takeoverMode === 'data') {
-        applyDataTakeover().catch(e => logger.error('[Takeover] data takeover failed:', e));
-        return;
-    }
-
-    // 应用接管
     let selects;
     try {
         selects = document.querySelectorAll(SELECT_SELECTOR);
@@ -477,119 +240,202 @@ function refresh() {
         return;
     }
 
-    if (!selects || selects.length === 0) {
-        // 没找到 select：不刷屏 log
-        return;
-    }
-
-    // 计算当前 settings 指纹
-    const settingsFp = computeSettingsFingerprint();
-    const settingsChanged = settingsFp !== _lastSettingsFingerprint;
+    if (!selects || selects.length === 0) return;
 
     let appliedCount = 0;
-    let totalSeries = 0;
-    let totalDetached = 0;
     let skippedCount = 0;
     for (const select of selects) {
         if (!select || !select.isConnected) continue;
 
-        // ⚡ 幂等跳过：select 自身指纹未变 + settings 未变 → 不重做
+        // 幂等跳过：option 指纹未变 + 已有 wrapper → 仅更新 trigger 显示 + active 状态
         const selFp = computeSelectFingerprint(select);
         const lastSelFp = _selectFingerprints.get(select);
-        if (!settingsChanged && lastSelFp === selFp && select.hasAttribute(TAKEOVER_DATA_ATTR)) {
+        const wrapper = select.closest('.pas-dd-wrapper');
+
+        if (lastSelFp === selFp && wrapper) {
+            // 只更新 trigger 文本和 active 标记
+            updateTriggerDisplay(select, wrapper);
+            updateActiveState(select, wrapper);
             skippedCount++;
             continue;
         }
 
         try {
-            const stat = applyTakeoverToSelect(select);
+            applyTakeoverToSelect(select);
             appliedCount++;
-            if (stat) {
-                totalSeries += stat.seriesCount || 0;
-                totalDetached += stat.detachedCount || 0;
-            }
-            // 接管完成后重新计算指纹并缓存
             _selectFingerprints.set(select, computeSelectFingerprint(select));
         } catch (e) {
             logger.warn('[Takeover] failed for select:', e);
         }
     }
 
-    _lastSettingsFingerprint = settingsFp;
-    // 抑制 800ms 内的下次 refresh（让 DOM 写完 + ST 事件平息）
     _refreshSuppressUntil = Date.now() + 800;
 
     if (appliedCount > 0) {
         if (!_takeoverActive) {
-            logger.success(`[Takeover] activated · ${appliedCount} select(s) · ${totalSeries} series · ${totalDetached} option(s) merged`);
+            logger.success(`[Takeover] activated (overlay) · ${appliedCount} select(s)`);
         } else {
-            logger.debug(`[Takeover] refreshed · ${appliedCount} select(s) · ${totalSeries} series · ${totalDetached} merged${skippedCount > 0 ? ` · skipped ${skippedCount}` : ''}`);
+            logger.debug(`[Takeover] refreshed · ${appliedCount} applied${skippedCount > 0 ? ` · ${skippedCount} skipped` : ''}`);
         }
+        _takeoverActive = true;
     }
-
-    if (appliedCount > 0) _takeoverActive = true;
 }
 
 // =====================================================
-// 接管单个 select
+// 接管单个 select — 创建 Custom Dropdown Overlay
 // =====================================================
-/**
- * @param {HTMLSelectElement} select
- */
 function applyTakeoverToSelect(select) {
     const apiId = getApiIdOfSelect(select);
-
-    // 先把所有原本被摘除的还原 → 然后重新计算（保证幂等）
-    restoreSelect(select, apiId);
-
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
     const excluded = settings.groupingExcluded || {};
     const seriesDefaults = settings.seriesDefaultApply || {};
 
-    // 1) 收集所有 option（跳过 disabled / value="" 的占位项）
-    const optionList = Array.from(select.options || []);
-    if (optionList.length === 0) return;
+    // 如果已经创建了 wrapper，更新内容即可
+    let wrapper = select.closest('.pas-dd-wrapper');
+    if (wrapper) {
+        const panel = wrapper.querySelector('.pas-dd-panel');
+        if (panel) {
+            renderDropdownContent(panel, select, apiId, overrides, excluded, seriesDefaults);
+            updateTriggerDisplay(select, wrapper);
+            updateActiveState(select, wrapper);
+        }
+        return;
+    }
 
-    // 防御过滤：剔除"纯数字 / 空"的 option（OpenAI 某些 ST 版本会把
-    //   oai_settings.preset_settings_openai 数组的索引 "0/1/2.../15..." 当成 value）
-    const isInvalidName = (n) => {
-        if (typeof n !== 'string') return true;
-        const s = n.trim();
-        if (!s) return true;
-        if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
-        return false;
+    // 创建 wrapper，包裹 select
+    wrapper = document.createElement('div');
+    wrapper.className = 'pas-dd-wrapper';
+    wrapper.style.position = 'relative';
+    wrapper.style.display = 'inline-block';
+    wrapper.style.width = '100%';
+
+    _selfMutating = true;
+    try {
+        select.parentNode.insertBefore(wrapper, select);
+        wrapper.appendChild(select);
+    } finally {
+        _selfMutating = false;
+    }
+
+    // 隐藏原生 select（CSS only — ST 仍可通过 ID/selector 正常访问）
+    select.style.opacity = '0';
+    select.style.pointerEvents = 'none';
+    select.style.position = 'absolute';
+    select.style.width = '100%';
+    select.style.height = '100%';
+    select.style.top = '0';
+    select.style.left = '0';
+    select.style.zIndex = '-1';
+    select.setAttribute(TAKEOVER_DATA_ATTR, '1');
+
+    // 创建 trigger 按钮
+    const trigger = document.createElement('div');
+    trigger.className = 'pas-dd-trigger';
+    trigger.tabIndex = 0;
+    trigger.innerHTML = `
+        <span class="pas-dd-label"></span>
+        <i class="fas fa-chevron-down pas-dd-chevron"></i>
+    `;
+    wrapper.appendChild(trigger);
+
+    // 创建 panel（下拉面板）
+    const panel = document.createElement('div');
+    panel.className = 'pas-dd-panel';
+    panel.style.display = 'none';
+    wrapper.appendChild(panel);
+
+    // 渲染分组内容
+    renderDropdownContent(panel, select, apiId, overrides, excluded, seriesDefaults);
+    updateTriggerDisplay(select, wrapper);
+
+    // ---------- 事件绑定 ----------
+
+    // trigger 点击 → 显示/隐藏 panel
+    trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = panel.style.display !== 'none';
+        if (isOpen) {
+            closePanel(panel, trigger);
+        } else {
+            openPanel(panel, trigger);
+        }
+    });
+
+    // 键盘导航
+    trigger.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            trigger.click();
+        } else if (e.key === 'Escape') {
+            closePanel(panel, trigger);
+        }
+    });
+
+    panel.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closePanel(panel, trigger);
+            trigger.focus();
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateItems(panel, e.key === 'ArrowDown' ? 1 : -1);
+        } else if (e.key === 'Enter') {
+            const focused = panel.querySelector('.pas-dd-item--focused');
+            if (focused) focused.click();
+        }
+    });
+
+    // 点击外部 → 关闭 panel
+    const onDocClick = (e) => {
+        if (!wrapper.contains(e.target)) {
+            closePanel(panel, trigger);
+        }
     };
+    document.addEventListener('click', onDocClick, true);
+    // 保存引用以便 teardown
+    wrapper._pasDocClickHandler = onDocClick;
 
-    // 2) 按系列分组：seriesKey -> [{ option, presetName, version, parsed }]
+    // 标记为已管理
+    _managedSelects.add(select);
+
+    // 设置 select observer
+    setupSelectObserver(select);
+
+    // 自动设置 seriesDefaultApply
+    autoSetSeriesDefaults(select, apiId, overrides, excluded, seriesDefaults);
+
+    logger.debug(`[Takeover] overlay applied to [${apiId}]`);
+}
+
+// =====================================================
+// 渲染下拉面板内容
+// =====================================================
+function renderDropdownContent(panel, select, apiId, overrides, excluded, seriesDefaults) {
+    // 从 select.options 读取所有预设名和 value
+    const optionList = Array.from(select.options || []);
+    if (optionList.length === 0) {
+        panel.innerHTML = '<div class="pas-dd-empty">暂无预设</div>';
+        return;
+    }
+
+    // 收集有效预设名
+
+    // 按系列分组
     const seriesGroups = new Map();
-    const standalone = [];  // 解析失败 / excluded 的项（保持原样）
+    const standaloneOptions = []; // 不参与分组的
+
     for (const option of optionList) {
-        // ⚡ 关键：强制用 textContent 作为预设名
-        //   ST 的 OpenAI PresetManager 用 oai_settings.preset_settings_openai 的"数组索引"作为 option.value
-        //   而真实预设名在 option.textContent 里。
-        //   其它 API（kobold/novel/textgen ...）则 value === textContent。
-        //   统一用 textContent 是最稳妥的。
         const presetName = (option.textContent || '').trim();
         const value = option.value;
-
-        // 占位项（如空 textContent）跳过接管
-        if (!presetName && !value) {
-            standalone.push(option);
-            continue;
-        }
-        // 用 textContent 作为真实名（如果空再退到 value，但这已极少见）
         const realName = presetName || value;
 
-        // ⛔ 数字 ID 形式：跳过（不接管、不分组）
-        if (isInvalidName(realName)) {
-            standalone.push(option);
+        if (!realName || _isInvalidPresetName(realName)) {
+            standaloneOptions.push({ presetName: realName || value, value, excluded: false });
             continue;
         }
 
-        // excluded 的预设保持原样
         if (excluded[realName]) {
-            standalone.push(option);
+            standaloneOptions.push({ presetName: realName, value, excluded: true });
             continue;
         }
 
@@ -600,318 +446,369 @@ function applyTakeoverToSelect(select) {
             seriesGroups.set(seriesKey, []);
         }
         seriesGroups.get(seriesKey).push({
-            option,
             presetName: realName,
+            value,
             version: info.version,
             duplicate: info.duplicate,
         });
     }
 
-    // ⚡ C1 新增：自动为没有配置默认版本的系列设置默认值（= 最新版本）
-    //   用户需求："任何一级预设系列下，都要把最新的一个预设作为默认的"
-    //   仅在 seriesDefaultApply 中没有该系列的条目时自动写入
-    {
-        let autoSetCount = 0;
-        for (const [seriesKey, items] of seriesGroups) {
-            // ⚡ 修复 seriesDefaultApply 膨胀：只对多版本系列设置默认值
-            //   单版本系列（items.length <= 1）只有一个选择，不需要默认值，
-            //   否则会产生大量 "Default":"Default" 这种无意义条目
-            if (items.length <= 1) continue;
-            // 已有用户配置 → 跳过
-            if (seriesDefaults[seriesKey]) continue;
-            // 用 pickLatestVersion 选出最新版本
-            const latest = pickLatestVersion(items);
-            if (latest && latest.presetName) {
-                seriesDefaults[seriesKey] = latest.presetName;
-                autoSetCount++;
-            }
-        }
-        // ⚡ D1 修复：完全移除 purge 逻辑。
-        //   seriesDefaultApply 是跨 API 共享的 Map，每个 API 的 applyTakeoverToSelect()
-        //   只能看到本 API 的 seriesGroups，purge 会误删其他 API 设置的默认值。
-        //   旧条目累积无害（auto-set 只在 !seriesDefaults[key] 时添加）。
-        if (autoSetCount > 0) {
-            // 批量写入 settings（异步，不阻塞接管流程）
-            try {
-                updateSetting('seriesDefaultApply', { ...seriesDefaults });
-                logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
-            } catch (e) {
-                logger.debug('[Takeover] auto-set default write failed:', e);
-            }
-        }
-    }
+    // 构建 HTML
+    const currentValue = select.value;
+    let html = '';
 
-    // 3) 选出每个系列的"代表 option"
-    //    优先级：当前选中的 option（避免 UI/数据不同步）→ seriesDefaultApply[seriesKey] → pickLatestVersion
-    //    重要：如果某个系列内"当前选中"的 option 不是默认/最新，则升格它为代表，避免摘除导致 select.value 跳变
-    const currentSelectValue = select.value;
-    const detachQueue = [];
-    const repAssignments = [];
-    for (const [seriesKey, items] of seriesGroups) {
-        let rep = null;
+    // 排序系列：按系列名字母序
+    const sortedSeries = Array.from(seriesGroups.entries()).sort((a, b) =>
+        a[0].localeCompare(b[0])
+    );
 
-        // 3.1) 当前选中的 option 优先（最稳定，不会触发 select 自动跳变）
-        const currentMatch = items.find(it => it.option.value === currentSelectValue);
-        if (currentMatch) {
-            rep = currentMatch;
-        } else {
-            // 3.2) 用户配置的默认应用 / latest
-            rep = pickRepresentativeVersion(seriesKey, items, seriesDefaults);
+    for (const [seriesKey, items] of sortedSeries) {
+        // 单版本系列 → 作为独立项
+        if (items.length === 1) {
+            const it = items[0];
+            const isActive = it.value === currentValue;
+            const isDefault = seriesDefaults[seriesKey] === it.presetName;
+            html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}${isDefault ? ' pas-dd-item--default' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+                <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
+            </div>`;
+            continue;
         }
-        if (!rep) continue;
-        repAssignments.push({ option: rep.option, seriesKey, items });
 
-        // 其它 option 进入待摘除队列
+        // 多版本系列 → 组
+        // 版本按版本号倒序（最新在前）
+        items.sort((a, b) => _compareVersionInline(b.version, a.version));
+
+        // 判断默认版本
+        const defaultPresetName = seriesDefaults[seriesKey] || items[0]?.presetName || '';
+        const hasActiveInGroup = items.some(it => it.value === currentValue);
+
+        html += `<div class="pas-dd-group" data-series-key="${escapeAttr(seriesKey)}">
+            <div class="pas-dd-group-header${hasActiveInGroup ? ' pas-dd-group--has-active' : ''}">
+                <span class="pas-dd-series-name">${escapeHtml(seriesKey)}</span>
+                <span class="pas-dd-badge pas-dd-version-count">${items.length}</span>
+                <i class="fas fa-chevron-right pas-dd-group-chevron"></i>
+            </div>
+            <div class="pas-dd-group-body" style="display:none;">`;
+
         for (const it of items) {
-            if (it.option !== rep.option) {
-                detachQueue.push(it.option);
-            }
-        }
-    }
-
-    // 4) 写入 DOM（标记自身写入避免 observer 反复触发）
-    _selfMutating = true;
-    try {
-        // 4.1) 给 select 加上接管标记
-        select.setAttribute(TAKEOVER_DATA_ATTR, '1');
-
-        // 4.2) 改写每个代表 option 的 textContent 为系列名
-        for (const { option, seriesKey, items } of repAssignments) {
-            // 保存原始文本用于还原
-            if (!option.hasAttribute(ORIGINAL_TEXT_DATA_ATTR)) {
-                option.setAttribute(ORIGINAL_TEXT_DATA_ATTR, option.textContent || '');
-            }
-            const versionCount = items.length;
-            // 同系列只有 1 个版本时不显示 (1)，多版本时附带数量提示
-            const displayName = versionCount > 1 ? `${seriesKey}` : seriesKey;
-            option.textContent = displayName;
-            option.setAttribute(REP_OPTION_DATA_ATTR, '1');
-            option.setAttribute(SERIES_KEY_DATA_ATTR, seriesKey);
-            if (versionCount > 1) {
-                option.title = `${seriesKey} · ${versionCount} 个版本`;
-            } else {
-                option.removeAttribute('title');
-            }
+            const isActive = it.value === currentValue;
+            const isDefault = it.presetName === defaultPresetName;
+            html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}${isDefault ? ' pas-dd-item--default' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+                    <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
+                    ${it.version ? `<span class="pas-dd-version-tag">${escapeHtml(it.version)}</span>` : ''}
+                    ${isDefault ? '<span class="pas-dd-badge pas-dd-default-badge" title="默认">⭐</span>' : ''}
+                </div>`;
         }
 
-        // 4.3) 把待摘除 option 从 DOM 移除（保存引用 + 前一个兄弟）
-        const detachedList = _detachedOptions.get(apiId) || [];
-        for (const opt of detachQueue) {
-            const prevSibling = opt.previousElementSibling || null;
-            const parent = opt.parentNode;
-            if (parent) {
-                detachedList.push({ option: opt, prevSibling, parent });
-                parent.removeChild(opt);
+        html += `</div></div>`;
+    }
+
+    // 独立预设（excluded 或不可分组的）
+    for (const it of standaloneOptions) {
+        if (!it.presetName) continue;
+        const isActive = it.value === currentValue;
+        html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+            <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
+        </div>`;
+    }
+
+    panel.innerHTML = html;
+
+    // ---------- 绑定 panel 内事件（事件委托，只绑定一次） ----------
+    if (!panel._pasClickBound) {
+        panel._pasClickBound = true;
+
+    // item 点击 → 切换预设
+    panel.addEventListener('click', (e) => {
+        const item = e.target.closest('.pas-dd-item');
+        if (item) {
+            e.stopPropagation();
+            const value = item.getAttribute('data-value');
+            if (value !== null) {
+                onItemClick(select, value, panel);
             }
+            return;
         }
-        _detachedOptions.set(apiId, detachedList);
-    } finally {
-        _selfMutating = false;
-    }
 
-    // 5) 拦截 change（一次性，幂等）
-    if (!select.dataset.pasChangeBound) {
-        select.dataset.pasChangeBound = '1';
-        select.addEventListener('change', onSelectChangeIntercept, true);
-    }
+        // 组头点击 → 展开/收起
+        const header = e.target.closest('.pas-dd-group-header');
+        if (header) {
+            e.stopPropagation();
+            const group = header.closest('.pas-dd-group');
+            if (group) {
+                toggleGroup(group);
+            }
+            return;
+        }
+    });
 
-    // 6) 启动 select 子树 observer（监听 ST 重新渲染）
-    setupSelectObserver(select);
-
-    logger.debug(`[Takeover] applied to [${apiId}]: ${repAssignments.length} series, ${detachQueue.length} detached`);
-    return {
-        apiId,
-        seriesCount: repAssignments.length,
-        detachedCount: detachQueue.length,
-    };
+    } // end if (!panel._pasClickBound)
 }
 
 // =====================================================
-// change 拦截：用户选中任意 option → 自行完成预设切换
-// ⚡ P1 修复：统一拦截所有被接管 select 的 change 事件
-//   原因：接管把 option.textContent 改为系列名，ST 原生 handler 读到系列名 → 查找失败
-//   策略：始终 stopImmediatePropagation，自己用 selectPresetSafe 完成切换，
-//         然后通过 _inProgrammaticSwitch 放行内部触发的 change 给 ST 原生 handler
+// item 点击 → 通过原生 select 切换预设
 // =====================================================
-function onSelectChangeIntercept(e) {
-    // ⚡ P1 修复：编程式切换（selectPresetSafe 内部触发的 change）→ 放行给 ST 原生
-    if (_inProgrammaticSwitch) return;
-    if (_selfChangingValue) return;
+function onItemClick(select, value, panel) {
+    // 通过 jQuery 设值并触发 change — ST 原生 handler 完全接管
+    try {
+        const $ = window.jQuery || window.$;
+        if ($) {
+            $(select).val(String(value)).trigger('change');
+        } else {
+            select.value = String(value);
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    } catch (e) {
+        logger.warn('[Takeover] onItemClick failed:', e);
+    }
 
-    const select = e.currentTarget;
-    if (!select || !select.tagName || select.tagName.toLowerCase() !== 'select') return;
-    if (!select.hasAttribute(TAKEOVER_DATA_ATTR)) return;
+    // 关闭 panel
+    const wrapper = select.closest('.pas-dd-wrapper');
+    if (wrapper) {
+        const trigger = wrapper.querySelector('.pas-dd-trigger');
+        closePanel(panel, trigger);
+    }
 
+    // 刷新 UI（trigger 显示 + active 状态）
+    setTimeout(() => {
+        const w = select.closest('.pas-dd-wrapper');
+        if (w) {
+            updateTriggerDisplay(select, w);
+            updateActiveState(select, w);
+        }
+    }, 50);
+}
+
+// =====================================================
+// 组的展开/收起
+// =====================================================
+function toggleGroup(group) {
+    const body = group.querySelector('.pas-dd-group-body');
+    const chevron = group.querySelector('.pas-dd-group-chevron');
+    if (!body) return;
+
+    const isOpen = body.style.display !== 'none';
+    body.style.display = isOpen ? 'none' : 'block';
+    if (chevron) {
+        chevron.classList.toggle('fa-chevron-right', isOpen);
+        chevron.classList.toggle('fa-chevron-down', !isOpen);
+    }
+    group.classList.toggle('pas-dd-group--open', !isOpen);
+}
+
+// =====================================================
+// 更新 trigger 显示文字
+// =====================================================
+function updateTriggerDisplay(select, wrapper) {
+    const label = wrapper.querySelector('.pas-dd-label');
+    if (!label) return;
+
+    const selectedOpt = select.options[select.selectedIndex];
+    if (!selectedOpt) {
+        label.textContent = '—';
+        label.title = '';
+        return;
+    }
+
+    const presetName = (selectedOpt.textContent || '').trim();
     const settings = getSettings();
-    if (!(settings.enabled && settings.groupingEnabled && settings.takeoverEnabled)) {
-        return;
+    const overrides = settings.groupingManualOverrides || {};
+    const excluded = settings.groupingExcluded || {};
+    const info = getSeriesInfo(presetName, overrides, excluded);
+
+    if (info.version && info.series) {
+        label.textContent = `${info.series} · ${info.version}`;
+    } else {
+        label.textContent = presetName;
     }
-
-    const value = select.value;
-    if (!value) return;
-    const opt = Array.from(select.options).find(o => o.value === value);
-    if (!opt) return;
-
-    const apiId = getApiIdOfSelect(select);
-
-    // ⚡ P1 核心修复：对所有被接管 select 的 change 事件统一拦截
-    //   阻止 ST 原生 handler 读取被修改过 textContent 的 option
-    e.stopImmediatePropagation();
-    e.preventDefault();
-
-    // 获取真实预设名（可能已被改写为系列名）
-    const origText = opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
-    const realName = (origText || opt.textContent || '').trim();
-    if (!realName) return;
-
-    // 判断是否为代表 option + 是否需要重定向
-    const isRep = opt.hasAttribute(REP_OPTION_DATA_ATTR);
-    let targetName = realName;
-
-    if (isRep) {
-        const seriesKey = opt.getAttribute(SERIES_KEY_DATA_ATTR) || realName;
-        const seriesDefaults = settings.seriesDefaultApply || {};
-        const defaultVersion = seriesDefaults[seriesKey];
-        if (defaultVersion && defaultVersion !== realName) {
-            // 检查目标版本是否存在（在被摘除列表中或 DOM 中）
-            const detached = _detachedOptions.get(apiId) || [];
-            const targetDetachedEntry = detached.find(d => (d.option.textContent || '').trim() === defaultVersion);
-            const existsInSelect = Array.from(select.options).some(o => {
-                const ot = o.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
-                return (ot || o.textContent || '').trim() === defaultVersion;
-            });
-            if (targetDetachedEntry || existsInSelect) {
-                targetName = defaultVersion;
-                logger.debug(`takeover: redirected ${seriesKey} → ${targetName}`);
-            } else {
-                logger.warn(`takeover: configured default "${defaultVersion}" missing for series "${seriesKey}", using ${realName}`);
-            }
-        }
-    }
-
-    // ⚡ P1 修复：如果目标就是当前 REP option 本身，临时恢复其 textContent 为真实名
-    //   这样 selectPresetSafe 内部 pm.selectPreset() 触发的 change 事件
-    //   让 ST 原生 handler onSettingsPresetChange() 能读到正确的预设名
-    let _textRestoreOpt = null;
-    let _textRestoreValue = null;
-    if (targetName === realName && origText) {
-        _textRestoreOpt = opt;
-        _textRestoreValue = opt.textContent;
-        _selfMutating = true;
-        try { opt.textContent = realName; } finally { _selfMutating = false; }
-    }
-
-    // ⚡ P1 修复：设置编程式切换标志
-    //   selectPresetSafe → pm.selectPreset(value) → $(select).trigger('change')
-    //   → onSelectChangeIntercept 再次触发 → 检测 _inProgrammaticSwitch → return（放行）
-    //   → ST 原生 handler 正常执行
-    _inProgrammaticSwitch = true;
-    _selfChangingValue = true;
-    try {
-        const ok = selectPresetSafe(targetName);
-        if (!ok) {
-            logger.warn(`takeover: selectPresetSafe(${targetName}) failed`);
-        }
-    } finally {
-        _inProgrammaticSwitch = false;
-        _selfChangingValue = false;
-        // 恢复 textContent 为系列名（保持接管状态的 DOM 外观）
-        if (_textRestoreOpt && _textRestoreValue !== null) {
-            _selfMutating = true;
-            try { _textRestoreOpt.textContent = _textRestoreValue; } finally { _selfMutating = false; }
-        }
-    }
-
-    // 安排刷新（重新接管 DOM，清理临时 option 等）
-    scheduleRefresh();
+    label.title = presetName;
 }
 
 // =====================================================
-// 还原：把单个 select 的所有摘除 option 重新插回
+// 更新 active 状态
 // =====================================================
-function restoreSelect(select, apiId) {
-    if (!select) return;
-    const detached = _detachedOptions.get(apiId);
-    if (!detached || detached.length === 0) {
-        cleanupSelectAttributes(select);
-        return;
+function updateActiveState(select, wrapper) {
+    const panel = wrapper.querySelector('.pas-dd-panel');
+    if (!panel) return;
+
+    const currentValue = select.value;
+
+    // 更新 items
+    const allItems = panel.querySelectorAll('.pas-dd-item');
+    for (const item of allItems) {
+        const v = item.getAttribute('data-value');
+        item.classList.toggle('pas-dd-item--active', v === currentValue);
     }
+
+    // 更新 group headers 的 has-active 标记
+    const groups = panel.querySelectorAll('.pas-dd-group');
+    for (const group of groups) {
+        const hasActive = group.querySelector('.pas-dd-item--active') !== null;
+        const header = group.querySelector('.pas-dd-group-header');
+        if (header) {
+            header.classList.toggle('pas-dd-group--has-active', hasActive);
+        }
+    }
+}
+
+// =====================================================
+// Panel 开/关
+// =====================================================
+function openPanel(panel, trigger) {
+    panel.style.display = 'block';
+    if (trigger) {
+        trigger.classList.add('pas-dd-trigger--open');
+        const chevron = trigger.querySelector('.pas-dd-chevron');
+        if (chevron) {
+            chevron.classList.remove('fa-chevron-down');
+            chevron.classList.add('fa-chevron-up');
+        }
+    }
+
+    // 滚动到 active item
+    requestAnimationFrame(() => {
+        const active = panel.querySelector('.pas-dd-item--active');
+        if (active) {
+            // 如果 active 在折叠组内，先展开该组
+            const group = active.closest('.pas-dd-group');
+            if (group && !group.classList.contains('pas-dd-group--open')) {
+                toggleGroup(group);
+            }
+            active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+    });
+}
+
+function closePanel(panel, trigger) {
+    if (panel) panel.style.display = 'none';
+    if (trigger) {
+        trigger.classList.remove('pas-dd-trigger--open');
+        const chevron = trigger.querySelector('.pas-dd-chevron');
+        if (chevron) {
+            chevron.classList.remove('fa-chevron-up');
+            chevron.classList.add('fa-chevron-down');
+        }
+    }
+}
+
+// =====================================================
+// 键盘导航
+// =====================================================
+function navigateItems(panel, direction) {
+    const items = Array.from(panel.querySelectorAll('.pas-dd-item:not([style*="display: none"])'));
+    if (items.length === 0) return;
+
+    const current = panel.querySelector('.pas-dd-item--focused');
+    let idx = current ? items.indexOf(current) : -1;
+    if (current) current.classList.remove('pas-dd-item--focused');
+
+    idx += direction;
+    if (idx < 0) idx = items.length - 1;
+    if (idx >= items.length) idx = 0;
+
+    items[idx].classList.add('pas-dd-item--focused');
+    items[idx].scrollIntoView({ block: 'nearest' });
+}
+
+// =====================================================
+// 自动设置系列默认版本
+// =====================================================
+function autoSetSeriesDefaults(select, apiId, overrides, excluded, seriesDefaults) {
+    const optionList = Array.from(select.options || []);
+
+    const seriesGroups = new Map();
+    for (const option of optionList) {
+        const presetName = (option.textContent || '').trim();
+        const realName = presetName || option.value;
+        if (!realName || _isInvalidPresetName(realName) || excluded[realName]) continue;
+
+        const info = getSeriesInfo(realName, overrides, excluded);
+        const seriesKey = info.series || realName;
+        if (!seriesGroups.has(seriesKey)) seriesGroups.set(seriesKey, []);
+        seriesGroups.get(seriesKey).push({
+            presetName: realName,
+            version: info.version,
+        });
+    }
+
+    let autoSetCount = 0;
+    for (const [seriesKey, items] of seriesGroups) {
+        if (items.length <= 1) continue;
+        if (seriesDefaults[seriesKey]) continue;
+        const latest = pickLatestVersion(items);
+        if (latest && latest.presetName) {
+            seriesDefaults[seriesKey] = latest.presetName;
+            autoSetCount++;
+        }
+    }
+
+    if (autoSetCount > 0) {
+        try {
+            updateSetting('seriesDefaultApply', { ...seriesDefaults });
+            logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
+        } catch (e) {
+            logger.debug('[Takeover] auto-set default write failed:', e);
+        }
+    }
+}
+
+// =====================================================
+// 拆除所有自定义 dropdown（还原原生 select）
+// =====================================================
+function teardownAllDropdowns() {
+    for (const select of _managedSelects) {
+        teardownDropdown(select);
+    }
+    _managedSelects.clear();
+}
+
+function teardownDropdown(select) {
+    if (!select) return;
+    const wrapper = select.closest('.pas-dd-wrapper');
+    if (!wrapper) return;
 
     _selfMutating = true;
     try {
-        for (const entry of detached) {
-            try {
-                const { option, prevSibling, parent } = entry;
-                if (!parent) continue;
-                if (option.parentNode) continue; // 已经在 DOM 中
-                if (prevSibling && prevSibling.parentNode === parent) {
-                    parent.insertBefore(option, prevSibling.nextSibling);
-                } else {
-                    // 兜底：插到末尾
-                    parent.appendChild(option);
-                }
-            } catch (_) {
-                // 忽略单个失败
-            }
+        // 还原 select 样式
+        select.style.opacity = '';
+        select.style.pointerEvents = '';
+        select.style.position = '';
+        select.style.width = '';
+        select.style.height = '';
+        select.style.top = '';
+        select.style.left = '';
+        select.style.zIndex = '';
+        select.removeAttribute(TAKEOVER_DATA_ATTR);
+
+        // 从 document 上移除 click handler
+        if (wrapper._pasDocClickHandler) {
+            document.removeEventListener('click', wrapper._pasDocClickHandler, true);
+            wrapper._pasDocClickHandler = null;
         }
-        // 还原代表 option 的原始文本
-        const reps = select.querySelectorAll(`option[${REP_OPTION_DATA_ATTR}="1"]`);
-        for (const opt of reps) {
-            const orig = opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
-            if (orig !== null) {
-                opt.textContent = orig;
-            }
-            opt.removeAttribute(REP_OPTION_DATA_ATTR);
-            opt.removeAttribute(SERIES_KEY_DATA_ATTR);
-            opt.removeAttribute(ORIGINAL_TEXT_DATA_ATTR);
-            opt.removeAttribute('title');
+
+        // 将 select 移回 wrapper 的 parent，然后移除 wrapper
+        const parent = wrapper.parentNode;
+        if (parent) {
+            parent.insertBefore(select, wrapper);
+            parent.removeChild(wrapper);
         }
     } finally {
         _selfMutating = false;
     }
-
-    _detachedOptions.delete(apiId);
-    cleanupSelectAttributes(select);
-}
-
-function cleanupSelectAttributes(select) {
-    select.removeAttribute(TAKEOVER_DATA_ATTR);
-}
-
-function restoreAllDom() {
-    let selects;
-    try {
-        selects = document.querySelectorAll(`select[${TAKEOVER_DATA_ATTR}="1"]`);
-    } catch (_) {
-        return;
-    }
-    for (const select of selects) {
-        const apiId = getApiIdOfSelect(select);
-        try {
-            restoreSelect(select, apiId);
-        } catch (e) {
-            logger.debug('restoreSelect error:', e);
-        }
-    }
-    // 防御：清空映射
-    _detachedOptions.clear();
 }
 
 // =====================================================
-// MutationObserver：当原生 select 子树变化（ST 重渲染）
+// MutationObserver
 // =====================================================
 function setupSelectObserver(select) {
     if (!_selectObserver) {
         _selectObserver = new MutationObserver((mutations) => {
             if (_selfMutating) return;
-            if (Date.now() < _refreshSuppressUntil) return; // ⚡ 抑制窗口内忽略
-            // 只关心"实质性"的 childList 变化（option 节点的增删）
+            if (Date.now() < _refreshSuppressUntil) return;
             let needRefresh = false;
             for (const m of mutations) {
                 if (m.type !== 'childList') continue;
-                // 过滤：仅 attributes/text 变化（如 select.value 改变引起的 selected 属性）
                 if (!m.addedNodes.length && !m.removedNodes.length) continue;
-                // 过滤：被增删的节点不是 OPTION
                 const hasOption = (nodes) => {
                     for (const n of nodes) {
                         if (n && n.nodeType === 1 && n.tagName === 'OPTION') return true;
@@ -939,7 +836,6 @@ function setupDocObserver() {
     _docObserver = new MutationObserver((mutations) => {
         if (_selfMutating) return;
         if (Date.now() < _refreshSuppressUntil) return;
-        // 只在新加入的节点里包含 select 时才刷新
         for (const m of mutations) {
             if (m.type !== 'childList' || !m.addedNodes.length) continue;
             for (const n of m.addedNodes) {
@@ -960,7 +856,7 @@ function setupDocObserver() {
 }
 
 // =====================================================
-// 工具
+// 工具函数
 // =====================================================
 function getApiIdOfSelect(select) {
     const apiIds = (select.getAttribute('data-preset-manager-for') || '')
@@ -968,9 +864,34 @@ function getApiIdOfSelect(select) {
     return apiIds[0] || 'openai';
 }
 
+// escapeHtml 已统一从 compatibility.js 导入（见文件顶部）
+/** 属性转义（当前实现 = escapeHtml） */
+function escapeAttr(str) {
+    return escapeHtml(str);
+}
+
+/** 内联版本比较 */
+function _compareVersionInline(va, vb) {
+    const a = String(va || '');
+    const b = String(vb || '');
+    if (a === b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    const na = (a.match(/\d+/g) || []).map(Number);
+    const nb = (b.match(/\d+/g) || []).map(Number);
+    const len = Math.max(na.length, nb.length);
+    for (let i = 0; i < len; i++) {
+        const x = na[i] ?? 0;
+        const y = nb[i] ?? 0;
+        if (x !== y) return x - y;
+    }
+    return a.localeCompare(b, 'en');
+}
+
 // =====================================================
-// 公开 API：从面板调用
+// 公开 API
 // =====================================================
+
 /**
  * 强制重做接管（外部触发）
  */
@@ -979,19 +900,7 @@ export function refreshTakeover() {
 }
 
 /**
- * ⚡ 关键 API：返回**指定 API 的所有预设名**（含被接管摘除的非代表 option）
- *
- * 修复用户报告的"展开后只看到一个版本"bug + 跨 API 污染：
- *   - DOM 接管模式下，select.options 只剩"代表 option"
- *   - 被合并的版本（V1, V2 等）已被 detach
- *   - 历史面板用 getAllPresetNames() 拿到的是 ST 内部的 presets 数组
- *     —— 但**有些 ST 版本（如 OpenAI PresetManager）的 getAllPresets() 直接读 select.options**
- *     就会少返回那些被我们 detach 的预设。
- *
- * ⚠️ ST 在 DOM 中存在多个 select[data-preset-manager-for]：
- *   openai, kobold, novel, textgenerationwebui, context, instruct, ...
- *   如果不按 apiId 过滤，会把 KoboldAI/Llama/Default 等 textgen 官方预设
- *   全部混入 OpenAI 视图，造成"乱七八糟数百个预设"的假象。
+ * 返回指定 API 的所有预设名（直接从 select.options 读取，不再有 detached 概念）
  *
  * @param {string} [filterApiId] 仅返回该 apiId 的预设；不传 = 当前 API；'*' = 全部
  * @returns {Array<{apiId: string, presetName: string, detached: boolean}>}
@@ -1005,72 +914,25 @@ export function listAllPresetsIncludingDetached(filterApiId) {
         return out;
     }
 
-    // 默认：使用 ST 当前 mainApi
     let target = filterApiId;
     if (target === undefined || target === null) {
         try { target = getCurrentApiId(); } catch (_) { target = 'openai'; }
     }
     const wantAll = (target === '*');
 
-    // ⚡ 严格按 apiId 过滤 —— 不做任何"可见性兜底"
-    //   ST 在 DOM 中始终存在多个 select[data-preset-manager-for]：
-    //     openai / kobold / novel / textgenerationwebui / context / instruct / sysprompt / reasoning ...
-    //   即使用户当前是 OpenAI 模式，textgenerationwebui 的 select 仍然在 DOM 中（只是被 CSS 隐藏）
-    //
-    //   "isVisibleInDom 兜底"是导致一级列表混入数百个其他 API 预设的元凶 —— 已彻底移除。
-    //   严格的 apiId 匹配是唯一可靠的过滤方式。
-    const targetSelects = [];
+    const seen = new Set();
     for (const sel of selects) {
         if (!sel || !sel.isConnected) continue;
         const apiId = getApiIdOfSelect(sel);
-        if (wantAll) {
-            targetSelects.push({ apiId, sel });
-            continue;
-        }
-        if (apiId === target) {
-            targetSelects.push({ apiId, sel });
-        }
-    }
+        if (!wantAll && apiId !== target) continue;
 
-    // 防御过滤：剔除"纯数字 ID"和空名（OpenAI 某些版本的 PresetManager 内部
-    //   会把 oai_settings.preset_settings_openai 数组的索引误传到 select.value 里，
-    //   这时 option.value="15"/"17"/"18"... 就会成为伪预设名）
-    const isInvalidPresetName = (n) => {
-        if (typeof n !== 'string') return true;
-        const s = n.trim();
-        if (!s) return true;
-        if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
-        return false;
-    };
-
-    // ⚡ 关键：强制用 textContent 作为真实预设名
-    //   OpenAI PresetManager 用"数组索引"作 option.value，但 textContent 里是真实名
-    //   detached 选项的 textContent 还原成原始（接管时不动 detached 的 textContent）
-    //   代表 option 的 textContent 已被改写为系列名 → 用 ORIGINAL_TEXT_DATA_ATTR 取
-    const seen = new Set();
-    for (const { apiId, sel } of targetSelects) {
         for (const opt of sel.options || []) {
-            // 优先级：data-pas-orig-text > textContent > value
-            const realName = (opt.getAttribute(ORIGINAL_TEXT_DATA_ATTR)
-                || opt.textContent
-                || opt.value
-                || '').trim();
-            if (isInvalidPresetName(realName)) continue;
+            const realName = (opt.textContent || opt.value || '').trim();
+            if (_isInvalidPresetName(realName)) continue;
             const key = `${apiId}::${realName}`;
             if (seen.has(key)) continue;
             seen.add(key);
             out.push({ apiId, presetName: realName, detached: false });
-        }
-        const detached = _detachedOptions.get(apiId) || [];
-        for (const d of detached) {
-            const opt = d.option;
-            if (!opt) continue;
-            const realName = (opt.textContent || opt.value || '').trim();
-            if (isInvalidPresetName(realName)) continue;
-            const key = `${apiId}::${realName}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push({ apiId, presetName: realName, detached: true });
         }
     }
     return out;
@@ -1078,8 +940,7 @@ export function listAllPresetsIncludingDetached(filterApiId) {
 
 /**
  * 列出所有 select 当前可见的"系列代表"
- *  返回 [{ apiId, seriesKey, presetName, items: [{ presetName, version }] }]
- *  用于历史面板展示"原生列表"
+ * 返回 [{ apiId, seriesKey, items, representativeName, versionCount }]
  */
 export function listSeriesFromNativeSelects() {
     const settings = getSettings();
@@ -1094,25 +955,20 @@ export function listSeriesFromNativeSelects() {
         return out;
     }
 
-    const seenSeriesByApi = new Map();  // apiId -> Set(seriesKey)
+    const seenSeriesByApi = new Map();
 
     for (const select of selects) {
         if (!select || !select.isConnected) continue;
         const apiId = getApiIdOfSelect(select);
 
-        // 收集 select 中可见 option + 已被摘除的 option，合并出"完整列表"
-        // ⚡ B29 修复：用 textContent 作为预设名（option.value 对 openai 是数组索引）
-        const visible = Array.from(select.options || []).map(o => {
-            const orig = o.getAttribute(ORIGINAL_TEXT_DATA_ATTR);
-            return (orig || o.textContent || '').trim();
-        }).filter(Boolean);
-        const detached = (_detachedOptions.get(apiId) || []).map(d =>
-            (d.option.textContent || '').trim()
-        ).filter(Boolean);
-        const all = [...new Set([...visible, ...detached])];
+        // 直接从 select.options 读取所有预设名（不再有 detached）
+        const allNames = Array.from(select.options || [])
+            .map(o => (o.textContent || '').trim())
+            .filter(Boolean);
+        const unique = [...new Set(allNames)];
 
         const seriesGroups = new Map();
-        for (const name of all) {
+        for (const name of unique) {
             if (excluded[name]) continue;
             const info = getSeriesInfo(name, overrides, excluded);
             const seriesKey = info.series || name;
@@ -1157,7 +1013,7 @@ export function getSeriesDefaultApply(seriesKey) {
 // 卸载
 // =====================================================
 export function teardown() {
-    try { restoreAllDom(); } catch (_) {}
+    try { teardownAllDropdowns(); } catch (_) {}
 
     if (_refreshTimer) {
         clearTimeout(_refreshTimer);
@@ -1187,208 +1043,29 @@ export function teardown() {
     try {
         const allSel = document.querySelectorAll('select[data-preset-manager-for]');
         for (const s of allSel) {
-            delete s.dataset.pasChangeBound;
             delete s.dataset.pasObserved;
-            // 安全地移除 listener（用 capture: true 注册需 capture: true 移除）
-            try { s.removeEventListener('change', onSelectChangeIntercept, true); } catch (_) {}
         }
     } catch (_) {}
 
-    _detachedOptions.clear();
-    _lastSettingsFingerprint = '';
+    _managedSelects.clear();
     _refreshSuppressUntil = 0;
     _takeoverActive = false;
     _initialized = false;
-
-    // ⚡ B26: 注销解析器
-    registerPresetDataResolver(null);
 
     logger.info('Preset takeover torn down');
 }
 
 // =====================================================
-// 数据级接管：直接通过 PresetManager 删除非代表预设
-// 真正的"一劳永逸"模式：之后即使 ST 重启、用户禁用插件，状态也保持
-// 卸载插件时通过 restoreAllFromArchive() 还原
-// =====================================================
-
-// 防止数据接管时多次并发调用
-let _dataTakeoverRunning = false;
-
-/**
- * 把所有同系列非代表预设：
- *   1. 通过 getPresetSnapshot 读取完整数据
- *   2. archivePreset 备份到 IndexedDB
- *   3. 通过 deletePresetSafe 从 ST 中删除
- *
- * 完成后 ST 的预设列表只剩"系列代表"，原生下拉自然干净
- * 用户卸载插件 / 切回 dom 模式时调用 restoreAllFromArchive 恢复
- */
-async function applyDataTakeover() {
-    if (_dataTakeoverRunning) {
-        logger.debug('[Takeover-Data] already running, skip');
-        return;
-    }
-    _dataTakeoverRunning = true;
-    try {
-        const settings = getSettings();
-        if (!settings.takeoverDataConfirmed) {
-            logger.warn('[Takeover-Data] not confirmed by user yet (takeoverDataConfirmed=false), abort');
-            return;
-        }
-
-        const apiId = getCurrentApiId();
-        if (!apiId) {
-            logger.warn('[Takeover-Data] no current API id');
-            return;
-        }
-
-        const overrides = settings.groupingManualOverrides || {};
-        const excluded = settings.groupingExcluded || {};
-        const seriesDefaults = settings.seriesDefaultApply || {};
-
-        // 1) 拿到 ST 当前的全部预设列表
-        const allObjs = getAllPresetNames() || [];
-        const allNames = allObjs
-            .map(o => (typeof o === 'string') ? o : (o && (o.name || o.preset_name)))
-            .filter(s => typeof s === 'string' && s);
-
-        if (allNames.length === 0) {
-            logger.debug('[Takeover-Data] no presets in ST');
-            return;
-        }
-
-        // 2) 按系列分组
-        const seriesMap = new Map();
-        for (const name of allNames) {
-            if (excluded[name]) continue;
-            const info = getSeriesInfo(name, overrides, excluded);
-            if (info.excluded) continue;
-            const key = info.series || name;
-            if (!seriesMap.has(key)) seriesMap.set(key, []);
-            seriesMap.get(key).push({
-                presetName: name,
-                version: info.version,
-                duplicate: info.duplicate,
-            });
-        }
-
-        // 3) 对每个系列：保留代表，归档+删除其它
-        let archived = 0;
-        let deleted = 0;
-        let failed = 0;
-        let totalToProcess = 0;
-        for (const items of seriesMap.values()) {
-            if (items.length > 1) totalToProcess += (items.length - 1);
-        }
-        if (totalToProcess > 0) {
-            try {
-                toast.info(t('Takeover Data Processing', { count: totalToProcess }));
-            } catch (_) {}
-        }
-
-        const currentName = (typeof window !== 'undefined' && window.SillyTavern)
-            ? (() => {
-                try { return SillyTavern.getContext().getPresetManager?.(apiId)?.getSelectedPresetName?.() || ''; }
-                catch (_) { return ''; }
-            })()
-            : '';
-
-        for (const [seriesKey, items] of seriesMap) {
-            if (items.length <= 1) continue; // 单版本系列跳过
-
-            // 选代表：当前选中 > 用户配置默认 > 最新
-            let rep = items.find(it => it.presetName === currentName);
-            if (!rep) {
-                rep = pickRepresentativeVersion(seriesKey, items, seriesDefaults);
-            }
-            if (!rep) continue;
-
-            // 把非代表归档 + 删除
-            for (const it of items) {
-                if (it.presetName === rep.presetName) continue;
-                try {
-                    // 3.1) 读取完整数据
-                    const data = getPresetSnapshot(it.presetName);
-                    if (!data) {
-                        logger.warn(`[Takeover-Data] cannot read preset "${it.presetName}", skip`);
-                        failed++;
-                        continue;
-                    }
-                    // 3.2) 归档
-                    const ok = await archivePreset(apiId, it.presetName, data, seriesKey, 'takeover-merge');
-                    if (!ok) {
-                        logger.warn(`[Takeover-Data] archive failed for "${it.presetName}", skip delete`);
-                        failed++;
-                        continue;
-                    }
-                    archived++;
-                    // 3.3) 从 ST 删除
-                    const delOk = await deletePresetSafe(it.presetName, apiId);
-                    if (delOk) {
-                        deleted++;
-                    } else {
-                        logger.warn(`[Takeover-Data] delete failed for "${it.presetName}"`);
-                        failed++;
-                    }
-                } catch (e) {
-                    logger.error(`[Takeover-Data] error processing "${it.presetName}":`, e);
-                    failed++;
-                }
-            }
-        }
-
-        if (archived > 0 || deleted > 0) {
-            logger.success(`[Takeover-Data] complete: archived=${archived}, deleted=${deleted}, failed=${failed}`);
-            try {
-                toast.success(t('Takeover Data Done', { archived, deleted }));
-            } catch (_) {}
-            // 删除后 ST 会重渲下拉，但代表 option 还会显示原始预设名
-            // → 再做一遍 DOM 接管的"代表项重命名"，让原下拉显示系列名
-            setTimeout(() => {
-                try {
-                    const selects = document.querySelectorAll(SELECT_SELECTOR);
-                    for (const sel of selects) {
-                        if (!sel || !sel.isConnected) continue;
-                        try { applyTakeoverToSelect(sel); } catch (_) {}
-                    }
-                } catch (_) {}
-            }, 600);
-        } else {
-            logger.debug('[Takeover-Data] nothing to do (no multi-version series)');
-            // 即使没有要归档的，也应做一次 DOM 接管使下拉显示系列名
-            try {
-                const selects = document.querySelectorAll(SELECT_SELECTOR);
-                for (const sel of selects) {
-                    if (!sel || !sel.isConnected) continue;
-                    try { applyTakeoverToSelect(sel); } catch (_) {}
-                }
-            } catch (_) {}
-        }
-        _takeoverActive = true;
-    } catch (e) {
-        logger.error('[Takeover-Data] applyDataTakeover failed:', e);
-    } finally {
-        _dataTakeoverRunning = false;
-    }
-}
-
-// =====================================================
-// 种子快照：开启分组/接管时为现有预设自动建立 1 条初始快照
-// 这样三级面板在用户做任何修改之前就能完整显示所有预设
+// 种子快照
 // =====================================================
 let _seedingRunning = false;
 
 /**
- * 给当前 ST 所有现存预设建立"初始快照"（trigger='manual' / source='seed'）
- *   - 只对没有任何快照的预设执行
- *   - 已经有快照（无论数量多少）的预设跳过
- *   - 异步分批执行，避免一次性卡住主线程
- *   - 结果通过 toast 通知
+ * 给当前 ST 所有现存预设建立"初始快照"
  *
  * @param {object} [opts]
- * @param {boolean} [opts.force=false]  true = 忽略 settings.seedSnapshotsDone 强制重跑
- * @param {boolean} [opts.silent=false] true = 不弹 toast（首次启动静默种子用）
+ * @param {boolean} [opts.force=false]
+ * @param {boolean} [opts.silent=false]
  */
 export async function seedSnapshotsIfNeeded(opts = {}) {
     const { force = false, silent = false } = opts;
@@ -1407,11 +1084,6 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
         logger.debug('[Seed] autoSeedOnTakeover=false, skip');
         return { skipped: true };
     }
-    // ⚠️ 关键修复：seedSnapshotsDone=true 时不再直接 skip，
-    //   而是仍然扫描所有预设，只对"已有快照"的跳过、对"无快照"的补一条。
-    //   原因：用户可能添加了新的预设，那些预设需要立即出现在面板里（含一条种子快照）。
-    //   函数本身已经按"existing.length > 0 → skipped"处理了幂等性，没必要再用 done flag 短路。
-    // 仅保留 force 语义：如果 force=true，无视 done 标记（用于"重新扫描"按钮）。
 
     _seedingRunning = true;
     try {
@@ -1421,11 +1093,7 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
             return { skipped: true };
         }
 
-        // ⚡ 关键修复：用 listAllPresetsIncludingDetached 而不是 getAllPresetNames
-        //   原因：接管模式下 pm.getAllPresets() 实际读 select.options，
-        //         但 select 已被接管修改 → 只剩 15 个代表，16 个真实版本被 detach
-        //         结果只为系列名建快照，所有真实预设版本（V1-0425、Izumi 0318 等）永远没有种子！
-        //   listAllPresetsIncludingDetached 同时取 DOM + _detachedOptions，能覆盖全部预设。
+        // 直接用 listAllPresetsIncludingDetached（现在读 select.options，不再有 detached）
         const fromDOM = listAllPresetsIncludingDetached(apiId) || [];
         const allNames = fromDOM
             .filter(e => e && e.apiId === apiId && typeof e.presetName === 'string' && e.presetName)
@@ -1437,9 +1105,9 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
         }
 
         if (silent) {
-            logger.debug(`[Seed] checking ${allNames.length} presets for missing initial snapshots (DOM+detached)...`);
+            logger.debug(`[Seed] checking ${allNames.length} presets for missing initial snapshots...`);
         } else {
-            logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots (DOM+detached)...`);
+            logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots...`);
         }
         if (!silent) {
             try { toast.info(t('Seed Snapshots Start', { count: allNames.length })); } catch (_) {}
@@ -1450,22 +1118,18 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
         let failed = 0;
         const total = allNames.length;
 
-        // 分批：每 5 个让出主线程一次，避免阻塞 UI
         for (let i = 0; i < allNames.length; i++) {
             const name = allNames[i];
             try {
-                // 已有快照 → 跳过
                 const existing = await getSnapshots(apiId, name);
                 if (Array.isArray(existing) && existing.length > 0) {
                     skipped++;
                 } else {
-                    // 读完整数据
                     const data = getPresetSnapshot(name);
                     if (!data || typeof data !== 'object') {
                         failed++;
                         continue;
                     }
-                    // 用 MANUAL trigger 强制建一条（绕过 skipUnchangedSave）
                     const snap = await addSnapshot(name, apiId, data, TRIGGER.MANUAL);
                     if (snap) {
                         added++;
@@ -1478,13 +1142,11 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
                 failed++;
             }
 
-            // 每 5 个 yield 一次（rAF / setTimeout）
             if (i % 5 === 4 && i < allNames.length - 1) {
                 await new Promise(r => setTimeout(r, 0));
             }
         }
 
-        // added=0 时降级为 debug（所有预设已有快照 → 不必在控制台刷屏）
         const seedLogMsg =
             `[Seed] complete: added=${added}, skipped=${skipped}` +
             (failed > 0 ? `, failed=${failed}` : '') +
@@ -1498,13 +1160,10 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
             try {
                 if (added > 0) {
                     toast.success(t('Seed Snapshots Done', { added, skipped, total }));
-                } else if (total > 0) {
-                    // 全部都已经有快照了 — 静默
                 }
             } catch (_) {}
         }
 
-        // 标记完成（无论这次是否真的添加，至少跑过一次了）
         try {
             updateSetting('seedSnapshotsDone', true);
         } catch (_) {}
@@ -1519,8 +1178,7 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
 }
 
 /**
- * 强制重新种子（设置面板"重新扫描"按钮调用）
- * 会清掉 seedSnapshotsDone 标记，所有缺快照的预设会被补上一条
+ * 强制重新种子
  */
 export async function forceReseedSnapshots() {
     return seedSnapshotsIfNeeded({ force: true, silent: false });
@@ -1528,19 +1186,6 @@ export async function forceReseedSnapshots() {
 
 /**
  * 从归档还原所有被数据接管的预设到 ST PresetManager
- *
- * 数据源优先级（每个被归档的预设独立判断）：
- *   1. ⭐ 最新快照（history-store）：归档之后用户在面板里编辑过 → 用最新版
- *   2. 归档原始数据（archive-store）：归档时的备份 → 兜底
- *   3. 都没有 → 标记失败
- *
- * 这样无论是用户在面板里继续修改了某个版本，还是从未动过，
- * 还原后都能拿到"最新最完整"的数据，绝不丢失任何用户修改。
- *
- * 调用时机：
- *   - 用户从 'data' 切回 'dom' 模式
- *   - 用户卸载插件（onDelete / onDisable）
- *   - 用户在面板手动点"恢复全部归档"
  */
 export async function restoreAllFromArchive() {
     try {
@@ -1562,14 +1207,12 @@ export async function restoreAllFromArchive() {
                     continue;
                 }
 
-                // ⭐ 优先选择最新快照（用户最近的修改）
                 let dataToRestore = null;
                 let sourceLabel = 'archive';
 
                 try {
                     const snapshots = await getSnapshots(entry.apiId, entry.presetName);
                     if (Array.isArray(snapshots) && snapshots.length > 0) {
-                        // history-store 内已经按时间倒序，第 0 条 = 最新
                         const latestSnap = snapshots[0];
                         if (latestSnap && latestSnap.preset && typeof latestSnap.preset === 'object') {
                             dataToRestore = latestSnap.preset;
@@ -1581,7 +1224,6 @@ export async function restoreAllFromArchive() {
                     logger.debug(`[Takeover-Data] snapshot lookup failed for "${entry.presetName}":`, e);
                 }
 
-                // 回退到归档原始数据
                 if (!dataToRestore) {
                     if (!entry.data || typeof entry.data !== 'object') {
                         logger.warn(`[Takeover-Data] no data available for "${entry.presetName}"`);
@@ -1593,7 +1235,6 @@ export async function restoreAllFromArchive() {
                     fromArchive++;
                 }
 
-                // 写回 ST PresetManager
                 const ok = await savePresetSafe(entry.presetName, dataToRestore, { apiId: entry.apiId });
                 if (ok) {
                     await removeArchivedPreset(entry.apiId, entry.presetName);
@@ -1622,7 +1263,7 @@ export async function restoreAllFromArchive() {
 }
 
 /**
- * 公开 API：列出当前归档（用于面板查看）
+ * 公开 API：列出当前归档
  */
 export async function getArchiveSummary() {
     const archives = await listArchivedPresets();
