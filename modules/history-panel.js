@@ -587,6 +587,10 @@ function bindEvents() {
             // 重置 firstScanDone 让向导能再次弹出
             updateSetting('groupingFirstScanDone', false);
             await showGroupingFirstScanWizard();
+            // Q-1 fix: 向导完成后强制重新种子——
+            // 如果用户清空了所有快照后再点"重新扫描分组"，
+            // 需要为每个预设重新建立初始快照才能在面板中显示
+            await seedSnapshotsIfNeeded({ force: true, silent: false });
             await refreshData();
         } catch (e) {
             logger.error('Rescan grouping failed:', e);

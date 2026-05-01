@@ -896,9 +896,26 @@ export async function saveNow(trigger = TRIGGER.MANUAL) {
  * 关键字段指纹：让用户能从日志判断"哪个字段刚刚被改了"
  * 输出：长度（prompt array）+ 几个常见 toggle 的真实值
  */
+// Q-3: 模型/API/Key 相关字段——仅当 watchModelApiKeyChanges=true 时纳入 fingerprint
+const MODEL_API_KEY_FIELDS = new Set([
+    // 模型选择
+    'openai_model', 'openrouter_model', 'claude_model', 'google_model',
+    'ai21_model', 'mistralai_model', 'cohere_model', 'perplexity_model',
+    'groq_model', 'zerooneai_model', 'blockentropy_model', 'custom_model',
+    // API 链接 / 来源
+    'reverse_proxy', 'chat_completion_source', 'api_url_scale', 'custom_url',
+    // Key / 密码
+    'api_key_openai', 'proxy_password',
+    // 模型列表
+    'model_list', 'openrouter_model_list',
+    // 其他环境配置
+    'show_external_models', 'bypass_status_check',
+]);
+
 function computeFingerprint(preset) {
     if (!preset) return '(empty)';
     const fp = {};
+    const settings = getSettings();
     const watchKeys = [
         // 核心采样参数（oai_settings / textgen_settings 中最常被用户修改的字段）
         'temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty',
@@ -913,6 +930,10 @@ function computeFingerprint(preset) {
         // 预设标识
         'preset', 'name',
     ];
+    // Q-3: 当 watchModelApiKeyChanges=true 时，把模型/API/key 字段也纳入指纹
+    if (settings.watchModelApiKeyChanges) {
+        for (const k of MODEL_API_KEY_FIELDS) watchKeys.push(k);
+    }
     for (const k of watchKeys) {
         if (Object.hasOwn(preset, k)) {
             const v = preset[k];

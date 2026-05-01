@@ -194,6 +194,7 @@ export function renderSettingsTab(panelCtx) {
     ${group(t('Advanced Group'), [
         toggle('debugMode', t('Debug Mode'), t('Debug Mode Desc'), s.debugMode),
         toggle('fallbackPolling', t('Fallback Polling'), t('Fallback Polling Desc'), s.fallbackPolling),
+        toggle('watchModelApiKeyChanges', t('Watch Model Api Key'), t('Watch Model Api Key Desc'), s.watchModelApiKeyChanges),
     ])}
 
     <div class="pas-settings-actions">
@@ -379,6 +380,9 @@ export function bindSettingsEvents(container, panelCtx) {
         );
         if (!ok) return;
         await clearAll();
+        // Q-1 fix: 清空所有快照后，重置 seedSnapshotsDone
+        // 让下次 rescan / 初始化时能重新建立初始快照
+        updateSetting('seedSnapshotsDone', false);
         toast.success(t('Cleared All'));
         await panelCtx.refreshData();
     });

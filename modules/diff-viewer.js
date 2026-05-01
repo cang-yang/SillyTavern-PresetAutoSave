@@ -184,6 +184,18 @@ const SKIP = new Set([
     'prompts', 'prompt_order', 'extensions', 'preset_settings_openai',
     'name', 'bias_presets', 'bias_preset_selected',
     'bind_preset_to_connection',
+    // Q-2: API 链接 / 代理
+    'reverse_proxy', 'chat_completion_source', 'api_url_scale', 'custom_url',
+    // Q-2: 模型列表（大数组，对比无意义且暴露配置）
+    'model_list', 'openrouter_model_list',
+    // Q-2: Key / 密码（敏感信息）
+    'api_key_openai', 'proxy_password',
+    // Q-2: 模型选择（高频切换，不属于预设参数）
+    'openai_model', 'openrouter_model', 'claude_model', 'google_model',
+    'ai21_model', 'mistralai_model', 'cohere_model', 'perplexity_model',
+    'groq_model', 'zerooneai_model', 'blockentropy_model', 'custom_model',
+    // Q-2: 其他内部 / 环境配置
+    'names_behavior', 'show_external_models', 'bypass_status_check',
 ]);
 
 // N-3: normalizePresetFields 和 FIELD_SYNONYMS 已移至 history-store.js 作为共享工具函数
