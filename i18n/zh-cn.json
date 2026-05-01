@@ -388,5 +388,7 @@
     "Export Preset A": "导出 A",
     "Export Preset A Title": "将快照 A 导出为完整预设 JSON 文件",
     "Export Preset B": "导出 B",
-    "Export Preset B Title": "将快照 B 导出为完整预设 JSON 文件"
+    "Export Preset B Title": "将快照 B 导出为完整预设 JSON 文件",
+
+    "Preset Switch Failed": "切换预设失败"
 }

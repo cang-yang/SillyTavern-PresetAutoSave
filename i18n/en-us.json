@@ -388,5 +388,7 @@
     "Export Preset A": "Export A",
     "Export Preset A Title": "Export snapshot A as a complete preset JSON file",
     "Export Preset B": "Export B",
-    "Export Preset B Title": "Export snapshot B as a complete preset JSON file"
+    "Export Preset B Title": "Export snapshot B as a complete preset JSON file",
+
+    "Preset Switch Failed": "Failed to switch preset"
 }

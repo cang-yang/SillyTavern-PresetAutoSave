@@ -26,6 +26,7 @@ const ALL_FILES = [
   'modules/diff-viewer.js',
   'modules/archive-store.js',
   'modules/logger.js',
+  'modules/theme-detector.js',
 ];
 
 let issues = [];
