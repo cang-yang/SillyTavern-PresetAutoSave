@@ -186,6 +186,7 @@ export async function handleListClick(e, panelCtx) {
     switch (action) {
         case 'restore': await onRestore(id, panelCtx); break;
         case 'view':    await onView(id);              break;
+        case 'export':  await onExportPreset(id);      break;
         case 'delete':  await onDelete(id, panelCtx);  break;
         case 'rename':  await onRename(id, panelCtx);  break;
         case 'pin':     await onTogglePin(id, panelCtx); break;
@@ -195,6 +196,7 @@ export async function handleListClick(e, panelCtx) {
             // 兼容旧 class 路由
             if (btn.classList.contains('pas-btn-restore')) await onRestore(id, panelCtx);
             else if (btn.classList.contains('pas-btn-view')) await onView(id);
+            else if (btn.classList.contains('pas-btn-export-preset')) await onExportPreset(id);
             else if (btn.classList.contains('pas-btn-delete')) await onDelete(id, panelCtx);
     }
 }
@@ -398,6 +400,45 @@ async function onView(snapshotId) {
     showPromise.finally(() => { _viewPopup = null; });
 }
 
+// =====================================================
+// 导出预设快照为完整预设文件
+// =====================================================
+
+/**
+ * 导出快照的完整预设数据为 JSON 文件
+ * 快照中存储的 preset 字段就是完整的 oai_settings 对象，
+ * 包含 prompts、prompt_order、custom_stopping_strings 等所有字段。
+ * @param {string} snapshotId
+ */
+async function onExportPreset(snapshotId) {
+    const snapshot = await getSnapshotById(snapshotId);
+    if (!snapshot?.preset) {
+        toast.warning(t('Export Failed'));
+        return;
+    }
+
+    const data = snapshot.preset;
+    const safeName = (snapshot.presetName || 'preset').replace(/[<>:"/\\|?*]/g, '_');
+    const dateStr = new Date(snapshot.timestamp).toISOString().slice(0, 10);
+    const fileName = `${safeName}_${dateStr}.json`;
+
+    try {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success(t('Export Preset Success'));
+    } catch (e) {
+        logger.error('Export preset failed:', e);
+        toast.error(t('Export Failed'));
+    }
+}
+
 async function onDelete(snapshotId, panelCtx) {
     const snapshot = await getSnapshotById(snapshotId);
     if (!snapshot) return;
@@ -483,7 +524,13 @@ function onSetDiff(snapshotId, slot /* 'a' | 'b' */, panelCtx) {
     }
 
     updateDiffBar(panelCtx);
+    // N-6: 保存滚动位置，渲染后恢复（避免选择 A/B 时列表跳回顶部）
+    const listEl = panelCtx.root()?.querySelector('.pas-snapshot-list');
+    const savedScrollTop = listEl ? listEl.scrollTop : 0;
     panelCtx.renderListTab();
+    if (listEl) {
+        requestAnimationFrame(() => { listEl.scrollTop = savedScrollTop; });
+    }
 }
 
 /**
@@ -494,7 +541,13 @@ export function onClearDiff(panelCtx) {
     state.diffSel.a = null;
     state.diffSel.b = null;
     updateDiffBar(panelCtx);
+    // N-6: 保存滚动位置，渲染后恢复
+    const listEl = panelCtx.root()?.querySelector('.pas-snapshot-list');
+    const savedScrollTop = listEl ? listEl.scrollTop : 0;
     panelCtx.renderListTab();
+    if (listEl) {
+        requestAnimationFrame(() => { listEl.scrollTop = savedScrollTop; });
+    }
 }
 
 /**

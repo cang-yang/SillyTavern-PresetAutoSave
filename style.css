@@ -1585,6 +1585,10 @@
     cursor: not-allowed;
     pointer-events: none;
 }
+.pas-btn-export-preset:hover {
+    border-color: var(--pas-c-add);
+    color: var(--pas-c-add);
+}
 
 /* =========================================================
  * 设置 Tab
@@ -1839,14 +1843,14 @@
 .pas-view-copy-btn { /* 沿用 .menu_button */ }
 
 /* =========================================================
- * Diff 对比弹窗 v2 — 全面重构
+ * Diff 对比弹窗 v2 — N-4 现代化重构
  * ========================================================= */
 .pas-diff-popup {
     color: var(--pas-fg);
     font-size: 14px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     text-align: left;
 }
 .pas-diff-popup * { text-align: inherit; }
@@ -1860,84 +1864,170 @@
 .pas-diff-header h4 {
     margin: 0;
     color: var(--pas-fg);
-    font-weight: 600;
-    font-size: 1.1em;
+    font-weight: 700;
+    font-size: 1.15em;
     display: flex;
     align-items: center;
     gap: 8px;
+    letter-spacing: -0.01em;
 }
+.pas-diff-header h4 i {
+    color: var(--pas-c-info);
+    font-size: 0.95em;
+}
+
+/* --- A/B 元数据卡片（N-4 现代化） --- */
 .pas-diff-meta {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0;
+    align-items: stretch;
+}
+.pas-diff-meta-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    color: var(--pas-fg-faint);
+    font-size: 0.9em;
+    opacity: 0.5;
 }
 .pas-diff-side-meta {
     background: var(--pas-surface-1);
     border: 1px solid var(--pas-border);
-    border-radius: var(--pas-radius-sm);
-    padding: 7px 10px;
+    border-radius: 10px;
+    padding: 10px 14px;
     font-size: 0.85em;
     line-height: 1.5;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color var(--pas-dur) var(--pas-ease-fast),
+                box-shadow var(--pas-dur) var(--pas-ease-fast);
 }
-.pas-diff-side-meta-a { border-left: 3px solid var(--pas-c-a); }
-.pas-diff-side-meta-b { border-left: 3px solid var(--pas-c-b); }
+.pas-diff-side-meta:hover {
+    border-color: var(--pas-border-strong);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.pas-diff-side-meta-a { border-left: 4px solid var(--pas-c-a); }
+.pas-diff-side-meta-b { border-left: 4px solid var(--pas-c-b); }
+.pas-diff-side-meta-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pas-diff-side-meta-bottom {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
 .pas-diff-side-meta-tag {
-    width: 14px;
-    height: 14px;
+    width: 20px;
+    height: 20px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
-    font-size: 0.7em;
-    font-weight: 700;
+    border-radius: 6px;
+    font-size: 0.72em;
+    font-weight: 800;
     color: white;
-    margin-right: 6px;
-    vertical-align: 1px;
+    flex-shrink: 0;
+    letter-spacing: 0.3px;
 }
 .pas-diff-side-meta-a .pas-diff-side-meta-tag { background: var(--pas-c-a); }
 .pas-diff-side-meta-b .pas-diff-side-meta-tag { background: var(--pas-c-b); }
-.pas-diff-side-meta-name { font-weight: 600; color: var(--pas-fg); }
+.pas-diff-side-meta-name {
+    font-weight: 700;
+    color: var(--pas-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1.05em;
+}
+.pas-diff-side-meta-pin {
+    color: var(--pas-c-pin);
+    font-size: 0.8em;
+    flex-shrink: 0;
+}
 .pas-diff-side-meta-time {
     font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.92em;
+    font-size: 0.88em;
     color: var(--pas-fg-muted);
-    margin-left: 4px;
-}
-.pas-diff-side-meta-extra {
-    color: var(--pas-fg-faint);
-    font-size: 0.85em;
-    display: block;
-    margin-top: 2px;
-}
-
-/* --- 汇总面板 --- */
-.pas-diff-summary-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 6px 12px;
-    background: var(--pas-surface-3);
-    border: 1px solid var(--pas-border);
-    border-radius: var(--pas-radius);
-    font-size: 0.84em;
-    color: var(--pas-fg-muted);
-}
-.pas-diff-summary-item {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    white-space: nowrap;
 }
-.pas-diff-summary-item b {
-    color: var(--pas-fg);
-    font-family: 'SF Mono', Consolas, monospace;
+.pas-diff-side-meta-time i {
+    font-size: 0.85em;
+    opacity: 0.7;
 }
-.pas-diff-summary-sep {
+.pas-diff-side-meta-extra {
     color: var(--pas-fg-faint);
-    opacity: 0.4;
-    margin: 0 2px;
+    font-size: 0.82em;
+}
+
+/* --- 汇总面板（N-4 pill 样式） --- */
+.pas-diff-summary-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    background: var(--pas-surface-1);
+    border: 1px solid var(--pas-border);
+    border-radius: 10px;
+    font-size: 0.82em;
+    color: var(--pas-fg-muted);
+}
+.pas-diff-summary-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.pas-diff-summary-pill:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.pas-diff-summary-pill b {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-weight: 700;
+    font-size: 1.05em;
+}
+.pas-diff-summary-pill i {
+    font-size: 0.9em;
+}
+.pas-diff-pill-edit {
+    background: rgba(251, 191, 36, 0.12);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.25);
+}
+.pas-diff-pill-add {
+    background: rgba(74, 222, 128, 0.12);
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.25);
+}
+.pas-diff-pill-del {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.25);
+}
+.pas-diff-pill-settings {
+    background: rgba(96, 165, 250, 0.12);
+    color: #60a5fa;
+    border-color: rgba(96, 165, 250, 0.25);
+}
+.pas-diff-pill-order {
+    background: rgba(168, 85, 247, 0.12);
+    color: #a855f7;
+    border-color: rgba(168, 85, 247, 0.25);
 }
 
 /* --- 工具栏 --- */
@@ -1947,9 +2037,9 @@
     justify-content: space-between;
     gap: 8px;
     flex-wrap: wrap;
-    padding: 5px 10px;
+    padding: 6px 12px;
     border: 1px solid var(--pas-border);
-    border-radius: var(--pas-radius);
+    border-radius: 10px;
     background: var(--pas-surface-1);
 }
 .pas-diff-toolbar-left {
@@ -1979,7 +2069,7 @@
     padding: 0;
 }
 .pas-diff-body > * + * {
-    margin-top: 8px;
+    margin-top: 10px;
 }
 .pas-diff-body::-webkit-scrollbar { width: 8px; height: 8px; }
 .pas-diff-body::-webkit-scrollbar-thumb {
@@ -1987,56 +2077,69 @@
     border-radius: 4px;
 }
 .pas-diff-no-changes {
-    padding: 36px 16px;
+    padding: 40px 16px;
     text-align: center;
     color: var(--pas-fg-faint);
     font-style: italic;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+    border-radius: 10px;
+    background: var(--pas-surface-1);
+    border: 1px dashed var(--pas-border);
 }
-.pas-diff-no-changes i { font-size: 2.2em; opacity: 0.36; }
+.pas-diff-no-changes i { font-size: 2.4em; opacity: 0.3; }
 
-/* --- 可折叠分节 --- */
+/* --- 可折叠分节（N-4 现代化） --- */
 /* M-3 fix: section 不使用 overflow:hidden，收起时纯靠 display:none 隐藏 body；
    不设 flex 相关属性避免高度互相影响 */
 .pas-diff-section {
     background: var(--pas-surface-1);
     border: 1px solid var(--pas-border);
-    border-radius: var(--pas-radius);
+    border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 .pas-diff-section-head {
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.03);
     color: var(--pas-fg-muted);
-    font-size: 0.80em;
+    font-size: 0.82em;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.7px;
-    padding: 8px 12px;
+    padding: 10px 14px;
     border-bottom: 1px solid var(--pas-border);
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     cursor: pointer;
     user-select: none;
     transition: background var(--pas-dur) var(--pas-ease-fast);
+    border-radius: 10px 10px 0 0;
 }
 .pas-diff-section-head:hover { background: rgba(255, 255, 255, 0.06); }
-.pas-diff-section-head i { color: var(--pas-fg-faint); font-size: 1em; }
+.pas-diff-section-head > i:first-child {
+    color: var(--pas-fg-faint);
+    font-size: 1em;
+    width: 18px;
+    text-align: center;
+}
 .pas-diff-section-count {
     margin-left: auto;
     background: rgba(255, 255, 255, 0.08);
     color: var(--pas-fg-muted);
-    border-radius: 10px;
-    padding: 1px 8px;
-    font-size: 0.95em;
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 0.92em;
     font-family: 'SF Mono', Consolas, monospace;
+    font-weight: 600;
 }
 .pas-diff-section-chevron {
-    transition: transform 0.2s ease;
-    font-size: 0.75em;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 0.72em;
     color: var(--pas-fg-faint);
+    width: 16px;
+    text-align: center;
 }
 .pas-diff-section-collapsed .pas-diff-section-chevron { transform: rotate(-90deg); }
 /* M-3 fix: 收起时用 display:none 完全移除 body，不留任何高度/padding/border */
@@ -2051,59 +2154,77 @@
 /* M-3 fix: 收起时 section head 不显示 border-bottom（body 不渲染了） */
 .pas-diff-section-collapsed .pas-diff-section-head {
     border-bottom: none;
+    border-radius: 10px;
 }
-.pas-diff-section-body { padding: 6px; }
+.pas-diff-section-body { padding: 8px; }
 
 /* =========================================================
- * Diff: Prompt 词条卡片（核心）
+ * Diff: Prompt 词条卡片（N-4 现代化）
  * ========================================================= */
 .pas-diff-prompt-card {
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     border: 1px solid var(--pas-border);
-    border-radius: var(--pas-radius-sm);
+    border-radius: 8px;
     overflow: hidden;
     background: var(--pas-surface-0);
-    transition: border-color var(--pas-dur) var(--pas-ease-fast);
+    transition: border-color var(--pas-dur) var(--pas-ease-fast),
+                box-shadow var(--pas-dur) var(--pas-ease-fast);
 }
 .pas-diff-prompt-card:last-child { margin-bottom: 0; }
-.pas-diff-prompt-card:hover { border-color: var(--pas-border-strong); }
-/* T10 增强：prompt card 左侧边框 + 淡色背景呼应状态 */
-.pas-diff-prompt-added { border-left: 3px solid var(--pas-c-add); background: rgba(74, 222, 128, 0.04); }
-.pas-diff-prompt-deleted { border-left: 3px solid var(--pas-c-del); background: rgba(248, 113, 113, 0.04); }
-.pas-diff-prompt-modified { border-left: 3px solid var(--pas-c-edit); background: rgba(251, 191, 36, 0.04); }
-.pas-diff-prompt-unchanged { border-left: 3px solid var(--pas-border); opacity: 0.7; }
+.pas-diff-prompt-card:hover {
+    border-color: var(--pas-border-strong);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+/* N-4 增强：prompt card 左侧边框 + 淡色渐变背景 */
+.pas-diff-prompt-added {
+    border-left: 4px solid var(--pas-c-add);
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.06), transparent 60%);
+}
+.pas-diff-prompt-deleted {
+    border-left: 4px solid var(--pas-c-del);
+    background: linear-gradient(135deg, rgba(248, 113, 113, 0.06), transparent 60%);
+}
+.pas-diff-prompt-modified {
+    border-left: 4px solid var(--pas-c-edit);
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.06), transparent 60%);
+}
+.pas-diff-prompt-unchanged {
+    border-left: 4px solid var(--pas-border);
+    opacity: 0.65;
+}
 
 .pas-diff-prompt-header {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 10px;
+    padding: 8px 12px;
     flex-wrap: wrap;
     background: rgba(255, 255, 255, 0.02);
     border-bottom: 1px solid var(--pas-border);
 }
 .pas-diff-prompt-name {
-    font-weight: 600;
+    font-weight: 700;
     color: var(--pas-fg);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 280px;
+    font-size: 0.95em;
 }
 .pas-diff-prompt-role {
-    font-size: 0.72em;
-    padding: 1px 7px;
-    border-radius: 10px;
+    font-size: 0.70em;
+    padding: 2px 8px;
+    border-radius: 12px;
     background: rgba(96, 165, 250, 0.14);
     color: #93c5fd;
     border: 1px solid rgba(96, 165, 250, 0.32);
     text-transform: uppercase;
     font-weight: 600;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.5px;
 }
 .pas-diff-prompt-id {
     font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.72em;
+    font-size: 0.70em;
     color: var(--pas-fg-faint);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2112,32 +2233,29 @@
 }
 .pas-diff-prompt-badge {
     margin-left: auto;
-    font-size: 0.72em;
-    padding: 1px 8px;
-    border-radius: 10px;
-    font-weight: 600;
+    font-size: 0.70em;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-weight: 700;
     letter-spacing: 0.3px;
     text-transform: uppercase;
     border: 1px solid transparent;
 }
-/* T10 增强：badge 颜色更鲜明 */
+/* N-4 增强：badge 颜色更鲜明 + 微动画 */
 .pas-diff-badge-modified {
     background: rgba(251, 191, 36, 0.22);
     color: #fbbf24;
     border-color: rgba(251, 191, 36, 0.45);
-    font-weight: 700;
 }
 .pas-diff-badge-added {
     background: rgba(74, 222, 128, 0.22);
     color: #4ade80;
     border-color: rgba(74, 222, 128, 0.45);
-    font-weight: 700;
 }
 .pas-diff-badge-deleted {
     background: rgba(248, 113, 113, 0.22);
     color: #f87171;
     border-color: rgba(248, 113, 113, 0.45);
-    font-weight: 700;
 }
 .pas-diff-badge-unchanged {
     background: rgba(255, 255, 255, 0.05);
@@ -2147,20 +2265,22 @@
 
 .pas-diff-prompt-body { padding: 0; }
 .pas-diff-prompt-fields {
-    padding: 6px 10px;
+    padding: 8px 12px;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
     border-bottom: 1px solid var(--pas-border);
+    background: rgba(255, 255, 255, 0.01);
 }
 .pas-diff-prompt-field-row {
     font-size: 0.84em;
     color: var(--pas-fg-muted);
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     flex-wrap: wrap;
-    line-height: 1.5;
+    line-height: 1.6;
+    padding: 2px 0;
 }
 .pas-diff-prompt-field-label {
     font-weight: 600;
@@ -2169,34 +2289,37 @@
 }
 .pas-diff-arrow {
     color: var(--pas-fg-faint);
-    margin: 0 2px;
+    margin: 0 3px;
     flex-shrink: 0;
+    font-size: 0.85em;
 }
-/* T10 增强：参数值 old/new 背景更醒目 */
+/* N-4 增强：参数值 old/new 背景更醒目 + 圆角 */
 .pas-diff-val-old {
     font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.92em;
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: rgba(239, 68, 68, 0.18);
+    font-size: 0.90em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(239, 68, 68, 0.20);
     color: #fca5a5;
     text-decoration: line-through;
     text-decoration-color: rgba(252, 165, 165, 0.5);
+    border: 1px solid rgba(239, 68, 68, 0.15);
 }
 .pas-diff-val-new {
     font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.92em;
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: rgba(74, 222, 128, 0.18);
+    font-size: 0.90em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(74, 222, 128, 0.20);
     color: #86efac;
     font-weight: 600;
+    border: 1px solid rgba(74, 222, 128, 0.15);
 }
 .pas-diff-val-same {
     font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.92em;
-    padding: 1px 5px;
-    border-radius: 3px;
+    font-size: 0.90em;
+    padding: 2px 7px;
+    border-radius: 4px;
     background: rgba(255, 255, 255, 0.04);
     color: var(--pas-fg-muted);
 }
@@ -2206,7 +2329,7 @@
     font-size: 0.9em;
 }
 .pas-diff-no-content {
-    padding: 10px;
+    padding: 12px;
     color: var(--pas-fg-faint);
     font-style: italic;
     text-align: center;
@@ -2214,15 +2337,17 @@
 }
 
 /* =========================================================
- * Diff: 行级内容对比表（GitHub 风格双列）
+ * Diff: 行级内容对比表（N-4 GitHub 风格双列）
  * ========================================================= */
 .pas-diff-content-table {
     font-family: 'SF Mono', Consolas, monospace;
     font-size: 0.82em;
-    line-height: 1.55;
+    line-height: 1.6;
     overflow-x: auto;
-    max-height: 380px;
+    max-height: 400px;
     overflow-y: auto;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
 }
 .pas-diff-content-table::-webkit-scrollbar { width: 6px; height: 6px; }
 .pas-diff-content-table::-webkit-scrollbar-thumb {
@@ -2232,26 +2357,26 @@
 .pas-diff-cline {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    min-height: 1.55em;
+    min-height: 1.6em;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 .pas-diff-cline:last-child { border-bottom: 0; }
 .pas-diff-cline-a, .pas-diff-cline-b {
     display: flex;
     align-items: flex-start;
-    padding: 1px 6px;
+    padding: 2px 8px;
     overflow: hidden;
-    min-height: 1.55em;
+    min-height: 1.6em;
 }
 .pas-diff-ln {
     flex-shrink: 0;
     width: 32px;
     text-align: right;
     color: var(--pas-fg-faint);
-    opacity: 0.55;
+    opacity: 0.45;
     margin-right: 8px;
     user-select: none;
-    font-size: 0.88em;
+    font-size: 0.85em;
 }
 .pas-diff-ct {
     flex: 1;
@@ -2265,45 +2390,45 @@
 .pas-diff-cline-same .pas-diff-cline-b {
     background: transparent;
 }
-/* T10 增强：删除行 — 更明显的红色背景 */
+/* N-4 增强：删除行 — 更明显的红色背景 */
 .pas-diff-cline-del .pas-diff-cline-a {
     background: rgba(239, 68, 68, 0.18);
 }
 .pas-diff-cline-del .pas-diff-cline-b {
     background: rgba(239, 68, 68, 0.04);
 }
-/* T10 增强：新增行 — 更明显的绿色背景 */
+/* N-4 增强：新增行 — 更明显的绿色背景 */
 .pas-diff-cline-add .pas-diff-cline-b {
     background: rgba(74, 222, 128, 0.18);
 }
 .pas-diff-cline-add .pas-diff-cline-a {
     background: rgba(74, 222, 128, 0.04);
 }
-/* T10 增强：修改行 — 更强的背景对比 */
+/* N-4 增强：修改行 — 更强的背景对比 */
 .pas-diff-cline-moddel {
     background: rgba(239, 68, 68, 0.14) !important;
 }
 .pas-diff-cline-modadd {
     background: rgba(74, 222, 128, 0.14) !important;
 }
-/* T10 增强：字符级高亮 — 更高对比度 + 删除线 */
+/* N-4 增强：字符级高亮 — 更高对比度 + 删除线 */
 .pas-diff-cdel {
-    background: rgba(239, 68, 68, 0.40);
+    background: rgba(239, 68, 68, 0.42);
     color: #fca5a5;
-    border-radius: 2px;
-    padding: 0 1px;
+    border-radius: 3px;
+    padding: 0 2px;
     text-decoration: line-through;
     text-decoration-color: rgba(252, 165, 165, 0.6);
 }
 .pas-diff-cadd {
-    background: rgba(74, 222, 128, 0.40);
+    background: rgba(74, 222, 128, 0.42);
     color: #86efac;
-    border-radius: 2px;
-    padding: 0 1px;
+    border-radius: 3px;
+    padding: 0 2px;
 }
 
 /* =========================================================
- * Diff: 参数对比列表
+ * Diff: 参数对比列表（N-4 现代化）
  * ========================================================= */
 .pas-diff-params-list {
     display: flex;
@@ -2315,34 +2440,63 @@
     justify-content: space-between;
     align-items: center;
     gap: 10px;
-    padding: 6px 10px;
+    padding: 7px 12px;
     font-size: 0.86em;
     line-height: 1.5;
     border-bottom: 1px solid var(--pas-border);
     transition: background 0.10s ease;
+    position: relative;
 }
 .pas-diff-param-row:last-child { border-bottom: 0; }
-.pas-diff-param-row:hover { background: rgba(255, 255, 255, 0.025); }
-.pas-diff-param-important {
-    background: rgba(255, 255, 255, 0.015);
+.pas-diff-param-row:hover { background: rgba(255, 255, 255, 0.03); }
+/* N-4: 左边框颜色指示变化类型 */
+.pas-diff-param-changed {
+    border-left: 3px solid rgba(251, 191, 36, 0.7);
 }
-.pas-diff-param-important:hover { background: rgba(255, 255, 255, 0.04); }
-.pas-diff-param-changed { /* default */ }
-.pas-diff-param-only-a { background: rgba(59, 130, 246, 0.04); }
-.pas-diff-param-only-b { background: rgba(249, 115, 22, 0.04); }
-.pas-diff-param-same { opacity: 0.6; }
+.pas-diff-param-only-a {
+    border-left: 3px solid rgba(248, 113, 113, 0.7);
+    background: rgba(248, 113, 113, 0.04);
+}
+.pas-diff-param-only-b {
+    border-left: 3px solid rgba(74, 222, 128, 0.7);
+    background: rgba(74, 222, 128, 0.04);
+}
+.pas-diff-param-same {
+    opacity: 0.55;
+    border-left: 3px solid transparent;
+}
+/* N-4: 重要参数更醒目高亮 */
+.pas-diff-param-important {
+    background: rgba(251, 191, 36, 0.06);
+    border-left-width: 3px;
+}
+.pas-diff-param-important.pas-diff-param-changed {
+    background: rgba(251, 191, 36, 0.08);
+    box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.12);
+}
+.pas-diff-param-important:hover { background: rgba(251, 191, 36, 0.10); }
 
 .pas-diff-param-label {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     min-width: 0;
     flex-shrink: 1;
     overflow: hidden;
 }
+.pas-diff-param-status-icon {
+    font-size: 0.75em;
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    opacity: 0.6;
+}
+.pas-diff-param-changed .pas-diff-param-status-icon { color: #fbbf24; }
+.pas-diff-param-only-a .pas-diff-param-status-icon { color: #f87171; }
+.pas-diff-param-only-b .pas-diff-param-status-icon { color: #4ade80; }
 .pas-diff-param-fname {
     color: var(--pas-fg);
-    font-weight: 500;
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2350,42 +2504,50 @@
 .pas-diff-param-key {
     font-family: 'SF Mono', Consolas, monospace;
     color: var(--pas-fg-faint);
-    font-size: 0.90em;
+    font-size: 0.88em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    padding: 1px 5px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 3px;
 }
 .pas-diff-param-star {
     color: var(--pas-c-warn);
-    font-size: 0.7em;
+    font-size: 0.65em;
     flex-shrink: 0;
+    animation: pas-diff-star-pulse 2s ease-in-out infinite;
+}
+@keyframes pas-diff-star-pulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
 }
 .pas-diff-param-values {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     flex-wrap: wrap;
     flex-shrink: 0;
     text-align: right;
 }
 .pas-diff-param-delta {
     font-family: 'SF Mono', Consolas, monospace;
-    font-size: 0.88em;
-    font-weight: 600;
-    padding: 1px 5px;
-    border-radius: 4px;
+    font-size: 0.86em;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 6px;
 }
 .pas-diff-delta-up {
     color: rgba(74, 222, 128, 0.95);
-    background: rgba(74, 222, 128, 0.10);
+    background: rgba(74, 222, 128, 0.12);
 }
 .pas-diff-delta-down {
     color: rgba(248, 180, 180, 0.95);
-    background: rgba(239, 68, 68, 0.10);
+    background: rgba(239, 68, 68, 0.12);
 }
 
 /* =========================================================
- * Diff: 排序/启用对比列表
+ * Diff: 排序/启用对比列表（N-4 现代化）
  * ========================================================= */
 .pas-diff-order-list {
     display: flex;
@@ -2396,17 +2558,29 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 5px 10px;
+    padding: 6px 12px;
     font-size: 0.85em;
     border-bottom: 1px solid var(--pas-border);
     transition: background 0.10s ease;
 }
 .pas-diff-order-row:last-child { border-bottom: 0; }
-.pas-diff-order-row:hover { background: rgba(255, 255, 255, 0.025); }
-.pas-diff-order-changed { background: rgba(251, 191, 36, 0.04); }
-.pas-diff-order-only-a { background: rgba(239, 68, 68, 0.04); }
-.pas-diff-order-only-b { background: rgba(74, 222, 128, 0.04); }
-.pas-diff-order-same { opacity: 0.6; }
+.pas-diff-order-row:hover { background: rgba(255, 255, 255, 0.03); }
+.pas-diff-order-changed {
+    background: rgba(251, 191, 36, 0.04);
+    border-left: 3px solid rgba(251, 191, 36, 0.6);
+}
+.pas-diff-order-only-a {
+    background: rgba(239, 68, 68, 0.04);
+    border-left: 3px solid rgba(248, 113, 113, 0.6);
+}
+.pas-diff-order-only-b {
+    background: rgba(74, 222, 128, 0.04);
+    border-left: 3px solid rgba(74, 222, 128, 0.6);
+}
+.pas-diff-order-same {
+    opacity: 0.55;
+    border-left: 3px solid transparent;
+}
 
 .pas-diff-order-name {
     flex: 1;
@@ -2415,29 +2589,29 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--pas-fg);
-    font-weight: 500;
+    font-weight: 600;
 }
 .pas-diff-order-pos {
     font-family: 'SF Mono', Consolas, monospace;
     color: var(--pas-fg-muted);
-    font-size: 0.92em;
+    font-size: 0.90em;
     flex-shrink: 0;
 }
-.pas-diff-order-pos-same { opacity: 0.55; }
+.pas-diff-order-pos-same { opacity: 0.5; }
 .pas-diff-order-arrow {
     font-weight: 700;
     margin-left: 4px;
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 0.88em;
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-size: 0.86em;
 }
 .pas-diff-order-up {
     color: rgba(74, 222, 128, 0.95);
-    background: rgba(74, 222, 128, 0.12);
+    background: rgba(74, 222, 128, 0.14);
 }
 .pas-diff-order-down {
     color: rgba(248, 180, 180, 0.95);
-    background: rgba(239, 68, 68, 0.10);
+    background: rgba(239, 68, 68, 0.12);
 }
 .pas-diff-order-en {
     font-size: 0.88em;
@@ -2641,12 +2815,46 @@
     .pas-log-actions .pas-mini-btn span { display: none; }
     .pas-log-time { min-width: 88px; font-size: 0.85em; }
 
-    .pas-diff-meta { grid-template-columns: 1fr; }
-    .pas-diff-summary-bar { font-size: 0.78em; gap: 6px; }
+    /* N-4: diff 弹窗移动端优化 */
+    .pas-diff-meta {
+        grid-template-columns: 1fr;
+        gap: 0;
+    }
+    .pas-diff-meta-arrow {
+        transform: rotate(90deg);
+        padding: 4px 0;
+        font-size: 0.8em;
+    }
+    .pas-diff-side-meta {
+        padding: 8px 12px;
+    }
+    .pas-diff-summary-bar {
+        font-size: 0.76em;
+        gap: 4px;
+        padding: 6px 8px;
+    }
+    .pas-diff-summary-pill {
+        padding: 2px 8px;
+        font-size: 0.95em;
+    }
+    .pas-diff-summary-pill span { display: none; }
     .pas-diff-cline { grid-template-columns: 1fr; }
     .pas-diff-cline-a, .pas-diff-cline-b { min-width: 0; }
-    .pas-diff-param-row { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .pas-diff-param-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        padding: 8px 10px;
+    }
+    .pas-diff-param-values { width: 100%; }
     .pas-diff-order-row { flex-wrap: wrap; }
+    .pas-diff-prompt-name { max-width: 180px; }
+    .pas-diff-prompt-id { max-width: 100px; }
+    .pas-diff-toolbar { padding: 5px 8px; }
+    .pas-diff-section-head {
+        padding: 8px 10px;
+        font-size: 0.78em;
+    }
     .pas-grouping-row {
         grid-template-columns: 1fr;
         gap: 6px;

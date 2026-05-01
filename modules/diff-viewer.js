@@ -13,7 +13,7 @@
 
 import { logger } from './logger.js';
 import { t, toast, escapeHtml as esc, formatTime, createPopupSafe } from './compatibility.js';
-import { stableStringify, formatBytes } from './history-store.js';
+import { stableStringify, formatBytes, normalizePresetFields } from './history-store.js';
 
 let _popup = null;
 
@@ -183,7 +183,10 @@ const IMPORTANT = new Set([
 const SKIP = new Set([
     'prompts', 'prompt_order', 'extensions', 'preset_settings_openai',
     'name', 'bias_presets', 'bias_preset_selected',
+    'bind_preset_to_connection',
 ]);
+
+// N-3: normalizePresetFields 和 FIELD_SYNONYMS 已移至 history-store.js 作为共享工具函数
 const PFIELDS = ['name', 'role', 'content', 'system_prompt', 'marker',
     'injection_position', 'injection_depth', 'forbid_overrides'];
 
@@ -205,10 +208,13 @@ function computeDiff(a, b) {
 }
 
 function diffSettings(A, B) {
-    const keys = [...new Set([...Object.keys(A), ...Object.keys(B)].filter(k => !SKIP.has(k)))].sort();
+    // N-3: 规范化字段名后再比较，避免同义字段产生虚假 diff
+    const nA = normalizePresetFields(A);
+    const nB = normalizePresetFields(B);
+    const keys = [...new Set([...Object.keys(nA), ...Object.keys(nB)].filter(k => !SKIP.has(k)))].sort();
     return keys.map(k => {
-        const av = A[k], bv = B[k];
-        const aH = Object.hasOwn(A, k), bH = Object.hasOwn(B, k);
+        const av = nA[k], bv = nB[k];
+        const aH = Object.hasOwn(nA, k), bH = Object.hasOwn(nB, k);
         let status = aH && !bH ? 'only-a' : !aH && bH ? 'only-b' : jsonEq(av, bv) ? 'same' : 'changed';
         let delta = null;
         if (status === 'changed' && typeof av === 'number' && typeof bv === 'number'
@@ -283,6 +289,7 @@ function buildDiffHTML(a, b) {
     </div>
     <div class="pas-diff-meta">
         <div class="pas-diff-side-meta pas-diff-side-meta-a">${sideMetaHTML('A', a)}</div>
+        <div class="pas-diff-meta-arrow"><i class="fa-solid fa-arrow-right"></i></div>
         <div class="pas-diff-side-meta pas-diff-side-meta-b">${sideMetaHTML('B', b)}</div>
     </div>
     <div class="pas-diff-summary-bar">${summaryBarHTML(c)}</div>
@@ -302,6 +309,14 @@ function buildDiffHTML(a, b) {
                 <i class="fa-solid fa-download"></i>
                 <span>${esc(t('Diff Export'))}</span>
             </button>
+            <button class="pas-mini-btn pas-diff-btn-export-a" type="button" title="${esc(t('Export Preset A Title'))}">
+                <i class="fa-solid fa-file-export"></i>
+                <span>${esc(t('Export Preset A'))}</span>
+            </button>
+            <button class="pas-mini-btn pas-diff-btn-export-b" type="button" title="${esc(t('Export Preset B Title'))}">
+                <i class="fa-solid fa-file-export"></i>
+                <span>${esc(t('Export Preset B'))}</span>
+            </button>
         </div>
     </div>
     <div class="pas-diff-body">${bodyHTML(diff, false)}</div>
@@ -310,20 +325,24 @@ function buildDiffHTML(a, b) {
 
 function sideMetaHTML(tag, s) {
     const nm = s.name?.trim() || s.presetName;
-    return `<span class="pas-diff-side-meta-tag">${esc(tag)}</span>
-        <span class="pas-diff-side-meta-name">${esc(nm)}</span>
-        <span class="pas-diff-side-meta-time">${esc(formatTime(s.timestamp))}</span>
-        <span class="pas-diff-side-meta-extra">${formatBytes(s.size || 0)} · <code>${esc(s.hash || '')}</code>${s.pinned ? ' · <i class="fa-solid fa-thumbtack" style="color:var(--pas-c-pin)"></i>' : ''}</span>`;
+    return `<div class="pas-diff-side-meta-top">
+            <span class="pas-diff-side-meta-tag">${esc(tag)}</span>
+            <span class="pas-diff-side-meta-name">${esc(nm)}</span>
+            ${s.pinned ? '<i class="fa-solid fa-thumbtack pas-diff-side-meta-pin"></i>' : ''}
+        </div>
+        <div class="pas-diff-side-meta-bottom">
+            <span class="pas-diff-side-meta-time"><i class="fa-regular fa-clock"></i> ${esc(formatTime(s.timestamp))}</span>
+            <span class="pas-diff-side-meta-extra">${formatBytes(s.size || 0)} · <code>${esc(s.hash || '')}</code></span>
+        </div>`;
 }
 
 function summaryBarHTML(c) {
     return `
-        <span class="pas-diff-summary-item"><i class="fa-solid fa-pen-to-square" style="color:var(--pas-c-edit)"></i> <b>${c.promptsModified}</b> ${esc(t('Diff Prompts Modified'))}</span>
-        <span class="pas-diff-summary-item"><i class="fa-solid fa-circle-plus" style="color:var(--pas-c-add)"></i> <b>${c.promptsAdded}</b> ${esc(t('Diff Prompts Added'))}</span>
-        <span class="pas-diff-summary-item"><i class="fa-solid fa-circle-minus" style="color:var(--pas-c-del)"></i> <b>${c.promptsDeleted}</b> ${esc(t('Diff Prompts Deleted'))}</span>
-        <span class="pas-diff-summary-sep">|</span>
-        <span class="pas-diff-summary-item"><i class="fa-solid fa-sliders" style="color:var(--pas-c-info)"></i> <b>${c.settingsChanged}</b> ${esc(t('Diff Params Changed'))}</span>
-        <span class="pas-diff-summary-item"><i class="fa-solid fa-arrows-up-down" style="color:var(--pas-c-warn)"></i> <b>${c.orderChanged}</b> ${esc(t('Diff Order Changed'))}</span>`;
+        <span class="pas-diff-summary-pill pas-diff-pill-edit"><i class="fa-solid fa-pen-to-square"></i> <b>${c.promptsModified}</b> <span>${esc(t('Diff Prompts Modified'))}</span></span>
+        <span class="pas-diff-summary-pill pas-diff-pill-add"><i class="fa-solid fa-circle-plus"></i> <b>${c.promptsAdded}</b> <span>${esc(t('Diff Prompts Added'))}</span></span>
+        <span class="pas-diff-summary-pill pas-diff-pill-del"><i class="fa-solid fa-circle-minus"></i> <b>${c.promptsDeleted}</b> <span>${esc(t('Diff Prompts Deleted'))}</span></span>
+        <span class="pas-diff-summary-pill pas-diff-pill-settings"><i class="fa-solid fa-sliders"></i> <b>${c.settingsChanged}</b> <span>${esc(t('Diff Params Changed'))}</span></span>
+        <span class="pas-diff-summary-pill pas-diff-pill-order"><i class="fa-solid fa-arrows-up-down"></i> <b>${c.orderChanged}</b> <span>${esc(t('Diff Order Changed'))}</span></span>`;
 }
 
 function bodyHTML(diff, showAll) {
@@ -483,8 +502,12 @@ function paramRowHTML(s) {
     } else {
         vH = `<code class="pas-diff-val-same">${esc(fmtV(s.aVal))}</code>`;
     }
+    const statusIcon = s.status === 'changed' ? '<i class="fa-solid fa-pen-to-square pas-diff-param-status-icon"></i>'
+        : s.status === 'only-a' ? '<i class="fa-solid fa-circle-minus pas-diff-param-status-icon"></i>'
+        : s.status === 'only-b' ? '<i class="fa-solid fa-circle-plus pas-diff-param-status-icon"></i>'
+        : '';
     return `<div class="pas-diff-param-row pas-diff-param-${esc(s.status)}${s.important ? ' pas-diff-param-important' : ''}">
-        <span class="pas-diff-param-label">${hasFN ? `<span class="pas-diff-param-fname">${esc(friendly)}</span> ` : ''}<span class="pas-diff-param-key">${esc(s.key)}</span>${s.important ? ' <i class="fa-solid fa-star pas-diff-param-star"></i>' : ''}</span>
+        <span class="pas-diff-param-label">${statusIcon}${hasFN ? `<span class="pas-diff-param-fname">${esc(friendly)}</span> ` : ''}<span class="pas-diff-param-key">${esc(s.key)}</span>${s.important ? ' <i class="fa-solid fa-star pas-diff-param-star"></i>' : ''}</span>
         <span class="pas-diff-param-values">${vH}</span>
     </div>`;
 }
@@ -548,6 +571,8 @@ function bindDiffEvents(a, b) {
     const body = root.querySelector('.pas-diff-body');
     const swapBtn = root.querySelector('.pas-diff-btn-swap');
     const exportBtn = root.querySelector('.pas-diff-btn-export');
+    const exportABtn = root.querySelector('.pas-diff-btn-export-a');
+    const exportBBtn = root.querySelector('.pas-diff-btn-export-b');
 
     let curA = a, curB = b, curDiff = computeDiff(curA, curB);
 
@@ -598,6 +623,45 @@ function bindDiffEvents(a, b) {
             toast.error(t('Export Failed'));
         }
     });
+
+    exportABtn?.addEventListener('click', () => {
+        downloadSnapshotAsPreset(curA);
+    });
+
+    exportBBtn?.addEventListener('click', () => {
+        downloadSnapshotAsPreset(curB);
+    });
+}
+
+/**
+ * 将快照的完整预设数据导出为 JSON 文件下载
+ * @param {object} snapshot - 含 preset 字段的完整快照对象
+ */
+function downloadSnapshotAsPreset(snapshot) {
+    if (!snapshot?.preset) {
+        toast.warning(t('Export Failed'));
+        return;
+    }
+    const data = snapshot.preset;
+    const safeName = (snapshot.presetName || 'preset').replace(/[<>:"/\\|?*]/g, '_');
+    const dateStr = new Date(snapshot.timestamp).toISOString().slice(0, 10);
+    const fileName = `${safeName}_${dateStr}.json`;
+
+    try {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const el = document.createElement('a');
+        el.href = url;
+        el.download = fileName;
+        document.body.appendChild(el);
+        el.click();
+        el.remove();
+        URL.revokeObjectURL(url);
+        toast.success(t('Export Preset Success'));
+    } catch (e) {
+        logger.error('Export preset failed:', e);
+        toast.error(t('Export Failed'));
+    }
 }
 
 function snapExp(s) {

@@ -219,6 +219,9 @@ function renderCard(s, panelCtx) {
         <button class="pas-btn-action pas-btn-view" data-id="${id}" data-action="view" title="${escapeAttr(t('View'))}" type="button" aria-label="${escapeAttr(t('View'))}">
             <i class="fa-solid fa-eye"></i>
         </button>
+        <button class="pas-btn-action pas-btn-export-preset" data-id="${id}" data-action="export" title="${escapeAttr(t('Export Preset'))}" type="button" aria-label="${escapeAttr(t('Export Preset'))}">
+            <i class="fa-solid fa-file-export"></i>
+        </button>
         <button class="pas-btn-action pas-btn-delete" data-id="${id}" data-action="delete" ${deleteAttr} type="button" aria-label="${escapeAttr(t('Delete'))}">
             <i class="fa-solid fa-trash"></i>
         </button>

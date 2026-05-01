@@ -165,6 +165,48 @@ export function hashPreset(obj) {
     return fnv1aHash(stableStringify(obj));
 }
 
+/**
+ * N-3: OpenAI 特有字段 → 规范字段名的同义映射。
+ * ST 的 oai_settings 中同时存在两套字段名（如 `top_p` 和 `top_p_openai`），
+ * 但磁盘 presets[] 数据可能只包含其中一套。
+ * 对比前先将 alt 名统一到 canonical 名，避免"从有值变空 / 从空变有值"的误导。
+ *
+ * 基于 ST openai.js settingsToUpdate 中的映射关系。
+ */
+export const FIELD_SYNONYMS = new Map([
+    ['temp_openai',                  'temperature'],
+    ['freq_pen_openai',              'frequency_penalty'],
+    ['pres_pen_openai',              'presence_penalty'],
+    ['top_p_openai',                 'top_p'],
+    ['top_k_openai',                 'top_k'],
+    ['top_a_openai',                 'top_a'],
+    ['min_p_openai',                 'min_p'],
+    ['repetition_penalty_openai',    'repetition_penalty'],
+]);
+
+/**
+ * 规范化预设字段名：将 OpenAI 特有变体合并到规范名称。
+ * 确保来自不同数据源（presets[] 磁盘数据 vs oai_settings 内存数据）的快照可正确比较。
+ *
+ * 规则：
+ *   - alt 字段存在但 canonical 不存在 → 将 alt 值赋给 canonical，删除 alt
+ *   - alt 和 canonical 都存在 → 保留 canonical，删除 alt（canonical 是通用显示名）
+ *   - 只有 canonical 存在 → 不变
+ */
+export function normalizePresetFields(preset) {
+    if (!preset || typeof preset !== 'object') return preset || {};
+    const result = { ...preset };
+    for (const [alt, canonical] of FIELD_SYNONYMS) {
+        if (alt in result) {
+            if (!(canonical in result)) {
+                result[canonical] = result[alt];
+            }
+            delete result[alt];
+        }
+    }
+    return result;
+}
+
 export function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
     if (bytes < 1024) return bytes + ' B';
@@ -426,15 +468,19 @@ const SUMMARY_IGNORED_KEYS = new Set([
     'preset_settings_openai', 'name',
     // 内部
     'bias_presets', 'bias_preset_selected',
+    'bind_preset_to_connection',
 ]);
 
 function compareScalars(prev, curr) {
+    // N-3: 规范化字段名后再比较，避免同义字段产生虚假 diff
+    const nPrev = normalizePresetFields(prev);
+    const nCurr = normalizePresetFields(curr);
     const out = [];
-    const allKeys = new Set([...Object.keys(prev), ...Object.keys(curr)]);
+    const allKeys = new Set([...Object.keys(nPrev), ...Object.keys(nCurr)]);
     for (const k of allKeys) {
         if (SUMMARY_IGNORED_KEYS.has(k)) continue;
-        const a = prev[k];
-        const b = curr[k];
+        const a = nPrev[k];
+        const b = nCurr[k];
         if (deepEqualStrict(a, b)) continue;
 
         const ta = typeof a, tb = typeof b;

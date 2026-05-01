@@ -709,24 +709,13 @@ function openPanel(panel, trigger) {
     }
 
     if (expandAll) {
-        // 展开所有组
+        // N-1: 展开所有一级组（不展开二级内容）
         const collapsed = panel.querySelectorAll('.pas-dd-group:not(.pas-dd-group--open)');
         for (const g of collapsed) {
             toggleGroup(g);
         }
-    } else {
-        // 仅展开当前选中预设所在的组
-        requestAnimationFrame(() => {
-            const active = panel.querySelector('.pas-dd-item--active');
-            if (active) {
-                const group = active.closest('.pas-dd-group');
-                if (group && !group.classList.contains('pas-dd-group--open')) {
-                    toggleGroup(group);
-                }
-                active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-            }
-        });
     }
+    // N-1: expandAll=false 时，所有组保持收起，不展开任何组
 }
 
 function closePanel(panel, trigger) {
