@@ -607,7 +607,10 @@ function applyTakeoverToSelect(select) {
     {
         let autoSetCount = 0;
         for (const [seriesKey, items] of seriesGroups) {
-            if (items.length === 0) continue;
+            // ⚡ 修复 seriesDefaultApply 膨胀：只对多版本系列设置默认值
+            //   单版本系列（items.length <= 1）只有一个选择，不需要默认值，
+            //   否则会产生大量 "Default":"Default" 这种无意义条目
+            if (items.length <= 1) continue;
             // 已有用户配置 → 跳过
             if (seriesDefaults[seriesKey]) continue;
             // 用 pickLatestVersion 选出最新版本
@@ -617,11 +620,22 @@ function applyTakeoverToSelect(select) {
                 autoSetCount++;
             }
         }
-        if (autoSetCount > 0) {
+        // ⚡ 清理已有的单版本系列条目（历史遗留膨胀数据）
+        let purgeCount = 0;
+        for (const key of Object.keys(seriesDefaults)) {
+            const items = seriesGroups.get(key);
+            // 系列已不存在或只有单版本 → 删除无意义的默认值
+            if (!items || items.length <= 1) {
+                delete seriesDefaults[key];
+                purgeCount++;
+            }
+        }
+        if (autoSetCount > 0 || purgeCount > 0) {
             // 批量写入 settings（异步，不阻塞接管流程）
             try {
                 updateSetting('seriesDefaultApply', { ...seriesDefaults });
-                logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
+                if (autoSetCount > 0) logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
+                if (purgeCount > 0) logger.debug(`[Takeover] purged ${purgeCount} single-version default entries`);
             } catch (e) {
                 logger.debug('[Takeover] auto-set default write failed:', e);
             }

@@ -537,13 +537,9 @@ function bindDiffEvents(a, b) {
     const root = document.querySelector('.pas-diff-popup');
     if (!root) return;
 
-    // ⚡ C3 修复：阻止弹窗内部交互事件（mousedown / pointerdown）冒泡到 ST Popup overlay
-    //   ST Popup 通过监听 overlay 上的 mousedown 判断"点击外部 → 关闭"。
-    //   diff 弹窗叠在历史面板之上，如果事件穿透到 overlay 层，
-    //   会导致 ST 误判为用户点击了弹窗外部而关闭弹窗。
-    //   阻止冒泡让 popup overlay 不会收到来自弹窗内部的鼠标事件。
-    root.addEventListener('mousedown', (e) => e.stopPropagation());
-    root.addEventListener('pointerdown', (e) => e.stopPropagation());
+    // ⚡ C3 修复已移除：stopPropagation 会阻止滚动等正常交互。
+    //   ST Popup 使用原生 <dialog>.showModal()，关闭是通过 cancel 事件触发的，
+    //   不依赖 mousedown 事件冒泡，因此 stopPropagation 不必要且有害。
 
     const showAllCb = root.querySelector('.pas-diff-show-all');
     const body = root.querySelector('.pas-diff-body');

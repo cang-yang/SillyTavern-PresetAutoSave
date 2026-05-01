@@ -153,13 +153,10 @@ export async function showHistoryPanel() {
 
         _root = document.querySelector('.pas-panel');
 
-        // ⚡ C3 修复：阻止面板内部鼠标事件冒泡到 ST Popup overlay
-        //   ST Popup 通过 overlay 的 mousedown 判断"点击外部 → 关闭"
-        //   面板中的 <select> 原生下拉收回时会触发此逻辑导致整个面板消失
-        if (_root) {
-            _root.addEventListener('mousedown', (e) => e.stopPropagation());
-            _root.addEventListener('pointerdown', (e) => e.stopPropagation());
-        }
+        // ⚡ C3 修复已移除：stopPropagation 会阻止滚动等正常交互。
+        //   ST Popup 使用原生 <dialog>.showModal()，关闭是通过 cancel 事件
+        //   （Escape / backdrop click）触发的，不依赖 mousedown 事件冒泡，
+        //   因此 stopPropagation 既无法阻止弹窗关闭，又会破坏页面滚动。
         if (!_root) {
             logger.error('Panel root not found');
             return;
