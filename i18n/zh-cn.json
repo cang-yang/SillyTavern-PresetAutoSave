@@ -335,6 +335,8 @@
     "Takeover Group": "预设接管",
     "Takeover Enabled": "接管原生预设下拉",
     "Takeover Enabled Desc": "把同系列的多个版本在原生下拉中合并为一个「系列名」，让列表干净整洁。关闭后下拉立即恢复原状。",
+    "Takeover Default Expand": "下拉面板默认展开所有组",
+    "Takeover Default Expand Hint": "关闭后仅展开当前选中预设所在的组",
     "Takeover Default Strategy": "代表版本策略",
     "Takeover Default Strategy Desc": "在没有为某系列指定默认版本时，自动使用最新版本作为默认。",
     "Takeover Strategy Latest": "自动使用最新版本",

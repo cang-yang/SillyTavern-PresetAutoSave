@@ -384,9 +384,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     const isCurrent = (ver.presetName === currentName && ver.apiId === currentApi);
     const isEmpty = (ver.snapshotCount || 0) === 0;
 
-    const settings = getSettings();
-    const seriesDefaults = settings.seriesDefaultApply || {};
-    const isDefaultApply = seriesDefaults[seriesKey] === ver.presetName;
+    // M-2A: seriesDefaultApply UI 已移除
 
     // 版本号胶囊：仅在解析出版本号时才显示（去掉了"未识别版本"占位）
     const versionPillHtml = ver.version
@@ -404,10 +402,9 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         ? `<span class="pas-version-pill pas-version-pill-dup" title="${escapeAttr(t('Duplicate Version Title'))}"><i class="fa-solid fa-copy"></i> ${escapeHtml(ver.duplicate)}</span>`
         : '';
 
-    // 标签徽章
+    // 标签徽章（M-2A: 移除了 isDefaultApply 标签）
     const tagsHtml = [
         isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : '',
-        isDefaultApply ? `<span class="pas-tag pas-tag-default-apply" title="${escapeAttr(t('Default Apply Tag Title'))}"><i class="fa-solid fa-thumbtack"></i> ${escapeHtml(t('Default Apply Tag'))}</span>` : '',
         ver.manualOverride ? `<span class="pas-tag pas-tag-manual-override" title="${escapeAttr(t('Grouping Manual Tag Title'))}">${escapeHtml(t('Grouping Manual Tag'))}</span>` : '',
         ver.archived ? `<span class="pas-tag pas-tag-archived" title="${escapeAttr(t('Archived Version Title'))}"><i class="fa-solid fa-box-archive"></i> ${escapeHtml(t('Archived Version'))}</span>` : '',
         isEmpty ? `<span class="pas-tag pas-tag-empty" title="${escapeAttr(t('No Snapshots Yet Title'))}">${escapeHtml(t('No Snapshots Yet'))}</span>` : '',
@@ -416,12 +413,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         ? `<div class="pas-version-header-row pas-version-header-row-tags">${tagsHtml}</div>`
         : '';
 
-    // 设为默认按钮
-    const defaultBtnTitle = isDefaultApply ? t('Unset Default Version') : t('Set As Default Version');
-    const defaultBtnCls = isDefaultApply ? 'pas-btn-default-on' : 'pas-btn-default-off';
-    const defaultBtn = `<button class="pas-btn-action pas-btn-set-default ${defaultBtnCls}" data-action="set-default" data-preset-name="${safePresetName}" data-series-key="${safeSeries}" title="${escapeAttr(defaultBtnTitle)}" type="button" aria-label="${escapeAttr(defaultBtnTitle)}">
-        <i class="fa-solid fa-thumbtack"></i>
-    </button>`;
+    // M-2A: "设为默认"按钮已移除
 
     // 应用版本按钮（已归档版本不可应用）
     const applyBtn = ver.archived
@@ -431,7 +423,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         </button>`;
 
     return `
-<div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isDefaultApply ? 'pas-version-default-apply' : ''} ${isEmpty ? 'pas-version-empty' : ''} ${ver.archived ? 'pas-version-archived' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
+<div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isEmpty ? 'pas-version-empty' : ''} ${ver.archived ? 'pas-version-archived' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
     <div class="pas-version-header" data-action="toggle-version">
         <div class="pas-version-header-row pas-version-header-row-title">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-version-chevron"></i>
@@ -452,7 +444,6 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
             </span>
             <span class="pas-version-meta-actions">
                 ${applyBtn}
-                ${defaultBtn}
                 <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
                     <i class="fa-solid fa-trash"></i>
                 </button>

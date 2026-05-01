@@ -332,11 +332,15 @@ export function getPresetSettingsSafe(presetName) {
 /**
  * 获取当前生效的预设快照（深拷贝，避免引用变更影响哈希）
  *
- * 处理流程:
- *   1. 优先尝试 pm.getPresetSettings(name)
- *   2. 若返回空对象（openai 等情况），回退到 pm.getPresetList(api).settings
- *      —— 这是真正"当前生效"的对象（oai_settings / textgen_settings 等）
- *   3. 若两条路径都失败，记录详细诊断日志后返回 null
+ * ⚠️ 核心修复（M-1）：
+ *   旧实现优先从 presets[idx]（磁盘数据）读取，导致 hash 永远不变、自动保存失效。
+ *   ST 数据流：
+ *     - oai_settings = 内存实时设置，用户拖滑块后立即更新
+ *     - presets[] = openai_settings 数组，仅在用户点 Save 后才同步
+ *     - pm.getPresetList(apiId).settings === oai_settings（内存引用）
+ *     - pm.getPresetSettings(name) 对 openai 返回 {} （switch 无 'openai' case）
+ *
+ *   正确做法：优先从 pm.getPresetList(apiId).settings 取内存实时数据。
  *
  * @param {string} [presetName] 预设名（可选）
  * @returns {object|null}
@@ -359,34 +363,67 @@ export function getPresetSnapshot(presetName) {
     const currentName = getSelectedPresetName();
     const isCurrentPreset = (name === currentName);
 
-    // 路径 1：官方 API（最稳定，针对特定预设）
-    let raw = null;
-    if (typeof pm.getPresetSettings === 'function') {
-        raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
-        if (isUsable(raw)) {
-            return cloneDeepSafe(raw);
+    // ===== 路径 1（核心，M-1 修复）：从 getPresetList().settings 获取内存实时数据 =====
+    // pm.getPresetList(apiId).settings 就是 oai_settings / textgen_settings 的引用，
+    // 用户修改滑块后这个对象会被 ST 原生代码立即更新。
+    // 对"当前生效的预设"来说，这是唯一可靠的数据源。
+    if (isCurrentPreset && typeof pm.getPresetList === 'function') {
+        const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList-settings');
+        const live = list?.settings;
+        if (isUsable(live)) {
+            if (_lastSnapshotPath !== `live:${apiId}`) {
+                logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (live memory data)`);
+                _lastSnapshotPath = `live:${apiId}`;
+            }
+            return cloneDeepSafe(live);
         }
     }
 
-    // 路径 2：通过 pm.getPresetList() 直接查内部数据数组
-    //   pm.getPresetList(apiId) 返回：
-    //     - presets = 预设数据数组
-    //     - preset_names = {name: index} 映射或名字数组
-    //   用 preset_names[name] 查索引 → presets[index] 取数据
-    if (typeof pm.getPresetList === 'function') {
+    // ===== 路径 2（后备）：getContext().chatCompletionSettings =====
+    // 也是 oai_settings 的引用，在某些 ST 版本中可用
+    if (isCurrentPreset) {
+        try {
+            const ctx = SillyTavern.getContext();
+            if (ctx?.chatCompletionSettings && isUsable(ctx.chatCompletionSettings)) {
+                if (_lastSnapshotPath !== 'ctx-ccs') {
+                    logger.debug('[getPresetSnapshot] using ctx.chatCompletionSettings (fallback)');
+                    _lastSnapshotPath = 'ctx-ccs';
+                }
+                return cloneDeepSafe(ctx.chatCompletionSettings);
+            }
+        } catch (_) { /* ignore */ }
+    }
+
+    // ===== 路径 3（后备）：window.oai_settings =====
+    // 仅当 openai API 且查询当前预设时可用
+    if (isCurrentPreset && apiId === 'openai') {
+        try {
+            const oai = window.oai_settings;
+            if (isUsable(oai)) {
+                if (_lastSnapshotPath !== 'oai-global') {
+                    logger.debug('[getPresetSnapshot] using window.oai_settings (fallback)');
+                    _lastSnapshotPath = 'oai-global';
+                }
+                return cloneDeepSafe(oai);
+            }
+        } catch (_) { /* ignore */ }
+    }
+
+    // ===== 路径 4（非当前预设）：从 presets[] 数组读磁盘数据 =====
+    // 仅用于读取非当前选中的预设（如历史对比）。
+    // 注意：这里读的是 openai_settings 数组中的磁盘副本，不是实时数据。
+    if (!isCurrentPreset && typeof pm.getPresetList === 'function') {
         try {
             const { presets, preset_names } = pm.getPresetList(apiId);
             if (presets && preset_names) {
                 let presetData = null;
 
                 if (Array.isArray(preset_names)) {
-                    // 键值 API（instruct / context / sysprompt / reasoning）
                     const idx = preset_names.indexOf(name);
                     if (idx >= 0 && presets[idx]) {
                         presetData = presets[idx];
                     }
                 } else if (typeof preset_names === 'object') {
-                    // 非键值 API（openai / kobold / novel）
                     const idx = preset_names[name];
                     if (idx !== undefined && presets[idx]) {
                         presetData = presets[idx];
@@ -398,44 +435,21 @@ export function getPresetSnapshot(presetName) {
                 }
             }
         } catch (e) {
-            logger.debug('[getPresetSnapshot] path 2 getPresetList error:', e);
+            logger.debug('[getPresetSnapshot] path 4 getPresetList error:', e);
         }
     }
 
-    // 路径 2.5：通过 getCompletionPresetByName（某些 ST 版本可能有此方法）
-    if (typeof pm.getCompletionPresetByName === 'function') {
-        const preset = safeCall(() => pm.getCompletionPresetByName(name), null, 'getCompletionPresetByName');
-        if (isUsable(preset)) {
-            return cloneDeepSafe(preset);
+    // ===== 路径 5：pm.getPresetSettings(name) =====
+    // 对 openai 返回 {}，但对其他 API（textgenerationwebui 等）可能有效
+    if (typeof pm.getPresetSettings === 'function') {
+        const raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
+        if (isUsable(raw)) {
+            return cloneDeepSafe(raw);
         }
-    }
-
-    // 路径 3（关键回退）：仅当查询的是"当前生效的预设"时，
-    //   才从 getPresetList(api).settings 拿实时设置对象。
-    //   对其他预设这条路径返回的是错的（永远是当前预设数据）！
-    if (isCurrentPreset && typeof pm.getPresetList === 'function') {
-        const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList');
-        const live = list && list.settings;
-        if (isUsable(live)) {
-            if (_lastSnapshotPath !== `list:${apiId}`) {
-                logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (fallback for current preset only)`);
-                _lastSnapshotPath = `list:${apiId}`;
-            }
-            return cloneDeepSafe(live);
-        }
-    }
-
-    // 路径 4（最后兜底）：仅当查询"当前预设"且是 openai 时，从 window.oai_settings 读
-    if (isCurrentPreset && apiId === 'openai' && window.oai_settings && typeof window.oai_settings === 'object') {
-        if (_lastSnapshotPath !== 'oai') {
-            logger.debug('[getPresetSnapshot] using window.oai_settings (last fallback for current preset)');
-            _lastSnapshotPath = 'oai';
-        }
-        return cloneDeepSafe(window.oai_settings);
     }
 
     // 失败：log 详情
-    logger.warn(`[getPresetSnapshot] failed: apiId=${apiId} name="${name}" isCurrent=${isCurrentPreset} pm=${!!pm} findPreset=${typeof pm.findPreset}`);
+    logger.warn(`[getPresetSnapshot] failed: apiId=${apiId} name="${name}" isCurrent=${isCurrentPreset} pm=${!!pm}`);
     return null;
 }
 

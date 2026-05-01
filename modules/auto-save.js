@@ -900,12 +900,17 @@ function computeFingerprint(preset) {
     if (!preset) return '(empty)';
     const fp = {};
     const watchKeys = [
+        // 核心采样参数（oai_settings / textgen_settings 中最常被用户修改的字段）
         'temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty',
-        'temp', 'rep_pen',
-        'streaming', 'stream_response',
+        'temp', 'rep_pen', 'min_p', 'top_a', 'typical_p',
+        // token 限制（非常常见的修改项）
+        'openai_max_tokens', 'openai_max_context', 'max_tokens', 'max_length',
+        // 流式 & 功能开关
+        'streaming', 'stream_response', 'seed',
         'wrap_in_quotes', 'wi_format', 'show_external_links',
         'function_calling', 'request_images',
         'reasoning_effort', 'show_thoughts',
+        // 预设标识
         'preset', 'name',
     ];
     for (const k of watchKeys) {

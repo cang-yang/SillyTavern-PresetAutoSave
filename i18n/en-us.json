@@ -335,6 +335,8 @@
     "Takeover Group": "Preset Takeover",
     "Takeover Enabled": "Take over native preset dropdown",
     "Takeover Enabled Desc": "Merge multiple versions of the same series into a single \"series name\" entry in the native dropdown for a clean, organized list. Disabling restores the original list immediately.",
+    "Takeover Default Expand": "Expand all groups by default",
+    "Takeover Default Expand Hint": "When off, only the group containing the currently selected preset is expanded when opening the dropdown.",
     "Takeover Default Strategy": "Default version strategy",
     "Takeover Default Strategy Desc": "When no default is set for a series, automatically use the latest version.",
     "Takeover Strategy Latest": "Auto: latest version",

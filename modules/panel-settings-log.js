@@ -186,6 +186,7 @@ export function renderSettingsTab(panelCtx) {
 
     ${group(t('Takeover Group'), [
         toggle('takeoverEnabled', t('Takeover Enabled'), t('Takeover Enabled Desc'), s.takeoverEnabled),
+        toggle('takeoverDefaultExpand', t('Takeover Default Expand'), t('Takeover Default Expand Hint'), s.takeoverDefaultExpand),
         select('takeoverDefaultStrategy', t('Takeover Default Strategy'), t('Takeover Default Strategy Desc'), s.takeoverDefaultStrategy, [
             { value: 'latest', label: t('Takeover Strategy Latest') },
             { value: 'manual', label: t('Takeover Strategy Manual') },

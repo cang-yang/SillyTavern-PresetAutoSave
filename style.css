@@ -1969,16 +1969,17 @@
 
 /* --- 主体 --- */
 .pas-diff-body {
-    flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    /* T9 fix: 放宽 max-height 限制，让弹窗内容可充分滚动 */
+    /* T9+M3 fix: 放宽 max-height 限制，让弹窗内容可充分滚动；
+       不使用 flex 布局避免 section 间高度互相影响 */
     max-height: calc(80vh - 180px);
     min-height: 120px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    contain: layout style;
+    display: block;
+    padding: 0;
+}
+.pas-diff-body > * + * {
+    margin-top: 8px;
 }
 .pas-diff-body::-webkit-scrollbar { width: 8px; height: 8px; }
 .pas-diff-body::-webkit-scrollbar-thumb {
@@ -1998,11 +1999,12 @@
 .pas-diff-no-changes i { font-size: 2.2em; opacity: 0.36; }
 
 /* --- 可折叠分节 --- */
+/* M-3 fix: section 不使用 overflow:hidden，收起时纯靠 display:none 隐藏 body；
+   不设 flex 相关属性避免高度互相影响 */
 .pas-diff-section {
     background: var(--pas-surface-1);
     border: 1px solid var(--pas-border);
     border-radius: var(--pas-radius);
-    overflow: hidden;
 }
 .pas-diff-section-head {
     background: rgba(255, 255, 255, 0.04);
@@ -2037,7 +2039,19 @@
     color: var(--pas-fg-faint);
 }
 .pas-diff-section-collapsed .pas-diff-section-chevron { transform: rotate(-90deg); }
-.pas-diff-section-collapsed .pas-diff-section-body { display: none; }
+/* M-3 fix: 收起时用 display:none 完全移除 body，不留任何高度/padding/border */
+.pas-diff-section-collapsed .pas-diff-section-body {
+    display: none !important;
+    height: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    overflow: hidden;
+}
+/* M-3 fix: 收起时 section head 不显示 border-bottom（body 不渲染了） */
+.pas-diff-section-collapsed .pas-diff-section-head {
+    border-bottom: none;
+}
 .pas-diff-section-body { padding: 6px; }
 
 /* =========================================================
@@ -2648,22 +2662,9 @@
 }
 
 /* =========================================================
- * 预设接管：版本卡的"默认应用"标记
+ * 预设接管：版本卡标记
+ * M-2A: "默认应用" 标签及图钉按钮相关样式已移除
  * ========================================================= */
-
-/* "默认应用" 标签 */
-.pas-tag-default-apply {
-    background: rgba(34, 211, 238, 0.16);
-    color: #22d3ee;
-    border: 1px solid rgba(34, 211, 238, 0.32);
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-.pas-tag-default-apply i {
-    font-size: 0.86em;
-    transform: rotate(-30deg);
-}
 
 /* "无快照" 标签 */
 .pas-tag-empty {
@@ -2671,16 +2672,6 @@
     color: var(--pas-fg-faint);
     border: 1px dashed var(--pas-border);
     font-style: normal;
-}
-
-/* 整个版本卡为"默认应用"时的视觉强化 */
-.pas-version-default-apply > .pas-version-header {
-    background: linear-gradient(90deg,
-        rgba(34, 211, 238, 0.08) 0%,
-        rgba(34, 211, 238, 0.02) 60%,
-        transparent 100%);
-    border-left: 3px solid var(--pas-c-info, #22d3ee);
-    padding-left: 9px;
 }
 
 /* 整个版本卡为"无快照"时的视觉淡化（保留信息但弱化） */
@@ -2701,33 +2692,6 @@
     border-radius: var(--pas-radius-sm);
     background: var(--pas-surface-0);
     margin: 6px;
-}
-
-/* "设为默认" 图钉按钮 */
-.pas-btn-set-default {
-    color: var(--pas-fg-muted);
-    transition:
-        color var(--pas-dur) var(--pas-ease-fast),
-        background var(--pas-dur) var(--pas-ease-fast),
-        transform var(--pas-dur) var(--pas-ease-fast);
-}
-.pas-btn-set-default i {
-    transform: rotate(-30deg);
-    transition: transform var(--pas-dur) var(--pas-ease);
-}
-.pas-btn-set-default:hover {
-    color: var(--pas-c-info, #22d3ee);
-    background: rgba(34, 211, 238, 0.08);
-}
-.pas-btn-set-default.pas-btn-default-on {
-    color: var(--pas-c-info, #22d3ee);
-    background: rgba(34, 211, 238, 0.12);
-}
-.pas-btn-set-default.pas-btn-default-on i {
-    transform: rotate(0deg);
-}
-.pas-btn-set-default.pas-btn-default-on:hover {
-    background: rgba(34, 211, 238, 0.2);
 }
 
 /* "应用版本" 圆勾按钮 */
@@ -2760,8 +2724,6 @@
 
 /* prefers-reduced-motion 适配 */
 @media (prefers-reduced-motion: reduce) {
-    .pas-btn-set-default,
-    .pas-btn-set-default i,
     .pas-btn-apply-version {
         transition: none;
     }
@@ -2934,14 +2896,6 @@
     flex-shrink: 0;
 }
 
-/* --- 默认星标 --- */
-.pas-dd-default-star {
-    flex-shrink: 0;
-    font-size: 0.82em;
-    cursor: help;
-    filter: saturate(0.85);
-}
-
 /* --- 分组内容体 --- */
 .pas-dd-group-body {
     padding-left: 14px;
@@ -3026,22 +2980,6 @@
     line-height: 1.4;
     flex-shrink: 0;
     white-space: nowrap;
-}
-
-/* --- "默认" 文字徽章 --- */
-.pas-dd-item-default-badge {
-    display: inline-block;
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-size: 0.72em;
-    font-weight: 700;
-    background: rgba(250, 204, 21, 0.14);
-    color: rgba(252, 211, 77, 0.95);
-    border: 1px solid rgba(250, 204, 21, 0.28);
-    line-height: 1.4;
-    flex-shrink: 0;
-    white-space: nowrap;
-    letter-spacing: 0.3px;
 }
 
 /* --- 减少动画偏好（无障碍） --- */

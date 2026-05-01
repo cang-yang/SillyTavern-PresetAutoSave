@@ -51,6 +51,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     takeoverDefaultStrategy: 'latest', // 'latest' | 'manual' 选中代表版本的默认策略
     seriesDefaultApply: {},         // { [seriesKey]: presetName } 用户为每个系列指定的"默认应用版本"
 
+    // 预设接管下拉面板：打开时默认展开所有组（false = 仅展开当前选中所在组）
+    takeoverDefaultExpand: false,
+
     // 种子快照：开启分组/接管时为现有预设自动建立 1 条初始快照
     autoSeedOnTakeover: true,       // 是否自动种子（首次接管/检测到新预设时）
     seedSnapshotsDone: false,       // 全量 seed 是否已完成（避免每次启动都跑）
@@ -84,6 +87,7 @@ const VALIDATORS = {
     takeoverEnabled: (v) => Boolean(v),
     takeoverDefaultStrategy: (v) => (v === 'manual' ? 'manual' : 'latest'),
     seriesDefaultApply: (v) => sanitizeStringMap(v),
+    takeoverDefaultExpand: (v) => Boolean(v),
     autoSeedOnTakeover: (v) => Boolean(v),
     seedSnapshotsDone: (v) => Boolean(v),
     debugMode: (v) => Boolean(v),

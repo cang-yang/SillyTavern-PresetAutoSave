@@ -74,6 +74,7 @@ import {
 // =====================================================
 // 状态
 // =====================================================
+let _initialized = false;  // 幂等守卫：防止 initHistoryPanel 重复调用
 let _popup = null;
 let _root = null;
 let _logUnsubscribe = null;
@@ -140,6 +141,11 @@ function _panelCtx() {
 // 初始化
 // =====================================================
 export async function initHistoryPanel() {
+    if (_initialized) {
+        logger.debug('History panel already initialized, skip');
+        return;
+    }
+    _initialized = true;
     logger.debug('History panel ready');
     // 启动导入识别（事件驱动，无轮询）
     startImportWatcher();
@@ -151,6 +157,7 @@ export async function initHistoryPanel() {
 export function teardownHistoryPanel() {
     stopImportWatcher();
     cleanupActionPopups({ includeWizard: true });
+    _initialized = false;
 }
 
 // =====================================================

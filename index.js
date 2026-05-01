@@ -8,7 +8,7 @@
 
 import { logger } from './modules/logger.js';
 import {
-    initCompatibility, ENV, offAll,
+    initCompatibility, ENV, offAll, on, getEventType,
     savePresetSafe, getPresetManager,
 } from './modules/compatibility.js';
 import { initSettings, getSettings, resetSettings } from './modules/settings.js';
@@ -42,6 +42,8 @@ const VERSION = '1.0.0';
 let _phase1Done = false;
 let _takeoverDone = false;
 let _phase2Done = false;
+let _mainEventsBound = false;       // 防止 main() 中事件重复订阅
+let _mainEventUnsubscribers = [];   // main() 中订阅的事件取消函数
 
 // =====================================================
 // 阶段 1: UI 基础设施初始化（settings / store / 注入按钮 / 历史面板）
@@ -368,26 +370,31 @@ export function onDisable() {
     //   2) 同时探测 DOM 状态：如果 #left-nav-panel 或 #completion_prompt_manager 已存在，
     //      说明 ST 已经初始化过了，立即手动调用初始化逻辑
 
-    // 注册事件监听
-    if (eventSource && event_types) {
+    // 注册事件监听（幂等：只绑一次，使用 compatibility.on 确保可追踪 + offAll 可清理）
+    if (!_mainEventsBound && eventSource && event_types) {
+        _mainEventsBound = true;
         try {
-            eventSource.on(event_types.APP_INITIALIZED, () => {
+            const evtInit = getEventType('APP_INITIALIZED', 'app_initialized');
+            const unsub1 = on(evtInit, () => {
                 logger.debug('[event] APP_INITIALIZED received');
                 runPhase1().then(() => runTakeoverPhase());
             });
+            if (typeof unsub1 === 'function') _mainEventUnsubscribers.push(unsub1);
         } catch (e) {
             logger.warn('Failed to bind APP_INITIALIZED:', e);
         }
 
         try {
-            eventSource.on(event_types.APP_READY, () => {
+            const evtReady = getEventType('APP_READY', 'app_ready');
+            const unsub2 = on(evtReady, () => {
                 logger.debug('[event] APP_READY received');
                 runPhase2();
             });
+            if (typeof unsub2 === 'function') _mainEventUnsubscribers.push(unsub2);
         } catch (e) {
             logger.warn('Failed to bind APP_READY:', e);
         }
-    } else {
+    } else if (!eventSource || !event_types) {
         logger.warn('eventSource/event_types unavailable, fallback to DOM-ready bootstrap');
     }
 

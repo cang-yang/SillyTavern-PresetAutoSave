@@ -411,8 +411,7 @@ function applyTakeoverToSelect(select) {
     // 设置 select observer
     setupSelectObserver(select);
 
-    // 自动设置 seriesDefaultApply
-    autoSetSeriesDefaults(select, apiId, overrides, excluded, seriesDefaults);
+    // M-2A: autoSetSeriesDefaults 调用已移除（默认预设功能已移除）
 
     logger.debug(`[Takeover] overlay applied to [${apiId}]`);
 }
@@ -700,24 +699,34 @@ function openPanel(panel, trigger) {
         }
     }
 
-    // T5: 先收起所有组，再只展开当前选中预设所在的组
+    // M-2B: 读取 takeoverDefaultExpand 设置决定展开策略
+    const expandAll = getSettings().takeoverDefaultExpand;
+
+    // T5: 先收起所有组
     const allGroups = panel.querySelectorAll('.pas-dd-group.pas-dd-group--open');
     for (const g of allGroups) {
         toggleGroup(g); // 收起已展开的组
     }
 
-    // 滚动到 active item，仅展开其所在组
-    requestAnimationFrame(() => {
-        const active = panel.querySelector('.pas-dd-item--active');
-        if (active) {
-            // 如果 active 在折叠组内，先展开该组
-            const group = active.closest('.pas-dd-group');
-            if (group && !group.classList.contains('pas-dd-group--open')) {
-                toggleGroup(group);
-            }
-            active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (expandAll) {
+        // 展开所有组
+        const collapsed = panel.querySelectorAll('.pas-dd-group:not(.pas-dd-group--open)');
+        for (const g of collapsed) {
+            toggleGroup(g);
         }
-    });
+    } else {
+        // 仅展开当前选中预设所在的组
+        requestAnimationFrame(() => {
+            const active = panel.querySelector('.pas-dd-item--active');
+            if (active) {
+                const group = active.closest('.pas-dd-group');
+                if (group && !group.classList.contains('pas-dd-group--open')) {
+                    toggleGroup(group);
+                }
+                active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        });
+    }
 }
 
 function closePanel(panel, trigger) {

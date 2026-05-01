@@ -89,7 +89,6 @@ export function cleanupActionPopups({ includeWizard = false } = {}) {
  */
 export async function handleListClick(e, panelCtx) {
     const clearBtn = e.target.closest('.pas-btn-clear-preset');
-    const setDefaultBtn = e.target.closest('.pas-btn-set-default');
     const applyVersionBtn = e.target.closest('.pas-btn-apply-version');
     const seriesHeader = e.target.closest('.pas-series-header');
     const versionHeader = e.target.closest('.pas-version-header');
@@ -104,19 +103,7 @@ export async function handleListClick(e, panelCtx) {
         return;
     }
 
-    // 1.1) "设为默认应用版本"按钮（图钉）
-    if (setDefaultBtn) {
-        e.preventDefault();
-        e.stopPropagation();
-        const presetName = setDefaultBtn.getAttribute('data-preset-name');
-        const seriesKey = setDefaultBtn.getAttribute('data-series-key');
-        if (presetName && seriesKey) {
-            await onToggleSeriesDefault(seriesKey, presetName, panelCtx);
-        }
-        return;
-    }
-
-    // 1.2) "应用此版本"按钮（圆勾）
+    // 1.1) "应用此版本"按钮（圆勾）（M-2A: "设为默认"按钮已移除）
     if (applyVersionBtn) {
         e.preventDefault();
         e.stopPropagation();

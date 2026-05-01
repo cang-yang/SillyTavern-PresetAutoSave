@@ -298,6 +298,14 @@ export function setStatusDot(state) {
 // 事件监听 - 切换/加载后重新注入
 // =====================================================
 function setupEventListeners() {
+    // 幂等保护：先清理已有订阅，防止重复绑定
+    if (_eventUnsubscribers.length > 0) {
+        for (const unsub of _eventUnsubscribers) {
+            try { typeof unsub === 'function' && unsub(); } catch (_) {}
+        }
+        _eventUnsubscribers = [];
+    }
+
     const events = [
         'OAI_PRESET_CHANGED_AFTER',
         'PRESET_CHANGED',
@@ -312,7 +320,9 @@ function setupEventListeners() {
         const unsub = on(evt, () => {
             setTimeout(scheduleInject, 100);
         });
-        _eventUnsubscribers.push(unsub);
+        if (typeof unsub === 'function') {
+            _eventUnsubscribers.push(unsub);
+        }
     }
 }
 
