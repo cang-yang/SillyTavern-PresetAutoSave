@@ -876,12 +876,22 @@ function scheduleImportWatchTick() {
 
 /**
  * 收集"已知预设名"：getAllPresetNames() 的结果
+ * P-2: 过滤无效名称（空字符串、纯空格、纯数字占位符等）
  */
 function collectKnownPresetNames() {
     const set = new Set();
     try {
         const arr = getAllPresetNames();
-        if (Array.isArray(arr)) for (const n of arr) if (n) set.add(n);
+        if (Array.isArray(arr)) {
+            for (const n of arr) {
+                if (!n || typeof n !== 'string') continue;
+                const s = n.trim();
+                if (!s) continue;
+                // 过滤纯数字占位符（如 "1", "  2 ", "_.3._"）
+                if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) continue;
+                set.add(n);
+            }
+        }
     } catch (_) {}
     return set;
 }

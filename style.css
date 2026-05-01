@@ -96,6 +96,15 @@
     50%      { opacity: 0.45; transform: scale(0.85); }
 }
 
+/* P-2: 用户系统设置"减少动画"时，禁用所有 PAS 动画 */
+@media (prefers-reduced-motion: reduce) {
+    .pas-pulse,
+    [class*="pas-"] {
+        animation: none !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
 /* =========================================================
  * 历史按钮（预设栏内）
  * ========================================================= */
@@ -1790,6 +1799,21 @@
     }
     .pas-footer-actions .menu_button span {
         font-size: 0.92em;
+    }
+    /* 设置页底部按钮（恢复默认值 / 清空所有历史）——横排紧凑 */
+    .pas-settings-actions {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .pas-settings-actions .menu_button {
+        padding: 4px 12px;
+        font-size: 0.82em;
+        min-width: auto;
+        white-space: nowrap;
+    }
+    .pas-settings-actions .menu_button i {
+        font-size: 0.9em;
     }
 }
 

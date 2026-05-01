@@ -750,48 +750,6 @@ function navigateItems(panel, direction) {
 }
 
 // =====================================================
-// 自动设置系列默认版本
-// =====================================================
-function autoSetSeriesDefaults(select, apiId, overrides, excluded, seriesDefaults) {
-    const optionList = Array.from(select.options || []);
-
-    const seriesGroups = new Map();
-    for (const option of optionList) {
-        const presetName = (option.textContent || '').trim();
-        const realName = presetName || option.value;
-        if (!realName || _isInvalidPresetName(realName) || excluded[realName]) continue;
-
-        const info = getSeriesInfo(realName, overrides, excluded);
-        const seriesKey = info.series || realName;
-        if (!seriesGroups.has(seriesKey)) seriesGroups.set(seriesKey, []);
-        seriesGroups.get(seriesKey).push({
-            presetName: realName,
-            version: info.version,
-        });
-    }
-
-    let autoSetCount = 0;
-    for (const [seriesKey, items] of seriesGroups) {
-        if (items.length <= 1) continue;
-        if (seriesDefaults[seriesKey]) continue;
-        const latest = pickLatestVersion(items);
-        if (latest && latest.presetName) {
-            seriesDefaults[seriesKey] = latest.presetName;
-            autoSetCount++;
-        }
-    }
-
-    if (autoSetCount > 0) {
-        try {
-            updateSetting('seriesDefaultApply', { ...seriesDefaults });
-            logger.debug(`[Takeover] auto-set default version for ${autoSetCount} series`);
-        } catch (e) {
-            logger.debug('[Takeover] auto-set default write failed:', e);
-        }
-    }
-}
-
-// =====================================================
 // 拆除所有自定义 dropdown（还原原生 select）
 // =====================================================
 function teardownAllDropdowns() {
