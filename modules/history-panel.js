@@ -1158,7 +1158,25 @@ function updateBatchUI() {
                 cb.title = t('Delete Preset Current Warning');
             }
             // 阻止 checkbox 点击触发折叠
-            cb.addEventListener('click', (e) => e.stopPropagation());
+            // AT-1 fix: stopPropagation 会阻止事件到达 list 的委托处理器，
+            //   所以必须在此处直接更新批量选中状态和删除按钮
+            cb.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pName = cb.getAttribute('data-preset-name');
+                if (pName) {
+                    if (cb.checked) _state.batchSelected.add(pName);
+                    else _state.batchSelected.delete(pName);
+                }
+                // 更新删除按钮文本和可用性（不调用完整的 updateBatchUI 避免重建复选框）
+                const delBtn = _root?.querySelector('#pas-batch-delete-btn');
+                if (delBtn) {
+                    const cnt = _state.batchSelected.size;
+                    const sp = delBtn.querySelector('span');
+                    if (sp) sp.textContent = t('Batch Delete Btn', { count: cnt });
+                    if (cnt > 0) delBtn.removeAttribute('disabled');
+                    else delBtn.setAttribute('disabled', 'disabled');
+                }
+            });
             header.insertBefore(cb, header.firstChild);
         }
     });

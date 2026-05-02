@@ -458,6 +458,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults) 
             value,
             version: info.version,
             duplicate: info.duplicate,
+            manualOverride: info.manualOverride,
         });
     }
 
@@ -473,8 +474,10 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults) 
     for (const [normKey, items] of sortedSeries) {
         const displayName = seriesDisplayNames.get(normKey) || normKey;
 
-        // 单版本系列 → 作为独立项
-        if (items.length === 1) {
+        // 单版本系列 → 作为独立项（除非它是手动覆盖到自定义分组的，需要显示分组名）
+        // AT-1 fix: manualOverride 的预设即使只有 1 个也要作为组渲染，
+        //   否则自定义分组名在 takeover dropdown 中不可见
+        if (items.length === 1 && !items[0].manualOverride) {
             const it = items[0];
             const isActive = it.value === currentValue;
             html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
