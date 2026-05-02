@@ -108,16 +108,6 @@ function sanitizeStringMap(v) {
     return out;
 }
 
-function sanitizeBoolMap(v) {
-    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
-    const out = {};
-    for (const [k, val] of Object.entries(v)) {
-        if (typeof k !== 'string' || !k || k.length > 200) continue;
-        if (val) out[k] = true;
-    }
-    return out;
-}
-
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }

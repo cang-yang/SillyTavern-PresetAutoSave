@@ -21,8 +21,8 @@ import {
     addSnapshot, TRIGGER, TRIGGER_LABEL_KEYS, formatBytes,
     hashPreset,
 } from './history-store.js';
-import { sanitizePresetForExport } from './compatibility.js';
 import {
+    sanitizePresetForExport,
     confirmSafe, toast, t,
     savePresetSafe, selectPresetSafe,
     getPresetSnapshot,
@@ -53,10 +53,6 @@ import { parsePresetKey } from './panel-list-render.js';
 let _viewPopup = null;
 let _groupingManagerPopup = null;
 let _firstScanWizardPopup = null;
-
-// =====================================================
-// 工具函数
-// escapeAttr 已从 compatibility.js 导入
 
 // =====================================================
 // 清理弹窗（供 teardown / panel-close 调用）
