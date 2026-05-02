@@ -23,7 +23,7 @@ import {
     confirmSafe, toast, t,
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
-import { forceReseedSnapshots } from './preset-takeover.js';
+import { forceReseedSnapshots, refreshTakeover } from './preset-takeover.js';
 import { escapeHtml, escapeAttr } from './panel-summary.js';
 
 // =====================================================
@@ -383,6 +383,7 @@ export function bindSettingsEvents(container, panelCtx) {
             seedSnapshotsDone: false,
             groupingManualOverrides: {},
         });
+        refreshTakeover({ force: true });
         toast.success(t('Cleared All'));
         await panelCtx.refreshData();
     });

@@ -755,7 +755,7 @@ export async function onBatchDeletePresets(presetNames, apiId) {
     // 清理分组覆盖（批量）
     const overrides = { ...(getSettings().groupingManualOverrides || {}) };
     let changed = false;
-    for (const name of safeToDelete) {
+    for (const name of deletedNames) {
         if (overrides[name]) {
             delete overrides[name];
             changed = true;

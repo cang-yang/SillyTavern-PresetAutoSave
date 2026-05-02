@@ -615,6 +615,7 @@ function bindEvents() {
             // 需要为每个预设重新建立初始快照才能在面板中显示
             await seedSnapshotsIfNeeded({ force: true, silent: false });
             await refreshData();
+            refreshTakeover({ force: true });
         } catch (e) {
             logger.error('Rescan grouping failed:', e);
             toast.error(String(e?.message || e));
