@@ -691,6 +691,13 @@ export function parsePresetName(name) {
         working = working.replace(/\s*[\-\u2014]\s*(?:副本|拷贝|备份|copy)\s*$/i, '');
         working = working.replace(/\s*[（(]\s*(?:副本|拷贝|备份|旧|新|old|new|copy|bak|backup)\s*[）)]\s*$/i, '');
 
+        // ---- 1.8) ST 导入日期戳剥离 ----
+        // ST 导入已存在预设时会追加 _YYYY-MM-DD 后缀，可能叠加多个
+        // 例: "北棱预设2.6_2026-05-02" → "北棱预设2.6"
+        // 例: "name_2026-05-01_2026-05-02" → "name"
+        // 注意: 仅匹配末尾的 _YYYY-MM-DD 格式，不影响中文日期（如"3月25日"）
+        working = working.replace(/(?:_\d{4}-\d{2}-\d{2})+$/g, '');
+
         // ---- 2) 尾部版本号匹配（按优先级）----
         // 关键：根据模式的特性判断 working 应该切到哪：
         //   - 标准模式（v-num 等）：切到 m.index + (m[0] 中分隔符前缀的位置)，保留前缀字符
@@ -1145,8 +1152,12 @@ const _SAMPLES = Object.freeze([
     ['Izumi 0318',                           'Izumi',                 '0318'],
 
     // ---- X-0+X-1 增强用例 ----
-    // 核心问题：日期后缀 _YYYY-MM-DD
-    ['【DarkSide-小猫之神】v1.1_2026-05-01', '【DarkSide-小猫之神】', 'v1.1_2026-05-01'],
+    // 核心问题：日期后缀 _YYYY-MM-DD（AO-1: ST 导入日期戳剥离）
+    ['【DarkSide-小猫之神】v1.1_2026-05-01', '【DarkSide-小猫之神】', 'v1.1'],
+    // AO-1: ST 导入日期戳 — 单个 / 多个叠加
+    ['梦境思客V2-0429_2026-05-02',                              '梦境思客',              'V2-0429'],
+    ['北棱预设2.6_2026-05-02_2026-05-02',                        '北棱预设',              '2.6'],
+    ['【DarkSide-小猫之神】v1.1_2026-05-01_2026-05-02',          '【DarkSide-小猫之神】', 'v1.1'],
     // 语言后缀
     ['NekoAssistant-v1.0-cn',               'NekoAssistant',         'v1.0-cn'],
     ['NekoAssistant-v2.0-jp',               'NekoAssistant',         'v2.0-jp'],
