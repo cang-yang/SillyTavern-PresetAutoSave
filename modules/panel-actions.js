@@ -364,9 +364,14 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
         });
 
         // 2. 创建恢复快照并计算正确的 hash
+        //    AN-1 修复：直接使用快照中的预设数据，而不是从 getPresetSnapshot()
+        //    读取可能尚未更新的 live 数据（oai_settings）。
+        //    savePresetSafe(skipUpdate:false) 触发 ST 重新加载 UI 是异步的，
+        //    oai_settings 在 savePresetSafe 返回后可能仍是恢复前的旧值，
+        //    导致 hashPreset() 算出旧 hash → endAtomicRestore 设置错误的基线。
         let restoreHash = null;
         try {
-            const restoredPreset = getPresetSnapshot(currentPreset);
+            const restoredPreset = snapshot.preset;
             if (restoredPreset) {
                 await addSnapshot(currentPreset, currentApi, restoredPreset, TRIGGER.RESTORE);
                 restoreHash = hashPreset(restoredPreset);
