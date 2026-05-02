@@ -848,8 +848,14 @@ function saveGroupingSettings() {
     });
     toast.success(t('Grouping Saved'));
 
-    // AE-1: 通知 takeover 模块刷新原生预设下拉，让分组变化立即反映
-    try { refreshTakeover(); } catch (_) {}
+    // AG-1: 通知 takeover 模块强制刷新原生预设下拉，让分组变化立即反映
+    //   使用 force: true 跳过防抖/抑制/指纹缓存，因为分组变化不改变 option 列表
+    logger.debug('[saveGroupingSettings] calling refreshTakeover({ force: true })');
+    try {
+        refreshTakeover({ force: true });
+    } catch (e) {
+        logger.error('[saveGroupingSettings] refreshTakeover failed:', e);
+    }
 
     // AE-2: 为"从未分组移入新分组"且尚无快照的预设创建初始快照（后台静默）
     //   同时如果 history panel 已打开，通过 _gmPanelCtx.refreshData() 刷新
@@ -861,19 +867,35 @@ function saveGroupingSettings() {
         // 后台为新归组的预设补种快照（不阻塞 UI）
         Promise.resolve().then(async () => {
             for (const name of newlyIncluded) {
-                try { await seedSnapshotForPreset(name); } catch (_) {}
+                try { await seedSnapshotForPreset(name); } catch (e) {
+                    logger.warn('[saveGroupingSettings] seedSnapshotForPreset failed for', name, e);
+                }
             }
             // 补种完成后刷新 history panel（如果已打开）
+            logger.debug('[saveGroupingSettings] calling refreshData (after seed, newlyIncluded)');
             if (_gmPanelCtx) {
-                try { await _gmPanelCtx.refreshData(); } catch (_) {}
+                try { await _gmPanelCtx.refreshData(); } catch (e) {
+                    logger.error('[saveGroupingSettings] refreshData failed:', e);
+                }
             }
-        }).catch(() => {});
+            logger.debug('[saveGroupingSettings] done');
+        }).catch((e) => {
+            logger.error('[saveGroupingSettings] seed+refresh pipeline failed:', e);
+        });
     } else {
         // 即使没有新归组的预设，也刷新 history panel（如果已打开）以反映分组变化
+        logger.debug('[saveGroupingSettings] calling refreshData (no newlyIncluded)');
         if (_gmPanelCtx) {
             Promise.resolve().then(async () => {
-                try { await _gmPanelCtx.refreshData(); } catch (_) {}
-            }).catch(() => {});
+                try { await _gmPanelCtx.refreshData(); } catch (e) {
+                    logger.error('[saveGroupingSettings] refreshData failed:', e);
+                }
+                logger.debug('[saveGroupingSettings] done');
+            }).catch((e) => {
+                logger.error('[saveGroupingSettings] refreshData pipeline failed:', e);
+            });
+        } else {
+            logger.debug('[saveGroupingSettings] done (no panelCtx)');
         }
     }
 }

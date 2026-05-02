@@ -70,6 +70,7 @@ const _managedSelects = new Set();
 let _refreshTimer = null;
 let _lastRefreshTs = 0;
 let _refreshSuppressUntil = 0;
+let _forceNextRefresh = false;
 const REFRESH_DEBOUNCE_MS = 220;
 const REFRESH_MIN_INTERVAL_MS = 350;
 
@@ -242,17 +243,21 @@ function refresh() {
 
     if (!selects || selects.length === 0) return;
 
+    const forceRebuild = _forceNextRefresh;
+    _forceNextRefresh = false;
+
     let appliedCount = 0;
     let skippedCount = 0;
     for (const select of selects) {
         if (!select || !select.isConnected) continue;
 
         // 幂等跳过：option 指纹未变 + 已有 wrapper → 仅更新 trigger 显示 + active 状态
+        // AG-1: forceRebuild 时跳过指纹检查，强制重建
         const selFp = computeSelectFingerprint(select);
         const lastSelFp = _selectFingerprints.get(select);
         const wrapper = select.closest('.pas-dd-wrapper');
 
-        if (lastSelFp === selFp && wrapper) {
+        if (!forceRebuild && lastSelFp === selFp && wrapper) {
             // 只更新 trigger 文本和 active 标记
             updateTriggerDisplay(select, wrapper);
             updateActiveState(select, wrapper);
@@ -884,10 +889,28 @@ function _compareVersionInline(va, vb) {
 // =====================================================
 
 /**
- * 强制重做接管（外部触发）
+ * 重做接管（外部触发）
+ * @param {object} [options]
+ * @param {boolean} [options.force] - 若为 true，跳过防抖/抑制/指纹缓存，立即强制重建所有 dropdown
  */
-export function refreshTakeover() {
-    scheduleRefresh();
+export function refreshTakeover({ force = false } = {}) {
+    if (!force) {
+        scheduleRefresh();
+        return;
+    }
+    // AG-1: 强制模式 — 清除所有守卫，立即重建
+    if (_refreshTimer) {
+        clearTimeout(_refreshTimer);
+        _refreshTimer = null;
+    }
+    _refreshSuppressUntil = 0;
+    _forceNextRefresh = true;
+    logger.debug('[Takeover] refreshTakeover({ force: true }) — immediate rebuild');
+    try {
+        refresh();
+    } catch (e) {
+        logger.error('[Takeover] force refresh failed:', e);
+    }
 }
 
 /**
