@@ -484,9 +484,10 @@ async function onClearPreset(key, panelCtx) {
     await clearPresetHistory(apiId, presetName);
     // 2) 检查 ST 里是否还存在同名预设 → 如有，再问是否一并删除
     //    （这是用户报"0KB 数据删不掉，因为面板里一直显示"的根因）
+    // AK-1: getAllPresetNames() 现在直接返回 string[]，不需要 .map() 提取 name
     let stillExists = false;
     try {
-        const all = (getAllPresetNames() || []).map(o => (o && (o.name || o.preset_name)) || o);
+        const all = getAllPresetNames() || [];
         stillExists = all.some(n => String(n) === String(presetName));
     } catch (_) {}
     if (stillExists) {
@@ -1153,40 +1154,30 @@ export async function showGroupingManager(panelCtx) {
     if (_groupingManagerPopup) return;
     _gmPanelCtx = panelCtx;
 
-    // 收集所有候选名（AJ-1: 用大小写不敏感去重，避免快照名与原生名大小写差异导致重复）
+    // AK-1 重构：只使用 getAllPresetNames() 作为唯一数据源
+    // 不再从快照补充——旧逻辑因为 getAllPresetNames() 返回数字索引导致
+    // 快照中的真实预设名全被当作"额外"名字加入，造成重复和混乱。
+    // 分组管理器只管理当前存在的预设，已删除预设不在此显示。
     _gmAllNames = [];
-    const _gmDedup = new Set();  // lowercase key 用于去重
-
-    // 1) ST 原生预设列表（权威来源，名字优先采用）
     try {
         const names = getAllPresetNames();
         if (Array.isArray(names)) {
+            const dedup = new Set();
             for (const n of names) {
-                if (!n) continue;
+                if (!n || typeof n !== 'string') continue;
                 const lk = n.toLowerCase();
-                if (!_gmDedup.has(lk)) {
-                    _gmDedup.add(lk);
+                if (!dedup.has(lk)) {
+                    dedup.add(lk);
                     _gmAllNames.push(n);
                 }
             }
         }
-    } catch (_) {}
-
-    // 2) 快照中的预设名（补充来源，可能包含已删除的预设）
-    if (panelCtx) {
-        const state = panelCtx.state();
-        for (const s of state.snapshots) {
-            const n = s.presetName;
-            if (!n) continue;
-            const lk = n.toLowerCase();
-            if (!_gmDedup.has(lk)) {
-                _gmDedup.add(lk);
-                _gmAllNames.push(n);
-            }
-        }
+    } catch (e) {
+        logger.warn('[showGroupingManager] getAllPresetNames failed:', e);
     }
 
     _gmAllNames.sort((a, b) => a.localeCompare(b));
+    logger.debug(`[showGroupingManager] ${_gmAllNames.length} presets from getAllPresetNames()`);
 
     if (_gmAllNames.length === 0) {
         toast.info(t('Grouping Empty Series'));

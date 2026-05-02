@@ -479,12 +479,13 @@ export function onDisable() {
                             const apiId = s.getAttribute('data-preset-manager-for');
                             // P1 fix: select.options 在某些 ST 版本/API 类型下可能为 undefined
                             const optsCol = (s && s.options) ? Array.from(s.options) : [];
+                            // AK-1 fix: 优先 textContent（真实预设名），而非 value（可能是数组索引）
                             const opts = optsCol
                                 .map(o => {
                                     if (!o) return '';
-                                    const v = (typeof o.value === 'string') ? o.value : '';
-                                    const t = (typeof o.textContent === 'string') ? o.textContent.trim() : '';
-                                    return v || t;
+                                    const text = (typeof o.textContent === 'string') ? o.textContent.trim() : '';
+                                    const val = (typeof o.value === 'string') ? o.value : '';
+                                    return text || val;
                                 })
                                 .filter(Boolean);
                             out.push({ apiId, count: opts.length, presetNames: opts });

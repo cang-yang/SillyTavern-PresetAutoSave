@@ -672,13 +672,65 @@ export function selectPresetSafe(presetName) {
 }
 
 /**
- * 获取所有预设名
+ * 获取所有预设名（真实预设名，不是数字索引）
+ *
+ * AK-1 重构：旧实现调用 pm.getAllPresets()，它返回 select.options 的 value 属性，
+ * 在 openai API 下 value 是数组索引（"0","1","2",...），不是预设名。
+ *
+ * 新实现优先从 pm.getPresetList(apiId).preset_names 获取真实预设名数组。
+ * 后备路径从 select.options 的 textContent 获取（textContent 是渲染给用户看的文本）。
+ *
  * @param {string} [apiId] 指定 API 的 PresetManager；不传 = 当前 mainApi
+ * @returns {string[]} 真实预设名数组
  */
 export function getAllPresetNames(apiId) {
-    const pm = getPresetManager(apiId);
-    if (!pm || typeof pm.getAllPresets !== 'function') return [];
-    return safeCall(() => pm.getAllPresets(), [], 'getAllPresets');
+    const id = apiId || getCurrentApiId();
+    const pm = getPresetManager(id);
+    if (!pm) {
+        logger.debug('[getAllPresetNames] no PM for', id);
+        return [];
+    }
+
+    // 路径 1（推荐）：从 getPresetList().preset_names 获取
+    // preset_names 是 ST 内部维护的真实预设名数组
+    if (typeof pm.getPresetList === 'function') {
+        const list = safeCall(() => pm.getPresetList(id), null, 'getPresetList-names');
+        if (list?.preset_names && Array.isArray(list.preset_names)) {
+            const names = list.preset_names.filter(n => n && typeof n === 'string');
+            if (names.length > 0) {
+                logger.debug(`[getAllPresetNames] via getPresetList(${id}).preset_names: ${names.length} presets`);
+                return names;
+            }
+        }
+    }
+
+    // 路径 2（后备）：从 select.options 的 textContent 获取
+    // textContent 是 ST 渲染给用户看的预设名，而不是 value（数组索引）
+    try {
+        const select = pm.select?.[0]; // jQuery → 原生 HTMLSelectElement
+        if (select?.options) {
+            const names = Array.from(select.options)
+                .map(o => o.textContent?.trim())
+                .filter(n => n && typeof n === 'string');
+            if (names.length > 0) {
+                logger.debug(`[getAllPresetNames] via select.textContent: ${names.length} presets`);
+                return names;
+            }
+        }
+    } catch (e) {
+        logger.debug('[getAllPresetNames] select textContent fallback failed:', e);
+    }
+
+    // 路径 3（最终后备）：旧 API getAllPresets()
+    // 某些非 openai API 的 PM 可能没有 getPresetList 但有 getAllPresets
+    if (typeof pm.getAllPresets === 'function') {
+        const result = safeCall(() => pm.getAllPresets(), [], 'getAllPresets-legacy');
+        logger.debug(`[getAllPresetNames] via legacy getAllPresets: ${result.length} items`);
+        return result;
+    }
+
+    logger.warn(`[getAllPresetNames] all paths failed for apiId=${id}`);
+    return [];
 }
 
 // =====================================================
