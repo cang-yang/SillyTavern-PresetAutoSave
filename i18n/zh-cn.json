@@ -330,7 +330,7 @@
     "Grouping Manage Saved": "已保存归属设置",
     "Grouping Move To Series": "移到该系列",
     "Grouping Empty Series": "此分组中暂无预设",
-    "Grouping Manage Desc": "拖动预设到不同分组即可重新归类，右键或点击 ⋯ 菜单查看更多操作。",
+    "Grouping Manage Desc": "拖动预设到不同分组即可重新归类。",
     "Grouping Series Card Title": "{{series}}",
     "Grouping Auto Zone Title": "自动分组区",
     "Grouping Auto Zone Hint": "拖到此处恢复自动识别",

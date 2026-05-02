@@ -545,39 +545,10 @@ async function onClearPreset(key, panelCtx) {
         t('Clear Preset Hint', { name: escapeHtml(presetName) })
     );
     if (!ok) return;
-    // 1) 清空快照历史
+    // AX-1: 仅清空快照历史。删除预设文件的功能已由独立的"删除预设"按钮（onDeletePreset）负责，
+    //       不再在此二次询问，避免两个按钮功能串扰。
     await clearPresetHistory(apiId, presetName);
-    // 2) 检查 ST 里是否还存在同名预设 → 如有，再问是否一并删除
-    //    （这是用户报"0KB 数据删不掉，因为面板里一直显示"的根因）
-    // AK-1: getAllPresetNames() 现在直接返回 string[]，不需要 .map() 提取 name
-    let stillExists = false;
-    try {
-        const all = getAllPresetNames() || [];
-        stillExists = all.some(n => String(n) === String(presetName));
-    } catch (_) {}
-    if (stillExists) {
-        const removeFromST = await confirmSafe(
-            t('Clear Preset Also Remove From ST Confirm'),
-            t('Clear Preset Also Remove From ST Hint', { name: escapeHtml(presetName) })
-        );
-        if (removeFromST) {
-            try {
-                const delOk = await deletePresetSafe(presetName, apiId);
-                if (delOk) {
-                    toast.success(t('Cleared'));
-                } else {
-                    toast.warning(t('Clear Preset ST Delete Failed'));
-                }
-            } catch (e) {
-                toast.warning(t('Clear Preset ST Delete Failed'));
-                logger.warn('delete preset from ST failed:', e);
-            }
-        } else {
-            toast.success(t('Cleared'));
-        }
-    } else {
-        toast.success(t('Cleared'));
-    }
+    toast.success(t('Cleared'));
     await panelCtx.refreshData();
 }
 
@@ -1042,7 +1013,6 @@ function renderGroupingHTML(groups) {
                 <i class="fa-solid fa-box-open pas-gm-series-icon"></i>
                 <span class="pas-gm-series-name">${escapeHtml(g.series)}</span>${customBadgeHtml}
                 <span class="pas-gm-series-count">${escapeHtml(t('Grouping Count', { count: g.items.length }))}</span>
-                <span class="pas-gm-series-menu-btn" title="⋯">⋯</span>
                 <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
             </div>
             <div class="pas-gm-series-body">
@@ -1064,7 +1034,6 @@ function renderGroupingHTML(groups) {
                 <i class="fa-solid fa-star pas-gm-custom-icon" title="${escapeAttr(t('Grouping Custom Badge'))}"></i>
                 <span class="pas-gm-badge pas-gm-badge-custom">${escapeHtml(t('Grouping Custom Badge'))}</span>
                 <span class="pas-gm-series-count">${escapeHtml(t('Grouping Count', { count: 0 }))}</span>
-                <span class="pas-gm-series-menu-btn" title="⋯">⋯</span>
                 <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
             </div>
             <div class="pas-gm-series-body">
@@ -1103,8 +1072,8 @@ function renderGroupingHTML(groups) {
     <div class="pas-gm-body">
         ${seriesCardsHtml}
         ${pendingCardsHtml}
-        ${autoZoneSection}
     </div>
+    ${autoZoneSection}
 </div>`;
 }
 
@@ -1194,12 +1163,18 @@ function refreshGroupingUI(container) {
     const { groups } = buildGroupingData();
     const bodyEl = container.querySelector('.pas-gm-body');
     if (!bodyEl) return;
-    // 重新生成 body 内容
+    // 重新生成 body + auto-zone 内容
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = renderGroupingHTML(groups);
     const newBody = tempDiv.querySelector('.pas-gm-body');
     if (newBody) {
         bodyEl.innerHTML = newBody.innerHTML;
+    }
+    // AW-1: auto-zone 现在在 .pas-gm-body 外部，也需要同步更新
+    const oldAutoZone = container.querySelector('.pas-gm-auto-zone');
+    const newAutoZone = tempDiv.querySelector('.pas-gm-auto-zone');
+    if (oldAutoZone && newAutoZone) {
+        oldAutoZone.replaceWith(newAutoZone);
     }
     // 重新绑定事件
     bindGroupingEvents(container);
@@ -1409,7 +1384,8 @@ async function onDeleteCustomGroup(seriesKey, container) {
 }
 
 /**
- * 绑定分组管理弹窗的所有事件（AI-0 重构 + AQ-1 增强：系列级菜单、复制预设名、新建分组）
+ * 绑定分组管理弹窗的所有事件（AI-0 重构 + AQ-1 增强：复制预设名、新建分组）
+ * AW-1: 移除了系列级 ⋯ 按钮（仅保留预设级 ⋯）
  */
 function bindGroupingEvents(container) {
     if (!container) return;
@@ -1427,7 +1403,7 @@ function bindGroupingEvents(container) {
         const newHeader = header.cloneNode(true);
         header.parentNode.replaceChild(newHeader, header);
         newHeader.addEventListener('click', (e) => {
-            if (e.target.closest('.pas-gm-menu-btn') || e.target.closest('.pas-gm-series-menu-btn')) return;
+            if (e.target.closest('.pas-gm-menu-btn')) return;
             const series = newHeader.closest('.pas-gm-series');
             if (series) series.classList.toggle('collapsed');
         });
@@ -1578,75 +1554,7 @@ function bindGroupingEvents(container) {
         });
     });
 
-    // --- AQ-1: 系列卡片级 ⋯ 菜单（重命名分组 / 删除分组） ---
-    container.querySelectorAll('.pas-gm-series-menu-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            container.querySelectorAll('.pas-gm-context-menu').forEach(m => m.remove());
-
-            const seriesEl = btn.closest('.pas-gm-series');
-            const seriesKey = seriesEl?.getAttribute('data-series-key');
-            if (!seriesKey) return;
-
-            const isCustom = seriesEl.getAttribute('data-custom-group') === '1';
-
-            const menu = document.createElement('div');
-            menu.className = 'pas-gm-context-menu';
-            menu.innerHTML = `
-                <div class="pas-gm-ctx-item" data-action="rename-group">
-                    <i class="fa-solid fa-pen"></i> ${escapeHtml(t('Grouping Menu Rename Series'))}
-                </div>
-                ${isCustom ? `<div class="pas-gm-ctx-item pas-gm-ctx-item-danger" data-action="delete-group">
-                    <i class="fa-solid fa-trash"></i> ${escapeHtml(t('Grouping Menu Delete Group'))}
-                </div>` : ''}
-            `;
-
-            const rect = btn.getBoundingClientRect();
-            menu.style.position = 'fixed';
-            menu.style.visibility = 'hidden';
-            document.body.appendChild(menu);
-            const menuWidth = menu.offsetWidth || 150;
-            const menuHeight = menu.offsetHeight || 80;
-            let menuLeft = rect.left - menuWidth;
-            menuLeft = Math.max(8, Math.min(menuLeft, window.innerWidth - menuWidth - 8));
-            let menuTop = rect.bottom + 4;
-            menuTop = Math.min(menuTop, window.innerHeight - menuHeight - 8);
-            menu.style.left = `${menuLeft}px`;
-            menu.style.top = `${menuTop}px`;
-            menu.style.visibility = '';
-
-            menu.querySelectorAll('.pas-gm-ctx-item').forEach(item => {
-                item.addEventListener('click', async () => {
-                    const action = item.getAttribute('data-action');
-                    menu.remove();
-                    if (action === 'rename-group') {
-                        await onRenameSeriesGroup(seriesKey, container);
-                    } else if (action === 'delete-group') {
-                        await onDeleteCustomGroup(seriesKey, container);
-                    }
-                });
-            });
-
-            const closeMenu = (ev) => {
-                if (!menu.contains(ev.target)) {
-                    menu.remove();
-                    document.removeEventListener('click', closeMenu, true);
-                }
-            };
-            setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
-        });
-    });
-
-    // --- 系列卡片右键菜单 ---
-    container.querySelectorAll('.pas-gm-series-header').forEach(header => {
-        header.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            const menuBtn = header.querySelector('.pas-gm-series-menu-btn');
-            if (menuBtn) menuBtn.click();
-        });
-    });
-
-    // --- 右键菜单（同 ⋯ 菜单） ---
+    // --- 右键菜单（同预设级 ⋯ 菜单） ---
     container.querySelectorAll('.pas-gm-preset').forEach(presetEl => {
         presetEl.addEventListener('contextmenu', (e) => {
             e.preventDefault();

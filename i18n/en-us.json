@@ -330,7 +330,7 @@
     "Grouping Manage Saved": "Assignments saved",
     "Grouping Move To Series": "Move to series",
     "Grouping Empty Series": "No presets in this group",
-    "Grouping Manage Desc": "Drag presets between groups to reorganize. Right-click or use ⋯ menu for more actions.",
+    "Grouping Manage Desc": "Drag presets between groups to reorganize.",
     "Grouping Series Card Title": "{{series}}",
     "Grouping Auto Zone Title": "Auto-Detect Zone",
     "Grouping Auto Zone Hint": "Drop here to restore auto-detection",
