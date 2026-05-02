@@ -35,6 +35,7 @@ import {
 import { saveNow, resetLastSavedHash, beginAtomicRestore, endAtomicRestore } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
 import { refreshTakeover } from './preset-takeover.js';
+import { removeArchivedPreset } from './archive-store.js';
 import {
     parsePresetName,
     groupNamesBySeries,
@@ -89,6 +90,7 @@ export function cleanupActionPopups({ includeWizard = false } = {}) {
 export async function handleListClick(e, panelCtx) {
     const clearBtn = e.target.closest('.pas-btn-clear-preset');
     const applyVersionBtn = e.target.closest('.pas-btn-apply-version');
+    const deletePresetBtn = e.target.closest('.pas-version-delete-btn');
     const seriesHeader = e.target.closest('.pas-series-header');
     const versionHeader = e.target.closest('.pas-version-header');
     const presetHeader = e.target.closest('.pas-preset-header');
@@ -109,6 +111,19 @@ export async function handleListClick(e, panelCtx) {
         const presetName = applyVersionBtn.getAttribute('data-preset-name');
         if (presetName) {
             await onApplyVersionDirect(presetName);
+        }
+        return;
+    }
+
+    // 1.2) AR-0: "删除预设"按钮
+    if (deletePresetBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const presetName = deletePresetBtn.getAttribute('data-preset-name');
+        const apiId = deletePresetBtn.getAttribute('data-api-id');
+        if (presetName && apiId) {
+            const ok = await onDeletePreset(presetName, apiId);
+            if (ok) await panelCtx.refreshData();
         }
         return;
     }
@@ -564,6 +579,193 @@ async function onClearPreset(key, panelCtx) {
         toast.success(t('Cleared'));
     }
     await panelCtx.refreshData();
+}
+
+// =====================================================
+// 预设删除操作（AR-0）
+// =====================================================
+
+/**
+ * 单个删除预设（从 ST + 快照 + 归档 + 分组覆盖 全量清理）
+ *
+ * 安全层级：
+ *   L1: 当前预设保护（UI disabled + 逻辑检查）
+ *   L2: confirmSafe 确认对话框
+ *   L5: 执行删除 + 全量清理
+ *   L6: 操作日志
+ *
+ * @param {string} presetName
+ * @param {string} apiId
+ * @returns {Promise<boolean>}
+ */
+export async function onDeletePreset(presetName, apiId) {
+    // L1: 当前预设保护
+    const currentPreset = getSelectedPresetName();
+    if (presetName === currentPreset) {
+        toast.warning(t('Delete Preset Current Warning'));
+        return false;
+    }
+
+    // L2: 确认对话框（presetName 必须 escapeHtml，confirmSafe → Popup 会渲染 HTML）
+    const confirmed = await confirmSafe(
+        t('Delete Preset Btn'),
+        t('Delete Preset Confirm', { name: escapeHtml(presetName) })
+    );
+    if (!confirmed) return false;
+
+    // L1-bis: 竞态防护 — 用户在确认弹窗期间可能已切换预设
+    const currentAfterConfirm = getSelectedPresetName();
+    if (presetName === currentAfterConfirm) {
+        toast.warning(t('Delete Preset Current Warning'));
+        return false;
+    }
+
+    try {
+        // L5: 执行删除（调用 ST PresetManager.deletePreset）
+        await deletePresetSafe(presetName, apiId);
+
+        // L5-b: 补全 ST 原生 onDeletePresetClick 的后续动作
+        //   ST 的 PresetManager.deletePreset() 只处理 DOM/数组/API 调用，
+        //   不 emit PRESET_DELETED、不调用 saveSettingsDebounced()。
+        //   这两步在 ST openai.js onDeletePresetClick() 中单独完成。
+        try {
+            const ctx = SillyTavern.getContext();
+            if (ctx?.eventSource?.emit && ctx?.event_types?.PRESET_DELETED) {
+                await ctx.eventSource.emit(ctx.event_types.PRESET_DELETED, { apiId, name: presetName });
+            }
+            if (typeof ctx?.saveSettingsDebounced === 'function') {
+                ctx.saveSettingsDebounced();
+            }
+        } catch (postErr) {
+            logger.warn('[DeletePreset] post-delete ST sync failed (non-fatal):', postErr);
+        }
+
+        // L5-c: 全量清理
+        // - 删除对应的快照数据
+        await clearPresetHistory(apiId, presetName);
+        // - 删除对应的归档数据（如果有）
+        await removeArchivedPreset(apiId, presetName);
+        // - 清理分组覆盖
+        const overrides = { ...(getSettings().groupingManualOverrides || {}) };
+        if (overrides[presetName]) {
+            delete overrides[presetName];
+            batchUpdate({ groupingManualOverrides: overrides });
+        }
+
+        // L6: 操作日志
+        logger.warn(`[DeletePreset] deleted "${presetName}" (apiId=${apiId})`);
+
+        // 刷新 UI
+        refreshTakeover({ force: true });
+        toast.success(t('Delete Preset Success', { name: escapeHtml(presetName) }));
+
+        return true;
+    } catch (e) {
+        logger.error(`[DeletePreset] failed:`, e);
+        toast.error(t('Delete Preset Failed', { name: escapeHtml(presetName) }));
+        return false;
+    }
+}
+
+/**
+ * 批量删除预设
+ *
+ * 安全层级：
+ *   L1: 自动过滤当前预设
+ *   L3: INPUT 弹窗强确认（要求输入数量）
+ *   L5: 逐个删除 + 全量清理
+ *   L6: 操作日志
+ *
+ * @param {string[]} presetNames
+ * @param {string} apiId
+ * @returns {Promise<number>} 成功删除的数量
+ */
+export async function onBatchDeletePresets(presetNames, apiId) {
+    if (!presetNames || !presetNames.length) return 0;
+
+    // L1: 过滤掉当前预设
+    const currentPreset = getSelectedPresetName();
+    const toDelete = presetNames.filter(n => n !== currentPreset);
+    if (toDelete.length === 0) {
+        toast.warning(t('Delete Preset Current Warning'));
+        return 0;
+    }
+
+    // L3: 强确认 — 弹出 INPUT 弹窗要求输入数量
+    const count = toDelete.length;
+    const popup = createPopupSafe(
+        t('Batch Delete Confirm', { count }),
+        'INPUT',
+        { okButton: t('Confirm'), cancelButton: t('Cancel'), rows: 1 },
+        ''
+    );
+    let input = null;
+    if (popup) {
+        try { input = await popup.show(); } catch (_) {}
+    } else {
+        input = window.prompt(t('Batch Delete Confirm', { count }));
+    }
+    if (input === null || input === undefined || input === false) return 0; // 取消
+    if (String(input).trim() !== String(count)) {
+        toast.warning(t('Batch Delete Wrong Number'));
+        return 0;
+    }
+
+    // L1-bis: 竞态防护 — 弹窗期间可能已切换预设，重新过滤
+    const currentAfterConfirm = getSelectedPresetName();
+    const safeToDelete = toDelete.filter(n => n !== currentAfterConfirm);
+    if (safeToDelete.length === 0) {
+        toast.warning(t('Delete Preset Current Warning'));
+        return 0;
+    }
+
+    // 逐个删除
+    let successCount = 0;
+    const deletedNames = [];
+    for (const name of safeToDelete) {
+        try {
+            await deletePresetSafe(name, apiId);
+            await clearPresetHistory(apiId, name);
+            await removeArchivedPreset(apiId, name);
+            logger.warn(`[BatchDelete] deleted "${name}"`);
+            deletedNames.push(name);
+            successCount++;
+        } catch (e) {
+            logger.error(`[BatchDelete] failed for "${name}":`, e);
+        }
+    }
+
+    // 补全 ST 原生后续动作：emit PRESET_DELETED + saveSettingsDebounced
+    if (deletedNames.length > 0) {
+        try {
+            const ctx = SillyTavern.getContext();
+            if (ctx?.eventSource?.emit && ctx?.event_types?.PRESET_DELETED) {
+                for (const name of deletedNames) {
+                    await ctx.eventSource.emit(ctx.event_types.PRESET_DELETED, { apiId, name });
+                }
+            }
+            if (typeof ctx?.saveSettingsDebounced === 'function') {
+                ctx.saveSettingsDebounced();
+            }
+        } catch (postErr) {
+            logger.warn('[BatchDelete] post-delete ST sync failed (non-fatal):', postErr);
+        }
+    }
+
+    // 清理分组覆盖（批量）
+    const overrides = { ...(getSettings().groupingManualOverrides || {}) };
+    let changed = false;
+    for (const name of safeToDelete) {
+        if (overrides[name]) {
+            delete overrides[name];
+            changed = true;
+        }
+    }
+    if (changed) batchUpdate({ groupingManualOverrides: overrides });
+
+    refreshTakeover({ force: true });
+    toast.success(t('Batch Delete Success', { count: successCount }));
+    return successCount;
 }
 
 // =====================================================
@@ -1099,7 +1301,7 @@ async function onCreateCustomGroup(container) {
         name = window.prompt(t('Grouping New Group Prompt'));
     }
     if (name === null || name === undefined || name === false) return;
-    const trimmed = String(name).trim();
+    const trimmed = String(name).trim().slice(0, 120); // 限制长度防止滥用
     if (!trimmed) return;
 
     // 检查是否已存在同名分组
@@ -1108,13 +1310,13 @@ async function onCreateCustomGroup(container) {
     const exists = groups.some(g => normalizeSeriesKey(g.series) === targetKey)
         || [..._pendingCustomGroups].some(n => normalizeSeriesKey(n) === targetKey);
     if (exists) {
-        toast.warning(t('Grouping New Group Prompt') + ': ' + trimmed);
+        toast.warning(t('Grouping New Group Prompt') + ': ' + escapeHtml(trimmed));
         return;
     }
 
     // 添加到待建空分组集合，刷新 UI 让其显示为空卡片
     _pendingCustomGroups.add(trimmed);
-    toast.success(t('Grouping New Group Created', { name: trimmed }));
+    toast.success(t('Grouping New Group Created', { name: escapeHtml(trimmed) }));
     refreshGroupingUI(container);
 }
 
@@ -1128,7 +1330,7 @@ async function onRenameSeriesGroup(oldSeriesKey, container) {
     const displayName = group ? group.series : oldSeriesKey;
 
     const inputPopup = createPopupSafe(
-        t('Grouping Rename Prompt', { name: displayName }),
+        t('Grouping Rename Prompt', { name: escapeHtml(displayName) }),
         'INPUT',
         { okButton: t('Confirm'), cancelButton: t('Cancel'), rows: 1 },
         displayName
@@ -1140,8 +1342,17 @@ async function onRenameSeriesGroup(oldSeriesKey, container) {
         newName = window.prompt(t('Grouping Rename Prompt', { name: displayName }), displayName);
     }
     if (newName === null || newName === undefined || newName === false) return;
-    const trimmed = String(newName).trim();
+    const trimmed = String(newName).trim().slice(0, 120); // 限制长度防止滥用
     if (!trimmed || trimmed === displayName) return;
+
+    // 检查是否与其他分组重名
+    const targetKey = normalizeSeriesKey(trimmed);
+    const duplicate = groups.some(g => normalizeSeriesKey(g.series) === targetKey && normalizeSeriesKey(g.series) !== oldSeriesKey)
+        || [..._pendingCustomGroups].some(n => normalizeSeriesKey(n) === targetKey && normalizeSeriesKey(n) !== oldSeriesKey);
+    if (duplicate) {
+        toast.warning(t('Grouping New Group Prompt') + ': ' + escapeHtml(trimmed));
+        return;
+    }
 
     // 将所有指向 oldSeriesKey 的 overrides 更新为新名
     for (const [presetName, seriesVal] of Object.entries(_gmOverrides)) {
@@ -1160,7 +1371,7 @@ async function onRenameSeriesGroup(oldSeriesKey, container) {
     }
 
     saveGroupingSettings(_gmOverrides);
-    toast.success(t('Grouping Renamed', { name: trimmed }));
+    toast.success(t('Grouping Renamed', { name: escapeHtml(trimmed) }));
     refreshGroupingUI(container);
 }
 
@@ -1174,7 +1385,7 @@ async function onDeleteCustomGroup(seriesKey, container) {
 
     const ok = await confirmSafe(
         t('Grouping Menu Delete Group'),
-        t('Grouping Delete Group Confirm', { name: displayName })
+        t('Grouping Delete Group Confirm', { name: escapeHtml(displayName) })
     );
     if (!ok) return;
 

@@ -422,5 +422,18 @@
     "Grouping Renamed": "分组已重命名为「{{name}}」",
     "Grouping Custom Badge": "自定义",
     "Grouping Delete Group Confirm": "删除自定义分组「{{name}}」？其中的预设将恢复自动识别。",
-    "Grouping Menu Delete Group": "删除此分组"
+    "Grouping Menu Delete Group": "删除此分组",
+
+    "Delete Preset Btn": "删除预设",
+    "Delete Preset Confirm": "永久删除预设「{{name}}」？此操作不可撤销。",
+    "Delete Preset Current Warning": "无法删除当前正在使用的预设，请先切换到其他预设。",
+    "Delete Preset Success": "预设「{{name}}」已删除",
+    "Delete Preset Failed": "删除预设「{{name}}」失败",
+    "Batch Manage Btn": "批量",
+    "Batch Delete Btn": "删除选中 ({{count}})",
+    "Batch Delete Confirm": "永久删除 {{count}} 个预设？此操作不可撤销。请输入数字 {{count}} 确认：",
+    "Batch Delete Success": "已删除 {{count}} 个预设",
+    "Batch Delete Wrong Number": "输入数字不正确，操作已取消",
+    "Batch Select All": "全选",
+    "Batch Deselect All": "取消全选"
 }

@@ -68,6 +68,7 @@ import {
     showGroupingManager as _showGroupingManager,
     showGroupingFirstScanWizard as _showGroupingFirstScanWizard,
     cleanupActionPopups,
+    onBatchDeletePresets as _onBatchDeletePresets,
 } from './panel-actions.js';
 
 // =====================================================
@@ -116,6 +117,8 @@ function newState() {
         expandedPresets: new Set(),
         diffSel: { a: null, b: null },
         log: { level: 'all', search: '', autoScroll: true },
+        batchMode: false,           // AR-0: 批量模式
+        batchSelected: new Set(),   // AR-0: 批量选中的预设名
     };
 }
 
@@ -433,6 +436,10 @@ function buildPanelHTML() {
                             <span>${escapeHtml(t('Grouping View Flat'))}</span>
                         </button>
                     </div>
+                    <button class="pas-mini-btn pas-btn-batch-toggle" type="button" title="${escapeAttr(t('Batch Manage Btn'))}">
+                        <i class="fa-solid fa-check-double"></i>
+                        <span>${escapeHtml(t('Batch Manage Btn'))}</span>
+                    </button>
                     <button class="pas-mini-btn pas-btn-manage-grouping" type="button" title="${escapeAttr(t('Grouping Manage Title'))}">
                         <i class="fa-solid fa-folder-tree"></i>
                         <span>${escapeHtml(t('Grouping Manage'))}</span>
@@ -452,6 +459,21 @@ function buildPanelHTML() {
                 </div>
             </div>
             <div class="pas-snapshot-list"></div>
+            <div class="pas-batch-toolbar" id="pas-batch-toolbar" hidden>
+                <button class="pas-mini-btn pas-btn-batch-select-all" type="button">
+                    <i class="fa-solid fa-check-double"></i>
+                    <span>${escapeHtml(t('Batch Select All'))}</span>
+                </button>
+                <button class="pas-mini-btn pas-btn-batch-deselect-all" type="button">
+                    <i class="fa-solid fa-xmark"></i>
+                    <span>${escapeHtml(t('Batch Deselect All'))}</span>
+                </button>
+                <span class="pas-batch-spacer"></span>
+                <button class="pas-batch-delete-btn" id="pas-batch-delete-btn" type="button" disabled>
+                    <i class="fa-solid fa-trash-can"></i>
+                    <span>${escapeHtml(t('Batch Delete Btn', { count: 0 }))}</span>
+                </button>
+            </div>
         </div>
 
         <div class="pas-tab-content" data-content="logs">
@@ -626,9 +648,65 @@ function bindEvents() {
         renderListTab();
     });
 
+    // AR-0: 批量模式切换
+    $('.pas-btn-batch-toggle')?.addEventListener('click', () => {
+        _state.batchMode = !_state.batchMode;
+        _state.batchSelected.clear();
+        updateBatchUI();
+        renderListTab();
+    });
+    // AR-0: 批量全选
+    $('.pas-btn-batch-select-all')?.addEventListener('click', () => {
+        if (!_root) return;
+        _root.querySelectorAll('.pas-batch-checkbox').forEach(cb => {
+            const name = cb.getAttribute('data-preset-name');
+            if (name && !cb.disabled) {
+                _state.batchSelected.add(name);
+                cb.checked = true;
+            }
+        });
+        updateBatchUI();
+    });
+    // AR-0: 批量取消全选
+    $('.pas-btn-batch-deselect-all')?.addEventListener('click', () => {
+        _state.batchSelected.clear();
+        if (_root) {
+            _root.querySelectorAll('.pas-batch-checkbox').forEach(cb => { cb.checked = false; });
+        }
+        updateBatchUI();
+    });
+    // AR-0: 批量删除
+    $('#pas-batch-delete-btn')?.addEventListener('click', async () => {
+        const apiId = getCurrentApiId();
+        const names = Array.from(_state.batchSelected);
+        if (!names.length) return;
+        const count = await _onBatchDeletePresets(names, apiId);
+        if (count > 0) {
+            _state.batchMode = false;
+            _state.batchSelected.clear();
+            updateBatchUI();
+            await refreshData();
+        }
+    });
+
     // 列表事件委托
     const list = $('.pas-snapshot-list');
-    if (list) list.addEventListener('click', e => _handleListClick(e, _panelCtx()));
+    if (list) {
+        list.addEventListener('click', e => {
+            // AR-0: 批量模式下拦截 checkbox 点击
+            const cb = e.target.closest('.pas-batch-checkbox');
+            if (cb && _state.batchMode) {
+                const name = cb.getAttribute('data-preset-name');
+                if (name) {
+                    if (cb.checked) _state.batchSelected.add(name);
+                    else _state.batchSelected.delete(name);
+                    updateBatchUI();
+                }
+                return;
+            }
+            _handleListClick(e, _panelCtx());
+        });
+    }
 
     // diff 选择条
     $('.pas-btn-start-diff')?.addEventListener('click', () => _onStartDiff(_panelCtx()));
@@ -777,6 +855,11 @@ function _renderListTabImpl() {
         : renderFlatView(filtered, _panelCtx());
     list.innerHTML = html;
     updateBadge(filtered.length);
+
+    // AR-0: 批量模式下注入复选框
+    if (_state.batchMode) {
+        updateBatchUI();
+    }
 }
 
 /**
@@ -1023,6 +1106,62 @@ function updateBadge(count) {
     if (!_root || !_root.isConnected) return;
     const badge = _root.querySelector('#pas-list-badge');
     if (badge) badge.textContent = String(count);
+}
+
+/**
+ * AR-0: 更新批量模式 UI 状态
+ *   - 切换批量工具栏可见性
+ *   - 切换"批量"按钮高亮
+ *   - 更新"删除选中 (N)"按钮文本和可用性
+ *   - 在版本卡上注入/移除复选框
+ */
+function updateBatchUI() {
+    if (!_root) return;
+    const toolbar = _root.querySelector('#pas-batch-toolbar');
+    const toggleBtn = _root.querySelector('.pas-btn-batch-toggle');
+    const deleteBtn = _root.querySelector('#pas-batch-delete-btn');
+
+    if (toolbar) toolbar.hidden = !_state.batchMode;
+    if (toggleBtn) {
+        toggleBtn.classList.toggle('pas-mini-btn-primary', _state.batchMode);
+    }
+
+    // 更新删除按钮文本和状态
+    if (deleteBtn) {
+        const count = _state.batchSelected.size;
+        const span = deleteBtn.querySelector('span');
+        if (span) span.textContent = t('Batch Delete Btn', { count });
+        if (count > 0) deleteBtn.removeAttribute('disabled');
+        else deleteBtn.setAttribute('disabled', 'disabled');
+    }
+
+    // 注入/移除复选框
+    _root.querySelectorAll('.pas-version-group').forEach(vg => {
+        const presetName = vg.getAttribute('data-preset-name');
+        if (!presetName) return;
+        const header = vg.querySelector('.pas-version-header-row-title');
+        if (!header) return;
+
+        // 移除旧的
+        header.querySelectorAll('.pas-batch-checkbox').forEach(el => el.remove());
+
+        if (_state.batchMode) {
+            const currentPreset = getSelectedPresetName();
+            const isCurrent = presetName === currentPreset;
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'pas-batch-checkbox';
+            cb.setAttribute('data-preset-name', presetName);
+            cb.checked = _state.batchSelected.has(presetName);
+            if (isCurrent) {
+                cb.disabled = true;
+                cb.title = t('Delete Preset Current Warning');
+            }
+            // 阻止 checkbox 点击触发折叠
+            cb.addEventListener('click', (e) => e.stopPropagation());
+            header.insertBefore(cb, header.firstChild);
+        }
+    });
 }
 
 // =====================================================

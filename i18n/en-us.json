@@ -422,5 +422,18 @@
     "Grouping Renamed": "Group renamed to \"{{name}}\"",
     "Grouping Custom Badge": "Custom",
     "Grouping Delete Group Confirm": "Remove custom group \"{{name}}\"? Presets will return to auto-detect.",
-    "Grouping Menu Delete Group": "Delete this group"
+    "Grouping Menu Delete Group": "Delete this group",
+
+    "Delete Preset Btn": "Delete preset",
+    "Delete Preset Confirm": "Permanently delete preset \"{{name}}\"? This cannot be undone.",
+    "Delete Preset Current Warning": "Cannot delete the currently active preset. Please switch to another preset first.",
+    "Delete Preset Success": "Preset \"{{name}}\" deleted",
+    "Delete Preset Failed": "Failed to delete preset \"{{name}}\"",
+    "Batch Manage Btn": "Batch",
+    "Batch Delete Btn": "Delete selected ({{count}})",
+    "Batch Delete Confirm": "Permanently delete {{count}} presets? This cannot be undone. Enter the number {{count}} to confirm:",
+    "Batch Delete Success": "{{count}} presets deleted",
+    "Batch Delete Wrong Number": "Incorrect number entered, operation cancelled",
+    "Batch Select All": "Select all",
+    "Batch Deselect All": "Deselect all"
 }

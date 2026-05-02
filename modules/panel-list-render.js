@@ -419,6 +419,11 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
             <i class="fa-solid fa-circle-check"></i>
         </button>`;
 
+    // AR-0: 删除预设按钮（当前预设 disabled）
+    const deletePresetBtn = `<button class="pas-version-delete-btn" data-action="delete-preset" data-preset-name="${safePresetName}" data-api-id="${escapeAttr(ver.apiId)}" title="${escapeAttr(t('Delete Preset Btn'))}" type="button" aria-label="${escapeAttr(t('Delete Preset Btn'))}" ${isCurrent ? 'disabled' : ''}>
+            <i class="fa-solid fa-trash-can"></i>
+        </button>`;
+
     return `
 <div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isEmpty ? 'pas-version-empty' : ''} ${ver.archived ? 'pas-version-archived' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
     <div class="pas-version-header" data-action="toggle-version">
@@ -444,6 +449,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
                 <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
                     <i class="fa-solid fa-trash"></i>
                 </button>
+                ${deletePresetBtn}
             </span>
         </div>
     </div>

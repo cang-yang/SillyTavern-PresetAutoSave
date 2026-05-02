@@ -4325,3 +4325,118 @@ body.pas-light .pas-gm-ctx-item-danger i {
 body.pas-light .pas-gm-ctx-separator {
     background: rgba(0, 0, 0, 0.10);
 }
+
+/* =========================================================
+ * AR-0: 预设删除按钮 + 批量模式
+ * ========================================================= */
+
+/* --- 删除预设按钮 — 默认低调，hover 时高亮红色 --- */
+.pas-version-delete-btn {
+    background: none;
+    border: 1px solid var(--pas-border);
+    cursor: pointer;
+    opacity: 0.3;
+    font-size: 0.85em;
+    padding: 2px 4px;
+    border-radius: var(--pas-radius-sm);
+    transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
+    color: var(--pas-fg-muted);
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.pas-version-delete-btn:hover:not(:disabled) {
+    opacity: 1;
+    color: #e74c3c;
+    background: rgba(231, 76, 60, 0.1);
+    border-color: rgba(231, 76, 60, 0.4);
+}
+.pas-version-delete-btn:active:not(:disabled) {
+    transform: scale(0.92);
+    transition-duration: 0.08s;
+}
+.pas-version-delete-btn:disabled {
+    opacity: 0.15;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* --- 批量模式工具栏 --- */
+.pas-batch-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(231, 76, 60, 0.05);
+    border-top: 1px solid rgba(231, 76, 60, 0.2);
+    border-radius: 0 0 var(--pas-radius) var(--pas-radius);
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+}
+.pas-batch-toolbar[hidden] { display: none; }
+.pas-batch-spacer { flex: 1; }
+
+/* --- 批量删除按钮 --- */
+.pas-batch-delete-btn {
+    background: #e74c3c;
+    color: #fff;
+    border: none;
+    padding: 6px 16px;
+    border-radius: var(--pas-radius-sm);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85em;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.15s, transform 0.15s, opacity 0.15s;
+}
+.pas-batch-delete-btn:hover:not(:disabled) {
+    background: #c0392b;
+}
+.pas-batch-delete-btn:active:not(:disabled) {
+    transform: scale(0.96);
+}
+.pas-batch-delete-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* --- 批量模式复选框 --- */
+.pas-batch-checkbox {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    accent-color: #e74c3c;
+    flex-shrink: 0;
+    margin-right: 4px;
+}
+.pas-batch-checkbox:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* --- 浅色主题 --- */
+body.pas-light .pas-version-delete-btn:hover:not(:disabled) {
+    color: #c0392b;
+    background: rgba(192, 57, 43, 0.1);
+    border-color: rgba(192, 57, 43, 0.4);
+}
+body.pas-light .pas-batch-toolbar {
+    background: rgba(231, 76, 60, 0.06);
+    border-top-color: rgba(231, 76, 60, 0.15);
+}
+body.pas-light .pas-batch-delete-btn {
+    background: #dc2626;
+}
+body.pas-light .pas-batch-delete-btn:hover:not(:disabled) {
+    background: #b91c1c;
+}
+body.pas-light .pas-batch-checkbox {
+    accent-color: #dc2626;
+}
