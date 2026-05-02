@@ -31,6 +31,7 @@ import {
 } from './compatibility.js';
 import { saveNow, resetLastSavedHash } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
+import { refreshTakeover, seedSnapshotForPreset } from './preset-takeover.js';
 import {
     parsePresetName,
     groupNamesBySeries,
@@ -838,11 +839,43 @@ function renderGroupingHTML(groups, excludedNames) {
  * 保存分组设置到 extensionSettings
  */
 function saveGroupingSettings() {
+    // 记录变更前的排除列表，用于检测"从未分组移入新分组"的预设
+    const prevExcluded = { ...(getSettings().groupingExcluded || {}) };
+
     batchUpdate({
         groupingManualOverrides: { ..._gmOverrides },
         groupingExcluded: { ..._gmExcluded },
     });
     toast.success(t('Grouping Saved'));
+
+    // AE-1: 通知 takeover 模块刷新原生预设下拉，让分组变化立即反映
+    try { refreshTakeover(); } catch (_) {}
+
+    // AE-2: 为"从未分组移入新分组"且尚无快照的预设创建初始快照（后台静默）
+    //   同时如果 history panel 已打开，通过 _gmPanelCtx.refreshData() 刷新
+    const newlyIncluded = [];
+    for (const name of Object.keys(prevExcluded)) {
+        if (!_gmExcluded[name]) newlyIncluded.push(name);
+    }
+    if (newlyIncluded.length > 0) {
+        // 后台为新归组的预设补种快照（不阻塞 UI）
+        Promise.resolve().then(async () => {
+            for (const name of newlyIncluded) {
+                try { await seedSnapshotForPreset(name); } catch (_) {}
+            }
+            // 补种完成后刷新 history panel（如果已打开）
+            if (_gmPanelCtx) {
+                try { await _gmPanelCtx.refreshData(); } catch (_) {}
+            }
+        }).catch(() => {});
+    } else {
+        // 即使没有新归组的预设，也刷新 history panel（如果已打开）以反映分组变化
+        if (_gmPanelCtx) {
+            Promise.resolve().then(async () => {
+                try { await _gmPanelCtx.refreshData(); } catch (_) {}
+            }).catch(() => {});
+        }
+    }
 }
 
 /**

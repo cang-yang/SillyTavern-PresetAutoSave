@@ -1228,6 +1228,9 @@
     padding: 4px 10px !important;
     opacity: 0.75;
     transition: opacity var(--pas-dur) var(--pas-ease-fast);
+    /* AE-3: 防止按钮文字被 flex 压缩成竖排 */
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 .pas-gm-reset-all-btn:hover { opacity: 1; }
 
