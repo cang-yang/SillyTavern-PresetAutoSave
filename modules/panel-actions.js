@@ -31,7 +31,7 @@ import {
 } from './compatibility.js';
 import { saveNow, resetLastSavedHash } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
-import { refreshTakeover, seedSnapshotForPreset } from './preset-takeover.js';
+import { refreshTakeover } from './preset-takeover.js';
 import {
     parsePresetName,
     groupNamesBySeries,
@@ -588,9 +588,8 @@ export async function onStartDiff(panelCtx) {
     // T11: 限制对比只能在同系列（same series）内进行
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
-    const excluded = settings.groupingExcluded || {};
-    const infoA = getSeriesInfo(snapA.presetName, overrides, excluded);
-    const infoB = getSeriesInfo(snapB.presetName, overrides, excluded);
+    const infoA = getSeriesInfo(snapA.presetName, overrides);
+    const infoB = getSeriesInfo(snapB.presetName, overrides);
     const seriesA = normalizeSeriesKey(infoA.series || snapA.presetName);
     const seriesB = normalizeSeriesKey(infoB.series || snapB.presetName);
     if (seriesA !== seriesB) {
@@ -739,28 +738,24 @@ async function onApplyVersionDirect(presetName) {
 
 // --- 模块级状态：分组管理弹窗运行时数据 ---
 let _gmOverrides = {};
-let _gmExcluded = {};
 let _gmAllNames = [];
 let _gmPanelCtx = null;
 
 /**
- * 构建分组数据结构
- * @returns {{ groups: Array, excludedNames: string[] }}
+ * 构建分组数据结构（AI-0 重构：不再有 excluded）
+ * @returns {{ groups: Array }}
  */
 function buildGroupingData() {
     const settings = getSettings();
     _gmOverrides = { ...(settings.groupingManualOverrides || {}) };
-    _gmExcluded = { ...(settings.groupingExcluded || {}) };
-
-    const groups = groupNamesBySeries(_gmAllNames, _gmOverrides, _gmExcluded);
-    const excludedNames = _gmAllNames.filter(n => !!_gmExcluded[n]);
-    return { groups, excludedNames };
+    const groups = groupNamesBySeries(_gmAllNames, _gmOverrides);
+    return { groups };
 }
 
 /**
- * 渲染分组管理 HTML
+ * 渲染分组管理 HTML（AI-0 重构：删除"未分组"区域，新增"自动分组"目标区域）
  */
-function renderGroupingHTML(groups, excludedNames) {
+function renderGroupingHTML(groups) {
     const seriesCardsHtml = groups.map(g => {
         const itemsHtml = g.items.map(it => {
             const isManual = it.manualOverride;
@@ -791,29 +786,14 @@ function renderGroupingHTML(groups, excludedNames) {
         </div>`;
     }).join('');
 
-    // 未分组区域
-    const ungroupedHtml = excludedNames.map(name => {
-        return `
-        <div class="pas-gm-preset" draggable="true"
-             data-preset-name="${escapeAttr(name)}"
-             data-series-key="__ungrouped__">
-            <span class="pas-gm-preset-name" title="${escapeAttr(name)}">${escapeHtml(name)}</span>
-            <span class="pas-gm-badge pas-gm-badge-excluded">✕</span>
-            <span class="pas-gm-menu-btn" title="⋯">⋯</span>
-        </div>`;
-    }).join('');
-
-    const ungroupedSection = `
-    <div class="pas-gm-series pas-gm-ungrouped collapsed" data-series-key="__ungrouped__">
-        <div class="pas-gm-series-header">
-            <i class="fa-solid fa-ban pas-gm-series-icon"></i>
-            <span class="pas-gm-series-name">${escapeHtml(t('Grouping Ungrouped Title'))}</span>
-            <span class="pas-gm-series-count">${escapeHtml(t('Grouping Count', { count: excludedNames.length }))}</span>
-            <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
+    // "自动分组"目标区域 — AI-0 新设计（替代旧"未分组"区域）
+    const autoZoneSection = `
+    <div class="pas-gm-auto-zone" data-series="__auto__">
+        <div class="pas-gm-auto-zone-header">
+            <i class="fa-solid fa-rotate"></i>
+            <span>${escapeHtml(t('Grouping Auto Zone Title'))}</span>
         </div>
-        <div class="pas-gm-series-body">
-            ${ungroupedHtml || `<div class="pas-gm-empty">${escapeHtml(t('Grouping Empty Series'))}</div>`}
-        </div>
+        <div class="pas-gm-auto-zone-hint">${escapeHtml(t('Grouping Auto Zone Hint'))}</div>
     </div>`;
 
     return `
@@ -830,86 +810,43 @@ function renderGroupingHTML(groups, excludedNames) {
     <div class="pas-gm-desc">${escapeHtml(t('Grouping Manage Desc'))}</div>
     <div class="pas-gm-body">
         ${seriesCardsHtml}
-        ${ungroupedSection}
+        ${autoZoneSection}
     </div>
 </div>`;
 }
 
 /**
- * 保存分组设置到 extensionSettings
+ * 保存分组设置到 extensionSettings（AI-0 极简化：只保存 overrides）
  */
-function saveGroupingSettings() {
-    // 记录变更前的排除列表，用于检测"从未分组移入新分组"的预设
-    const prevExcluded = { ...(getSettings().groupingExcluded || {}) };
-
-    batchUpdate({
-        groupingManualOverrides: { ..._gmOverrides },
-        groupingExcluded: { ..._gmExcluded },
-    });
-    toast.success(t('Grouping Saved'));
-
-    // AG-1: 通知 takeover 模块强制刷新原生预设下拉，让分组变化立即反映
-    //   使用 force: true 跳过防抖/抑制/指纹缓存，因为分组变化不改变 option 列表
-    logger.debug('[saveGroupingSettings] calling refreshTakeover({ force: true })');
+function saveGroupingSettings(overrides) {
+    batchUpdate({ groupingManualOverrides: { ...overrides } });
+    logger.debug('[saveGroupingSettings] saved, calling refreshTakeover');
     try {
         refreshTakeover({ force: true });
     } catch (e) {
         logger.error('[saveGroupingSettings] refreshTakeover failed:', e);
     }
-
-    // AE-2: 为"从未分组移入新分组"且尚无快照的预设创建初始快照（后台静默）
-    //   同时如果 history panel 已打开，通过 _gmPanelCtx.refreshData() 刷新
-    const newlyIncluded = [];
-    for (const name of Object.keys(prevExcluded)) {
-        if (!_gmExcluded[name]) newlyIncluded.push(name);
-    }
-    if (newlyIncluded.length > 0) {
-        // 后台为新归组的预设补种快照（不阻塞 UI）
+    if (_gmPanelCtx?.refreshData) {
         Promise.resolve().then(async () => {
-            for (const name of newlyIncluded) {
-                try { await seedSnapshotForPreset(name); } catch (e) {
-                    logger.warn('[saveGroupingSettings] seedSnapshotForPreset failed for', name, e);
-                }
+            try { await _gmPanelCtx.refreshData(); } catch (e) {
+                logger.error('[saveGroupingSettings] refreshData failed:', e);
             }
-            // 补种完成后刷新 history panel（如果已打开）
-            logger.debug('[saveGroupingSettings] calling refreshData (after seed, newlyIncluded)');
-            if (_gmPanelCtx) {
-                try { await _gmPanelCtx.refreshData(); } catch (e) {
-                    logger.error('[saveGroupingSettings] refreshData failed:', e);
-                }
-            }
-            logger.debug('[saveGroupingSettings] done');
-        }).catch((e) => {
-            logger.error('[saveGroupingSettings] seed+refresh pipeline failed:', e);
-        });
-    } else {
-        // 即使没有新归组的预设，也刷新 history panel（如果已打开）以反映分组变化
-        logger.debug('[saveGroupingSettings] calling refreshData (no newlyIncluded)');
-        if (_gmPanelCtx) {
-            Promise.resolve().then(async () => {
-                try { await _gmPanelCtx.refreshData(); } catch (e) {
-                    logger.error('[saveGroupingSettings] refreshData failed:', e);
-                }
-                logger.debug('[saveGroupingSettings] done');
-            }).catch((e) => {
-                logger.error('[saveGroupingSettings] refreshData pipeline failed:', e);
-            });
-        } else {
-            logger.debug('[saveGroupingSettings] done (no panelCtx)');
-        }
+        }).catch(() => {});
+        logger.debug('[saveGroupingSettings] refreshData called');
     }
 }
 
 /**
- * 执行移动：将预设移到目标系列
+ * 执行移动：将预设移到目标系列（AI-0 重构）
  */
 function performMove(presetName, targetSeriesKey, container) {
-    if (targetSeriesKey === '__ungrouped__') {
-        performExclude(presetName, container);
+    // 拖到"自动分组"区 = 恢复自动识别
+    if (targetSeriesKey === '__auto__') {
+        delete _gmOverrides[presetName];
+        saveGroupingSettings(_gmOverrides);
+        refreshGroupingUI(container);
         return;
     }
-    // 从排除列表中移除
-    delete _gmExcluded[presetName];
     // 如果目标系列与自动检测的系列相同，删除覆盖
     const parsed = parsePresetName(presetName);
     const autoKey = normalizeSeriesKey(parsed.series);
@@ -921,37 +858,25 @@ function performMove(presetName, targetSeriesKey, container) {
         const targetGroup = groups.find(g => normalizeSeriesKey(g.series) === targetSeriesKey);
         _gmOverrides[presetName] = targetGroup ? targetGroup.series : targetSeriesKey;
     }
-    saveGroupingSettings();
+    saveGroupingSettings(_gmOverrides);
     refreshGroupingUI(container);
 }
 
 /**
- * 执行排除：将预设标记为不分组
- */
-function performExclude(presetName, container) {
-    _gmExcluded[presetName] = true;
-    delete _gmOverrides[presetName];
-    saveGroupingSettings();
-    refreshGroupingUI(container);
-}
-
-/**
- * 重置单个预设：删除手动覆盖
+ * 重置单个预设：删除手动覆盖（AI-0：恢复自动分组）
  */
 function performResetOne(presetName, container) {
     delete _gmOverrides[presetName];
-    delete _gmExcluded[presetName];
-    saveGroupingSettings();
+    saveGroupingSettings(_gmOverrides);
     refreshGroupingUI(container);
 }
 
 /**
- * 重置全部
+ * 重置全部（AI-0：清空所有覆盖）
  */
 function performResetAll(container) {
-    _gmOverrides = {};
-    _gmExcluded = {};
-    saveGroupingSettings();
+    for (const key of Object.keys(_gmOverrides)) delete _gmOverrides[key];
+    saveGroupingSettings(_gmOverrides);
     refreshGroupingUI(container);
 }
 
@@ -960,12 +885,12 @@ function performResetAll(container) {
  */
 function refreshGroupingUI(container) {
     if (!container) return;
-    const { groups, excludedNames } = buildGroupingData();
+    const { groups } = buildGroupingData();
     const bodyEl = container.querySelector('.pas-gm-body');
     if (!bodyEl) return;
     // 重新生成 body 内容
     const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = renderGroupingHTML(groups, excludedNames);
+    tempDiv.innerHTML = renderGroupingHTML(groups);
     const newBody = tempDiv.querySelector('.pas-gm-body');
     if (newBody) {
         bodyEl.innerHTML = newBody.innerHTML;
@@ -1021,7 +946,6 @@ async function showMoveDialog(presetName, container) {
             opt.addEventListener('click', async () => {
                 const targetKey = opt.getAttribute('data-target-key');
                 if (targetKey === '__new__') {
-                    // AC-1: 使用 ST Popup INPUT 替代 window.prompt，保持 UI 风格一致
                     const inputPopup = createPopupSafe(
                         t('Grouping Move New Prompt'),
                         'INPUT',
@@ -1032,21 +956,18 @@ async function showMoveDialog(presetName, container) {
                     if (inputPopup) {
                         try { newName = await inputPopup.show(); } catch (_) {}
                     } else {
-                        // Popup 不可用：回退到原生 prompt
                         newName = window.prompt(t('Grouping Move New Prompt'));
                     }
                     if (newName === null || newName === undefined || newName === false) return;
                     newName = String(newName).trim();
                     if (!newName) return;
                     _gmOverrides[presetName] = newName;
-                    delete _gmExcluded[presetName];
-                    saveGroupingSettings();
+                    saveGroupingSettings(_gmOverrides);
                     refreshGroupingUI(container);
                 } else {
                     const targetName = opt.getAttribute('data-target-name') || targetKey;
                     _gmOverrides[presetName] = targetName;
-                    delete _gmExcluded[presetName];
-                    saveGroupingSettings();
+                    saveGroupingSettings(_gmOverrides);
                     refreshGroupingUI(container);
                 }
                 try { popup.completeCancelled?.(); } catch (_) {}
@@ -1058,18 +979,16 @@ async function showMoveDialog(presetName, container) {
 }
 
 /**
- * 绑定分组管理弹窗的所有事件
+ * 绑定分组管理弹窗的所有事件（AI-0 重构：删除 exclude 菜单项，新增自动分组区拖拽）
  */
 function bindGroupingEvents(container) {
     if (!container) return;
 
     // --- 折叠/展开系列卡片 ---
     container.querySelectorAll('.pas-gm-series-header').forEach(header => {
-        // 移除旧的事件（避免重复绑定）
         const newHeader = header.cloneNode(true);
         header.parentNode.replaceChild(newHeader, header);
         newHeader.addEventListener('click', (e) => {
-            // 不要在菜单按钮上触发折叠
             if (e.target.closest('.pas-gm-menu-btn')) return;
             const series = newHeader.closest('.pas-gm-series');
             if (series) series.classList.toggle('collapsed');
@@ -1085,10 +1004,12 @@ function bindGroupingEvents(container) {
             e.dataTransfer.setData('text/plain', newEl.getAttribute('data-preset-name'));
             e.dataTransfer.effectAllowed = 'move';
             newEl.classList.add('dragging');
-            // 给所有 series-body 添加 drop-zone 视觉提示
             container.querySelectorAll('.pas-gm-series-body').forEach(body => {
                 body.classList.add('pas-gm-drop-zone');
             });
+            // 也高亮"自动分组"区域
+            const autoZone = container.querySelector('.pas-gm-auto-zone');
+            if (autoZone) autoZone.classList.add('pas-gm-drop-zone');
         });
 
         newEl.addEventListener('dragend', () => {
@@ -1096,23 +1017,23 @@ function bindGroupingEvents(container) {
             container.querySelectorAll('.pas-gm-series-body').forEach(body => {
                 body.classList.remove('pas-gm-drop-zone', 'drag-over');
             });
+            const autoZone = container.querySelector('.pas-gm-auto-zone');
+            if (autoZone) autoZone.classList.remove('pas-gm-drop-zone', 'drag-over');
         });
     });
 
+    // --- series-body 拖拽目标 ---
     container.querySelectorAll('.pas-gm-series-body').forEach(body => {
         body.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             body.classList.add('drag-over');
         });
-
         body.addEventListener('dragleave', (e) => {
-            // 仅当离开到真正外部时移除
             if (!body.contains(e.relatedTarget)) {
                 body.classList.remove('drag-over');
             }
         });
-
         body.addEventListener('drop', (e) => {
             e.preventDefault();
             body.classList.remove('drag-over');
@@ -1125,18 +1046,39 @@ function bindGroupingEvents(container) {
         });
     });
 
-    // --- ⋯ 菜单 ---
+    // --- "自动分组"区域拖拽目标（AI-0 新增） ---
+    const autoZone = container.querySelector('.pas-gm-auto-zone');
+    if (autoZone) {
+        autoZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            autoZone.classList.add('drag-over');
+        });
+        autoZone.addEventListener('dragleave', (e) => {
+            if (!autoZone.contains(e.relatedTarget)) {
+                autoZone.classList.remove('drag-over');
+            }
+        });
+        autoZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            autoZone.classList.remove('drag-over');
+            const presetName = e.dataTransfer.getData('text/plain');
+            if (!presetName) return;
+            // 拖到"自动分组"= 恢复自动识别
+            performMove(presetName, '__auto__', container);
+        });
+    }
+
+    // --- ⋯ 菜单（AI-0：删除"从分组中移除"选项，新增"恢复自动分组"） ---
     container.querySelectorAll('.pas-gm-menu-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            // 关闭已有菜单
             container.querySelectorAll('.pas-gm-context-menu').forEach(m => m.remove());
 
             const presetEl = btn.closest('.pas-gm-preset');
             const presetName = presetEl?.getAttribute('data-preset-name');
             if (!presetName) return;
 
-            const isExcluded = !!_gmExcluded[presetName];
             const isManual = !!_gmOverrides[presetName];
 
             const menu = document.createElement('div');
@@ -1145,15 +1087,11 @@ function bindGroupingEvents(container) {
                 <div class="pas-gm-ctx-item" data-action="move">
                     <i class="fa-solid fa-arrow-right-arrow-left"></i> ${escapeHtml(t('Grouping Menu Move To'))}
                 </div>
-                ${!isExcluded ? `<div class="pas-gm-ctx-item" data-action="exclude">
-                    <i class="fa-solid fa-ban"></i> ${escapeHtml(t('Grouping Menu Exclude'))}
-                </div>` : ''}
-                ${(isManual || isExcluded) ? `<div class="pas-gm-ctx-item" data-action="reset">
+                ${isManual ? `<div class="pas-gm-ctx-item" data-action="reset">
                     <i class="fa-solid fa-wand-magic-sparkles"></i> ${escapeHtml(t('Grouping Menu Reset Auto'))}
                 </div>` : ''}
             `;
 
-            // AC-1: 定位菜单，添加视口边界检测避免窄屏溢出
             const rect = btn.getBoundingClientRect();
             menu.style.position = 'fixed';
             menu.style.visibility = 'hidden';
@@ -1168,15 +1106,12 @@ function bindGroupingEvents(container) {
             menu.style.top = `${menuTop}px`;
             menu.style.visibility = '';
 
-            // 菜单项点击
             menu.querySelectorAll('.pas-gm-ctx-item').forEach(item => {
                 item.addEventListener('click', async () => {
                     const action = item.getAttribute('data-action');
                     menu.remove();
                     if (action === 'move') {
                         await showMoveDialog(presetName, container);
-                    } else if (action === 'exclude') {
-                        performExclude(presetName, container);
                     } else if (action === 'reset') {
                         const ok = await confirmSafe(
                             t('Grouping Menu Reset Auto'),
@@ -1187,7 +1122,6 @@ function bindGroupingEvents(container) {
                 });
             });
 
-            // 点击外部关闭菜单
             const closeMenu = (ev) => {
                 if (!menu.contains(ev.target)) {
                     menu.remove();
@@ -1209,8 +1143,9 @@ function bindGroupingEvents(container) {
 }
 
 /**
- * 打开"管理分组"弹窗 — AA-3 重构版
+ * 打开"管理分组"弹窗 — AI-0 重构版
  * 以系列卡片为核心视图，支持拖拽、⋯ 菜单、右键等操作。
+ * 删除"未分组"概念，新增"自动分组"目标区域。
  *
  * @param {object} panelCtx
  */
@@ -1240,8 +1175,8 @@ export async function showGroupingManager(panelCtx) {
         return;
     }
 
-    const { groups, excludedNames } = buildGroupingData();
-    const html = renderGroupingHTML(groups, excludedNames);
+    const { groups } = buildGroupingData();
+    const html = renderGroupingHTML(groups);
 
     _groupingManagerPopup = createPopupSafe(html, 'DISPLAY', {
         wide: true,
@@ -1311,16 +1246,13 @@ export async function showGroupingFirstScanWizard(opts = {}) {
     } catch (_) {}
 
     if (names.length < 2) {
-        // 不足以分组：直接标记完成不再打扰
         updateSetting('groupingFirstScanDone', true);
         return;
     }
 
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
-    const excluded = settings.groupingExcluded || {};
-    const groups = groupNamesBySeries(names, overrides, excluded);
-    // 只显示"含 ≥2 个版本"的系列作为预览（说明确实有重复）
+    const groups = groupNamesBySeries(names, overrides);
     const significantGroups = groups.filter(g => g.items.length >= 2);
     const previewHtml = significantGroups.slice(0, 12).map(g => `
 <div class="pas-firstscan-group">
@@ -1369,7 +1301,6 @@ export async function showGroupingFirstScanWizard(opts = {}) {
     }
 
     if (result) {
-        // 用户确认：开启分组并标记完成
         batchUpdate({
             groupingEnabled: true,
             groupingFirstScanDone: true,
@@ -1379,7 +1310,6 @@ export async function showGroupingFirstScanWizard(opts = {}) {
             versions: names.length,
         }));
     } else {
-        // 用户跳过：仍然标记完成（不要每次启动都打扰）
         updateSetting('groupingFirstScanDone', true);
     }
 }

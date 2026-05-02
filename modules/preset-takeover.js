@@ -117,7 +117,6 @@ export async function initPresetTakeover() {
         if (
             key === 'takeoverEnabled'
             || key === 'groupingManualOverrides'
-            || key === 'groupingExcluded'
             || key === 'groupingEnabled'
             || key === 'enabled'
         ) {
@@ -293,7 +292,6 @@ function applyTakeoverToSelect(select) {
     const apiId = getApiIdOfSelect(select);
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
-    const excluded = settings.groupingExcluded || {};
     const seriesDefaults = settings.seriesDefaultApply || {};
 
     // 如果已经创建了 wrapper，更新内容即可
@@ -301,7 +299,7 @@ function applyTakeoverToSelect(select) {
     if (wrapper) {
         const panel = wrapper.querySelector('.pas-dd-panel');
         if (panel) {
-            renderDropdownContent(panel, select, apiId, overrides, excluded, seriesDefaults);
+            renderDropdownContent(panel, select, apiId, overrides, seriesDefaults);
             updateTriggerDisplay(select, wrapper);
             updateActiveState(select, wrapper);
         }
@@ -360,7 +358,7 @@ function applyTakeoverToSelect(select) {
     }
 
     // 渲染分组内容
-    renderDropdownContent(panel, select, apiId, overrides, excluded, seriesDefaults);
+    renderDropdownContent(panel, select, apiId, overrides, seriesDefaults);
     updateTriggerDisplay(select, wrapper);
 
     // ---------- 事件绑定 ----------
@@ -422,7 +420,7 @@ function applyTakeoverToSelect(select) {
 // =====================================================
 // 渲染下拉面板内容
 // =====================================================
-function renderDropdownContent(panel, select, apiId, overrides, excluded, seriesDefaults) {
+function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults) {
     // 从 select.options 读取所有预设名和 value
     const optionList = Array.from(select.options || []);
     if (optionList.length === 0) {
@@ -443,16 +441,11 @@ function renderDropdownContent(panel, select, apiId, overrides, excluded, series
         const realName = presetName || value;
 
         if (!realName || _isInvalidPresetName(realName)) {
-            standaloneOptions.push({ presetName: realName || value, value, excluded: false });
+            standaloneOptions.push({ presetName: realName || value, value });
             continue;
         }
 
-        if (excluded[realName]) {
-            standaloneOptions.push({ presetName: realName, value, excluded: true });
-            continue;
-        }
-
-        const info = getSeriesInfo(realName, overrides, excluded);
+        const info = getSeriesInfo(realName, overrides);
         const rawSeriesKey = info.series || realName;
         const normKey = normalizeSeriesKey(rawSeriesKey);
 
@@ -516,7 +509,7 @@ function renderDropdownContent(panel, select, apiId, overrides, excluded, series
         html += `</div></div>`;
     }
 
-    // 独立预设（excluded 或不可分组的）
+    // 独立预设（不可分组的）
     for (const it of standaloneOptions) {
         if (!it.presetName) continue;
         const isActive = it.value === currentValue;
@@ -641,8 +634,7 @@ function updateTriggerDisplay(select, wrapper) {
     const presetName = selectedOpt.textContent.trim();
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
-    const excluded = settings.groupingExcluded || {};
-    const info = getSeriesInfo(presetName, overrides, excluded);
+    const info = getSeriesInfo(presetName, overrides);
 
     if (info.version && info.series) {
         label.textContent = `${info.series} · ${info.version}`;
@@ -959,7 +951,6 @@ export function listAllPresetsIncludingDetached(filterApiId) {
 export function listSeriesFromNativeSelects() {
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
-    const excluded = settings.groupingExcluded || {};
 
     const out = [];
     let selects;
@@ -985,9 +976,8 @@ export function listSeriesFromNativeSelects() {
         const seriesGroups = new Map();
         const seriesDisplayKeys = new Map(); // normKey → first-seen original case
         for (const name of unique) {
-            const info = getSeriesInfo(name, overrides, excluded);
-            // AH-1 fix: excluded 预设自成独立系列，不跳过
-            const rawSeriesKey = info.excluded ? name : (info.series || name);
+            const info = getSeriesInfo(name, overrides);
+            const rawSeriesKey = info.series || name;
             const normKey = normalizeSeriesKey(rawSeriesKey);
             if (!seriesGroups.has(normKey)) {
                 seriesGroups.set(normKey, []);
@@ -995,9 +985,8 @@ export function listSeriesFromNativeSelects() {
             }
             seriesGroups.get(normKey).push({
                 presetName: name,
-                // AH-1: excluded 预设不做版本拆分
-                version: info.excluded ? '' : info.version,
-                duplicate: info.excluded ? '' : info.duplicate,
+                version: info.version,
+                duplicate: info.duplicate,
                 manualOverride: info.manualOverride,
             });
         }

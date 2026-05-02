@@ -43,7 +43,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
     groupingFirstScanDone: false,   // 首次扫描向导是否已完成
     groupingPromptOnImport: true,   // 检测到新预设导入时是否提示归属确认
     groupingManualOverrides: {},    // { [presetName]: seriesName } 用户手动覆盖
-    groupingExcluded: {},           // { [presetName]: true } 用户标记为"不分组"
     groupingDefaultExpand: 'current', // 'current' | 'all' | 'none' 系列默认展开策略
 
     // 预设接管（核心特性：用一级系列名替换原生预设下拉）
@@ -82,7 +81,6 @@ const VALIDATORS = {
     groupingFirstScanDone: (v) => Boolean(v),
     groupingPromptOnImport: (v) => Boolean(v),
     groupingManualOverrides: (v) => sanitizeStringMap(v),
-    groupingExcluded: (v) => sanitizeBoolMap(v),
     groupingDefaultExpand: (v) => (v === 'all' || v === 'none' || v === 'current') ? v : 'current',
     takeoverEnabled: (v) => Boolean(v),
     takeoverDefaultStrategy: (v) => (v === 'manual' ? 'manual' : 'latest'),
@@ -158,6 +156,12 @@ export async function initSettings() {
         if (!allSettings[MODULE_NAME] || typeof allSettings[MODULE_NAME] !== 'object') {
             allSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
             logger.info('Created default settings');
+        }
+
+        // AI-0 迁移：如果存在旧的 groupingExcluded 字段，忽略其内容并删除
+        if (allSettings[MODULE_NAME].groupingExcluded != null) {
+            logger.info('Migrating: removing deprecated groupingExcluded field');
+            delete allSettings[MODULE_NAME].groupingExcluded;
         }
 
         // 补全缺失字段（适应版本更新）

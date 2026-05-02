@@ -94,7 +94,6 @@ export function applyFiltersAndSearch(snapshots, panelCtx) {
         if (_state.viewMode === 'series' && name) {
             const settings = getSettings();
             const overrides = settings.groupingManualOverrides;
-            const excluded = settings.groupingExcluded;
             const curInfo = (() => {
                 try {
                     return parsePresetName(name);
@@ -482,7 +481,6 @@ export function renderSeriesView(filtered, panelCtx) {
 
     const seriesMap = groupSnapshotsBySeries(filteredByApi, {
         overrides: settings.groupingManualOverrides,
-        excluded: settings.groupingExcluded,
     });
 
     // ⚡ 关键修复 B3：用 normKey 做"二次归并"
@@ -516,7 +514,6 @@ export function renderSeriesView(filtered, panelCtx) {
 
     try {
         const overrides = settings.groupingManualOverrides || {};
-        const excluded = settings.groupingExcluded || {};
 
         // 唯一来源：DOM select.options（含被接管摘除的）—— 严格按 currentApi 过滤
         let fromDOM = [];
@@ -542,11 +539,8 @@ export function renderSeriesView(filtered, panelCtx) {
         }
 
         for (const { apiId, presetName } of allEntries.values()) {
-            const info = getSeriesInfo(presetName, overrides, excluded);
-            // AH-1 fix: excluded 预设自成独立系列（不跳过，用原名做系列键）
-            const seriesKey = _resolveSeriesKey(
-                info.excluded ? presetName : (info.series || presetName)
-            );
+            const info = getSeriesInfo(presetName, overrides);
+            const seriesKey = _resolveSeriesKey(info.series || presetName);
 
             let series = seriesMap.get(seriesKey);
             if (!series) {
@@ -568,10 +562,9 @@ export function renderSeriesView(filtered, panelCtx) {
                 series.versions.push({
                     apiId,
                     presetName,
-                    // AH-1: excluded 预设不做版本拆分
-                    version: info.excluded ? '' : info.version,
-                    duplicate: info.excluded ? '' : info.duplicate,
-                    kind: info.excluded ? '' : info.kind,
+                    version: info.version,
+                    duplicate: info.duplicate,
+                    kind: info.kind,
                     manualOverride: info.manualOverride,
                     snapshots: [],
                     latestTime: 0,
@@ -591,16 +584,12 @@ export function renderSeriesView(filtered, panelCtx) {
     if (_archivedCache && _archivedCache.length > 0) {
         try {
             const overrides = settings.groupingManualOverrides || {};
-            const excluded = settings.groupingExcluded || {};
             for (const arch of _archivedCache) {
                 if (arch.apiId && arch.apiId !== currentApi) continue;
                 const presetName = arch.presetName;
                 if (!presetName) continue;
-                const info = getSeriesInfo(presetName, overrides, excluded);
-                // AH-1 fix: excluded 预设自成独立系列
-                const seriesKey = _resolveSeriesKey(
-                    info.excluded ? presetName : (info.series || presetName)
-                );
+                const info = getSeriesInfo(presetName, overrides);
+                const seriesKey = _resolveSeriesKey(info.series || presetName);
 
                 let series = seriesMap.get(seriesKey);
                 if (!series) {
@@ -620,10 +609,9 @@ export function renderSeriesView(filtered, panelCtx) {
                     series.versions.push({
                         apiId: arch.apiId,
                         presetName,
-                        // AH-1: excluded 预设不做版本拆分
-                        version: info.excluded ? '' : info.version,
-                        duplicate: info.excluded ? '' : info.duplicate,
-                        kind: info.excluded ? '' : info.kind,
+                        version: info.version,
+                        duplicate: info.duplicate,
+                        kind: info.kind,
                         manualOverride: info.manualOverride,
                         snapshots: [],
                         latestTime: arch.archivedAt || 0,

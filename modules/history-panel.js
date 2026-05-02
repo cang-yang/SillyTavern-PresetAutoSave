@@ -318,10 +318,9 @@ async function loadData() {
 
     if (_state.viewMode === 'series') {
         const overrides = settings.groupingManualOverrides;
-        const excluded = settings.groupingExcluded;
         // O-1: 默认全部收起（'none'），用户可在设置中改为 'current' 或 'all'
         const expandMode = settings.groupingDefaultExpand || 'none';
-        const seriesMap = groupSnapshotsBySeries(_state.snapshots, { overrides, excluded });
+        const seriesMap = groupSnapshotsBySeries(_state.snapshots, { overrides });
 
         if (expandMode === 'all') {
             for (const k of seriesMap.keys()) _state.expandedSeries.add(k);
@@ -602,10 +601,9 @@ function bindEvents() {
         const filtered = applyFiltersAndSearch(_state.snapshots, _panelCtx());
         if (_state.viewMode === 'series') {
             const settings = getSettings();
-            const seriesMap = groupSnapshotsBySeries(filtered, {
-                overrides: settings.groupingManualOverrides,
-                excluded: settings.groupingExcluded,
-            });
+                const seriesMap = groupSnapshotsBySeries(filtered, {
+                    overrides: settings.groupingManualOverrides,
+                });
             for (const [seriesKey, info] of seriesMap.entries()) {
                 _state.expandedSeries.add(seriesKey);
                 for (const ver of info.versions) {
@@ -817,7 +815,7 @@ export async function showGroupingFirstScanWizard(opts) {
  *   - 完全事件驱动，无 setInterval —— 与 P10 优化一致
  *   - 仅在 settings.groupingEnabled && settings.groupingPromptOnImport 时弹窗
  *   - 弹窗串行（_importPromptInflight 防并发）
- *   - 如果用户为该预设手动设置过归属（出现在 overrides/excluded），不再提示
+ *   - 如果用户为该预设手动设置过归属（出现在 overrides），不再提示
  *   - 检查节流：最快每 1500ms 处理一次事件
  */
 let _importWatchPrev = null;          // Set<string> 上次已知的预设名
@@ -933,16 +931,14 @@ async function importWatchTick() {
 
     // 已被用户标记的不再提示
     const overrides = settings.groupingManualOverrides || {};
-    const excluded = settings.groupingExcluded || {};
     const candidates = added.filter(n =>
-        !Object.hasOwn(overrides, n) &&
-        !Object.hasOwn(excluded, n)
+        !Object.hasOwn(overrides, n)
     );
     if (candidates.length === 0) return;
 
     // 收集现有系列（不含 added 自己）
     const existingNames = Array.from(cur).filter(n => !candidates.includes(n));
-    const existingGroups = groupNamesBySeries(existingNames, overrides, excluded);
+    const existingGroups = groupNamesBySeries(existingNames, overrides);
     const existingSeries = existingGroups.map(g => g.series);
 
     // ⚡ P3 修复：过滤掉与已存在预设同属一个系列的候选
@@ -950,7 +946,7 @@ async function importWatchTick() {
     //   导致同系列版本被误判为"新导入"。通过 normalizeSeriesKey 比较排除。
     const existingNormKeys = new Set(existingSeries.map(s => normalizeSeriesKey(s)));
     const trulyNewCandidates = candidates.filter(n => {
-        const info = getSeriesInfo(n, overrides, excluded);
+        const info = getSeriesInfo(n, overrides);
         const normKey = normalizeSeriesKey(info.series || n);
         return !existingNormKeys.has(normKey);
     });

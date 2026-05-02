@@ -809,22 +809,17 @@ export function clearParseCache() {
  *
  * @param {string} presetName 原名
  * @param {object} [overrides] { [presetName]: seriesName } 手动覆盖
- * @param {object} [excluded]  { [presetName]: true } 排除（不分组）
- * @returns {{series:string, version:string, duplicate:string, manualOverride:boolean, excluded:boolean, original:string}}
+ * @returns {{series:string, version:string, duplicate:string, manualOverride:boolean, original:string, kind:string}}
  */
-export function getSeriesInfo(presetName, overrides = null, excluded = null) {
+export function getSeriesInfo(presetName, overrides = null) {
     const parsed = parsePresetName(presetName);
-    const isExcluded = !!(excluded && excluded[presetName]);
-    if (isExcluded) {
-        return { ...parsed, manualOverride: false, excluded: true };
-    }
     if (overrides && Object.hasOwn(overrides, presetName)) {
         const ov = String(overrides[presetName] || '').trim();
         if (ov) {
-            return { ...parsed, series: ov, manualOverride: true, excluded: false };
+            return { ...parsed, series: ov, version: '', kind: 'manual', manualOverride: true };
         }
     }
-    return { ...parsed, manualOverride: false, excluded: false };
+    return { ...parsed, manualOverride: false };
 }
 
 /**
@@ -937,20 +932,17 @@ export function pickRepresentativeVersion(seriesKey, items, seriesDefaultApply =
  *
  * @param {string[]} names
  * @param {object} [overrides]
- * @param {object} [excluded]
  * @returns {Array<{series:string, items:Array<{presetName:string, version:string, duplicate:string, kind:string}>}>}
  */
-export function groupNamesBySeries(names, overrides = null, excluded = null) {
+export function groupNamesBySeries(names, overrides = null) {
     if (!Array.isArray(names) || names.length === 0) return [];
 
     // normKey -> { displayName, items[] }
     // 用归一化键归并不同大小写的同系列；显示名沿用第一次出现的版本
     const map = new Map();
     for (const n of names) {
-        const info = getSeriesInfo(n, overrides, excluded);
-        // AH-1 fix: excluded 预设"不参与自动分组" ≠ "从界面上隐藏"
-        // 每个 excluded 预设自成一组（系列键 = 原名，不做版本拆分）
-        const series = info.excluded ? n : (info.series || n);
+        const info = getSeriesInfo(n, overrides);
+        const series = info.series || n;
         const normKey = normalizeSeriesKey(series);
 
         if (!map.has(normKey)) {
@@ -958,9 +950,9 @@ export function groupNamesBySeries(names, overrides = null, excluded = null) {
         }
         map.get(normKey).items.push({
             presetName: n,
-            version: info.excluded ? '' : info.version,
-            duplicate: info.excluded ? '' : info.duplicate,
-            kind: info.excluded ? '' : info.kind,
+            version: info.version,
+            duplicate: info.duplicate,
+            kind: info.kind,
             manualOverride: info.manualOverride,
         });
     }
@@ -983,7 +975,6 @@ export function groupNamesBySeries(names, overrides = null, excluded = null) {
  * @param {Array} snapshots 来自 history-store.getAllSnapshots()
  * @param {object} [options]
  * @param {object} [options.overrides] 手动覆盖
- * @param {object} [options.excluded] 排除集合
  * @returns {Map<string, {
  *   series: string,
  *   versions: Array<{
@@ -1006,7 +997,6 @@ export function groupNamesBySeries(names, overrides = null, excluded = null) {
  */
 export function groupSnapshotsBySeries(snapshots, options = {}) {
     const overrides = options.overrides || null;
-    const excluded = options.excluded || null;
     // seriesMap 的 key 仍然是"显示名"（首次出现的大小写形式）
     // 但归并查找用归一化键，避免 "mur API" 与 "Mur API" 分两组
     const seriesMap = new Map();
@@ -1022,9 +1012,8 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
         const apiId = snap?.apiId || '';
         if (!presetName) continue;
 
-        const info = getSeriesInfo(presetName, overrides, excluded);
-        // AH-1 fix: excluded 预设自成独立系列（系列键 = 原名），不做版本拆分
-        const rawSeriesKey = info.excluded ? presetName : (info.series || presetName);
+        const info = getSeriesInfo(presetName, overrides);
+        const rawSeriesKey = info.series || presetName;
         const normKey = normalizeSeriesKey(rawSeriesKey);
         // 首次出现的大小写形式作为显示名
         if (!normToDisplay.has(normKey)) {
@@ -1052,10 +1041,9 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
             ver = {
                 apiId,
                 presetName,
-                // AH-1: excluded 预设不做版本拆分
-                version: info.excluded ? '' : info.version,
-                duplicate: info.excluded ? '' : info.duplicate,
-                kind: info.excluded ? '' : info.kind,
+                version: info.version,
+                duplicate: info.duplicate,
+                kind: info.kind,
                 manualOverride: info.manualOverride,
                 snapshots: [],
                 latestTime: 0,

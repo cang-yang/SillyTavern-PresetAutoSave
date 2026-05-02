@@ -1419,12 +1419,42 @@
     border-color: var(--pas-accent) !important;
 }
 
-/* --- 未分组特殊样式 --- */
-.pas-gm-ungrouped {
-    border-left-color: #6b7280 !important;
+/* --- 自动分组目标区域（AI-0 新增） --- */
+.pas-gm-auto-zone {
+    margin: 12px 0 4px 0;
+    padding: 16px;
+    border: 2px dashed rgba(147, 51, 234, 0.35);
+    border-radius: 10px;
+    background: rgba(147, 51, 234, 0.04);
+    text-align: center;
+    transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
-.pas-gm-ungrouped .pas-gm-series-icon {
-    color: #6b7280;
+.pas-gm-auto-zone-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 0.95em;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.70);
+}
+.pas-gm-auto-zone-header i {
+    color: rgba(147, 51, 234, 0.70);
+    font-size: 1.1em;
+}
+.pas-gm-auto-zone-hint {
+    margin-top: 6px;
+    font-size: 0.82em;
+    color: rgba(255, 255, 255, 0.40);
+}
+.pas-gm-auto-zone.pas-gm-drop-zone {
+    border-color: rgba(147, 51, 234, 0.55);
+    background: rgba(147, 51, 234, 0.08);
+}
+.pas-gm-auto-zone.drag-over {
+    border-color: rgba(147, 51, 234, 0.85) !important;
+    background: rgba(147, 51, 234, 0.15) !important;
+    box-shadow: 0 0 16px rgba(147, 51, 234, 0.25);
 }
 
 /* --- 上下文菜单 --- */
@@ -4167,11 +4197,20 @@ body.pas-light .pas-gm-badge-excluded {
 body.pas-light .pas-gm-menu-btn:hover {
     background: rgba(0, 0, 0, 0.08);
 }
-body.pas-light .pas-gm-ungrouped {
-    border-left-color: rgba(0, 0, 0, 0.25) !important;
+body.pas-light .pas-gm-auto-zone {
+    border-color: rgba(147, 51, 234, 0.25);
+    background: rgba(147, 51, 234, 0.03);
 }
-body.pas-light .pas-gm-ungrouped .pas-gm-series-icon {
-    color: rgba(0, 0, 0, 0.40);
+body.pas-light .pas-gm-auto-zone-header {
+    color: rgba(0, 0, 0, 0.60);
+}
+body.pas-light .pas-gm-auto-zone-hint {
+    color: rgba(0, 0, 0, 0.35);
+}
+body.pas-light .pas-gm-auto-zone.drag-over {
+    border-color: rgba(147, 51, 234, 0.70) !important;
+    background: rgba(147, 51, 234, 0.10) !important;
+    box-shadow: 0 0 12px rgba(147, 51, 234, 0.15);
 }
 body.pas-light .pas-gm-series-body.drag-over {
     background: rgba(147, 51, 234, 0.06) !important;
