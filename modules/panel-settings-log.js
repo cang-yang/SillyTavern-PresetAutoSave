@@ -13,7 +13,7 @@
 
 import { logger } from './logger.js';
 import {
-    getSettings, updateSetting, resetSettings,
+    getSettings, updateSetting, resetSettings, batchUpdate,
 } from './settings.js';
 import {
     getStats, trimOldSnapshots, cleanCorruptSnapshots,
@@ -378,7 +378,11 @@ export function bindSettingsEvents(container, panelCtx) {
         await clearAll();
         // Q-1 fix: 清空所有快照后，重置 seedSnapshotsDone
         // 让下次 rescan / 初始化时能重新建立初始快照
-        updateSetting('seedSnapshotsDone', false);
+        // AJ-1: 同时重置分组手动覆盖，真正做到"从零开始"
+        batchUpdate({
+            seedSnapshotsDone: false,
+            groupingManualOverrides: {},
+        });
         toast.success(t('Cleared All'));
         await panelCtx.refreshData();
     });

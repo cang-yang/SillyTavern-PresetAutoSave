@@ -14,7 +14,7 @@
 
 import { logger } from './logger.js';
 import {
-    getSettings, updateSetting,
+    getSettings, updateSetting, batchUpdate,
 } from './settings.js';
 import {
     getAllSnapshots,
@@ -580,10 +580,13 @@ function bindEvents() {
     // 重新扫描分组（重置 firstScanDone 后再次弹向导）
     $('.pas-btn-rescan-grouping')?.addEventListener('click', async () => {
         try {
+            // AJ-1: 清除所有手动分组覆盖，真正"从零开始"重新识别
+            batchUpdate({
+                groupingManualOverrides: {},
+                groupingFirstScanDone: false,
+            });
             // 清空分组解析缓存（万一用户改了正则等）
             clearParseCache();
-            // 重置 firstScanDone 让向导能再次弹出
-            updateSetting('groupingFirstScanDone', false);
             await showGroupingFirstScanWizard();
             // Q-1 fix: 向导完成后强制重新种子——
             // 如果用户清空了所有快照后再点"重新扫描分组"，

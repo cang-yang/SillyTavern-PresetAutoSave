@@ -1153,20 +1153,38 @@ export async function showGroupingManager(panelCtx) {
     if (_groupingManagerPopup) return;
     _gmPanelCtx = panelCtx;
 
-    // 收集所有候选名
+    // 收集所有候选名（AJ-1: 用大小写不敏感去重，避免快照名与原生名大小写差异导致重复）
     _gmAllNames = [];
-    if (panelCtx) {
-        const state = panelCtx.state();
-        const fromSnapshots = new Set(state.snapshots.map(s => s.presetName).filter(Boolean));
-        for (const n of fromSnapshots) _gmAllNames.push(n);
-    }
+    const _gmDedup = new Set();  // lowercase key 用于去重
+
+    // 1) ST 原生预设列表（权威来源，名字优先采用）
     try {
         const names = getAllPresetNames();
         if (Array.isArray(names)) {
-            const existing = new Set(_gmAllNames);
-            for (const n of names) if (n && !existing.has(n)) _gmAllNames.push(n);
+            for (const n of names) {
+                if (!n) continue;
+                const lk = n.toLowerCase();
+                if (!_gmDedup.has(lk)) {
+                    _gmDedup.add(lk);
+                    _gmAllNames.push(n);
+                }
+            }
         }
     } catch (_) {}
+
+    // 2) 快照中的预设名（补充来源，可能包含已删除的预设）
+    if (panelCtx) {
+        const state = panelCtx.state();
+        for (const s of state.snapshots) {
+            const n = s.presetName;
+            if (!n) continue;
+            const lk = n.toLowerCase();
+            if (!_gmDedup.has(lk)) {
+                _gmDedup.add(lk);
+                _gmAllNames.push(n);
+            }
+        }
+    }
 
     _gmAllNames.sort((a, b) => a.localeCompare(b));
 
