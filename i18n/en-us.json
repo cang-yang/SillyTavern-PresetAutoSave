@@ -410,5 +410,17 @@
     "Preset Switch Failed": "Failed to switch preset",
 
     "Restore Cross Preset Warning": "This snapshot belongs to \"{{snapshotPreset}}\". Please switch to that preset first before restoring.",
-    "Restore Cross Preset Title": "Cannot restore cross-preset"
+    "Restore Cross Preset Title": "Cannot restore cross-preset",
+
+    "Grouping Menu Rename Series": "Rename this group…",
+    "Grouping Menu Copy Name": "Copy preset name",
+    "Grouping Copied": "Copied to clipboard",
+    "Grouping New Group Btn": "+ New Group",
+    "Grouping New Group Prompt": "Enter new group name",
+    "Grouping New Group Created": "Group \"{{name}}\" created",
+    "Grouping Rename Prompt": "Enter new name for group \"{{name}}\"",
+    "Grouping Renamed": "Group renamed to \"{{name}}\"",
+    "Grouping Custom Badge": "Custom",
+    "Grouping Delete Group Confirm": "Remove custom group \"{{name}}\"? Presets will return to auto-detect.",
+    "Grouping Menu Delete Group": "Delete this group"
 }

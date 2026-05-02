@@ -410,5 +410,17 @@
     "Preset Switch Failed": "切换预设失败",
 
     "Restore Cross Preset Warning": "此快照属于预设「{{snapshotPreset}}」，请先切换到该预设再进行恢复。",
-    "Restore Cross Preset Title": "无法跨预设恢复"
+    "Restore Cross Preset Title": "无法跨预设恢复",
+
+    "Grouping Menu Rename Series": "重命名此分组…",
+    "Grouping Menu Copy Name": "复制预设名",
+    "Grouping Copied": "已复制到剪贴板",
+    "Grouping New Group Btn": "+ 新建分组",
+    "Grouping New Group Prompt": "输入新的分组名称",
+    "Grouping New Group Created": "分组「{{name}}」已创建",
+    "Grouping Rename Prompt": "输入分组「{{name}}」的新名称",
+    "Grouping Renamed": "分组已重命名为「{{name}}」",
+    "Grouping Custom Badge": "自定义",
+    "Grouping Delete Group Confirm": "删除自定义分组「{{name}}」？其中的预设将恢复自动识别。",
+    "Grouping Menu Delete Group": "删除此分组"
 }

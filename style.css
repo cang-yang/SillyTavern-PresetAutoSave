@@ -1384,9 +1384,10 @@
     color: #a78bfa;
 }
 
-/* --- 菜单按钮 --- */
-.pas-gm-menu-btn {
-    opacity: 0.4;
+/* --- 菜单按钮（预设级 + 系列级） --- */
+.pas-gm-menu-btn,
+.pas-gm-series-menu-btn {
+    opacity: 0.6;
     cursor: pointer;
     padding: 2px 6px;
     border-radius: 4px;
@@ -1399,8 +1400,10 @@
     flex-shrink: 0;
     user-select: none;
 }
-.pas-gm-preset:hover .pas-gm-menu-btn { opacity: 1; }
-.pas-gm-menu-btn:hover {
+.pas-gm-preset:hover .pas-gm-menu-btn,
+.pas-gm-series-header:hover .pas-gm-series-menu-btn { opacity: 1; }
+.pas-gm-menu-btn:hover,
+.pas-gm-series-menu-btn:hover {
     background: var(--pas-surface-3);
     opacity: 1;
 }
@@ -1451,6 +1454,20 @@
     border-color: rgba(147, 51, 234, 0.85) !important;
     background: rgba(147, 51, 234, 0.15) !important;
     box-shadow: 0 0 16px rgba(147, 51, 234, 0.25);
+}
+
+/* --- AQ-1: 上下文菜单分隔线 --- */
+.pas-gm-ctx-separator {
+    height: 1px;
+    background: var(--pas-border);
+    margin: 3px 8px;
+}
+/* --- AQ-1: 危险操作（删除分组）红色样式 --- */
+.pas-gm-ctx-item-danger {
+    color: var(--pas-c-del, #f87171) !important;
+}
+.pas-gm-ctx-item-danger i {
+    color: var(--pas-c-del, #f87171) !important;
 }
 
 /* --- 上下文菜单 --- */
@@ -1539,6 +1556,50 @@
     font-weight: 500;
 }
 .pas-gm-move-new i { color: var(--pas-accent); }
+
+/* --- AQ-1: + 新建分组按钮 --- */
+.pas-gm-new-group-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px dashed var(--pas-accent, #7c6dd8);
+    background: transparent;
+    color: var(--pas-accent, #7c6dd8);
+    cursor: pointer;
+    font-size: 0.85em;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s;
+}
+.pas-gm-new-group-btn:hover {
+    background: var(--pas-accent, #7c6dd8);
+    color: #fff;
+}
+
+/* --- AQ-1: 自定义分组标记 --- */
+.pas-gm-custom-icon {
+    color: #ffa500;
+    font-size: 0.78em;
+    flex-shrink: 0;
+}
+.pas-gm-badge-custom {
+    background: rgba(255, 165, 0, 0.15);
+    color: #ffa500;
+    font-size: 0.7em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    line-height: 1.6;
+    font-weight: 500;
+}
+
+/* --- AQ-1: header 右侧按钮组 --- */
+.pas-gm-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
 
 /* =========================================================
  * 首次扫描向导弹窗
@@ -4230,4 +4291,37 @@ body.pas-light .pas-gm-body::-webkit-scrollbar-thumb {
 }
 body.pas-light .pas-gm-body::-webkit-scrollbar-thumb:hover {
     background: rgba(0, 0, 0, 0.30);
+}
+
+/* --- AQ-1: 亮色主题 — 新建分组按钮 --- */
+body.pas-light .pas-gm-new-group-btn {
+    border-color: var(--pas-accent, #6a5acd);
+    color: var(--pas-accent, #6a5acd);
+}
+body.pas-light .pas-gm-new-group-btn:hover {
+    background: var(--pas-accent, #6a5acd);
+    color: #fff;
+}
+/* --- AQ-1: 亮色主题 — 自定义分组标记 --- */
+body.pas-light .pas-gm-badge-custom {
+    background: rgba(255, 140, 0, 0.15);
+    color: #cc7000;
+}
+body.pas-light .pas-gm-custom-icon {
+    color: #cc7000;
+}
+/* --- AQ-1: 亮色主题 — 系列级菜单按钮 --- */
+body.pas-light .pas-gm-series-menu-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+}
+/* --- AQ-1: 亮色主题 — 危险操作 --- */
+body.pas-light .pas-gm-ctx-item-danger {
+    color: var(--pas-c-del, #dc2626) !important;
+}
+body.pas-light .pas-gm-ctx-item-danger i {
+    color: var(--pas-c-del, #dc2626) !important;
+}
+/* --- AQ-1: 亮色主题 — 上下文菜单分隔线 --- */
+body.pas-light .pas-gm-ctx-separator {
+    background: rgba(0, 0, 0, 0.10);
 }

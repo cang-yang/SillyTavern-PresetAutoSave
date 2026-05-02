@@ -791,6 +791,8 @@ async function onApplyVersionDirect(presetName) {
 let _gmOverrides = {};
 let _gmAllNames = [];
 let _gmPanelCtx = null;
+/** @type {Set<string>} 尚未有预设的自定义空分组名（AQ-1） */
+let _pendingCustomGroups = new Set();
 
 /**
  * 构建分组数据结构（AI-0 重构：不再有 excluded）
@@ -804,9 +806,12 @@ function buildGroupingData() {
 }
 
 /**
- * 渲染分组管理 HTML（AI-0 重构：删除"未分组"区域，新增"自动分组"目标区域）
+ * 渲染分组管理 HTML（AI-0 重构 + AQ-1 增强：新建分组按钮 + 自定义标记 + 系列级 ⋯ 菜单）
  */
 function renderGroupingHTML(groups) {
+    // AQ-1: 收集已存在的 seriesKey，用于去重 _pendingCustomGroups
+    const existingKeys = new Set(groups.map(g => normalizeSeriesKey(g.series)));
+
     const seriesCardsHtml = groups.map(g => {
         const itemsHtml = g.items.map(it => {
             const isManual = it.manualOverride;
@@ -822,13 +827,20 @@ function renderGroupingHTML(groups) {
             </div>`;
         }).join('');
 
+        // AQ-1: 判断是否为纯自定义分组（所有成员都是手动覆盖 + 没有自动识别到这个 seriesKey 的预设）
+        const isCustomGroup = g.items.length > 0 && g.items.every(it => it.manualOverride);
+        const customBadgeHtml = isCustomGroup
+            ? ` <i class="fa-solid fa-star pas-gm-custom-icon" title="${escapeAttr(t('Grouping Custom Badge'))}"></i><span class="pas-gm-badge pas-gm-badge-custom">${escapeHtml(t('Grouping Custom Badge'))}</span>`
+            : '';
+
         const seriesKey = normalizeSeriesKey(g.series);
         return `
-        <div class="pas-gm-series collapsed" data-series-key="${escapeAttr(seriesKey)}">
+        <div class="pas-gm-series collapsed" data-series-key="${escapeAttr(seriesKey)}"${isCustomGroup ? ' data-custom-group="1"' : ''}>
             <div class="pas-gm-series-header">
                 <i class="fa-solid fa-box-open pas-gm-series-icon"></i>
-                <span class="pas-gm-series-name">${escapeHtml(g.series)}</span>
+                <span class="pas-gm-series-name">${escapeHtml(g.series)}</span>${customBadgeHtml}
                 <span class="pas-gm-series-count">${escapeHtml(t('Grouping Count', { count: g.items.length }))}</span>
+                <span class="pas-gm-series-menu-btn" title="⋯">⋯</span>
                 <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
             </div>
             <div class="pas-gm-series-body">
@@ -836,6 +848,28 @@ function renderGroupingHTML(groups) {
             </div>
         </div>`;
     }).join('');
+
+    // AQ-1: 渲染 _pendingCustomGroups 中尚未有预设的空分组
+    const pendingCardsHtml = [..._pendingCustomGroups]
+        .filter(name => !existingKeys.has(normalizeSeriesKey(name)))
+        .map(name => {
+            const seriesKey = normalizeSeriesKey(name);
+            return `
+        <div class="pas-gm-series collapsed" data-series-key="${escapeAttr(seriesKey)}" data-custom-group="1">
+            <div class="pas-gm-series-header">
+                <i class="fa-solid fa-box-open pas-gm-series-icon"></i>
+                <span class="pas-gm-series-name">${escapeHtml(name)}</span>
+                <i class="fa-solid fa-star pas-gm-custom-icon" title="${escapeAttr(t('Grouping Custom Badge'))}"></i>
+                <span class="pas-gm-badge pas-gm-badge-custom">${escapeHtml(t('Grouping Custom Badge'))}</span>
+                <span class="pas-gm-series-count">${escapeHtml(t('Grouping Count', { count: 0 }))}</span>
+                <span class="pas-gm-series-menu-btn" title="⋯">⋯</span>
+                <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
+            </div>
+            <div class="pas-gm-series-body">
+                <div class="pas-gm-empty">${escapeHtml(t('Grouping Empty Series'))}</div>
+            </div>
+        </div>`;
+        }).join('');
 
     // "自动分组"目标区域 — AI-0 新设计（替代旧"未分组"区域）
     const autoZoneSection = `
@@ -854,13 +888,19 @@ function renderGroupingHTML(groups) {
             <i class="fa-solid fa-shuffle"></i>
             <h3>${escapeHtml(t('Grouping Manage Title'))}</h3>
         </div>
-        <button class="menu_button pas-gm-reset-all-btn" type="button" title="${escapeAttr(t('Grouping Reset All'))}">
-            <i class="fa-solid fa-rotate-right"></i> ${escapeHtml(t('Grouping Reset All'))}
-        </button>
+        <div class="pas-gm-header-actions">
+            <button class="pas-gm-new-group-btn" type="button" title="${escapeAttr(t('Grouping New Group Btn'))}">
+                ${escapeHtml(t('Grouping New Group Btn'))}
+            </button>
+            <button class="menu_button pas-gm-reset-all-btn" type="button" title="${escapeAttr(t('Grouping Reset All'))}">
+                <i class="fa-solid fa-rotate-right"></i> ${escapeHtml(t('Grouping Reset All'))}
+            </button>
+        </div>
     </div>
     <div class="pas-gm-desc">${escapeHtml(t('Grouping Manage Desc'))}</div>
     <div class="pas-gm-body">
         ${seriesCardsHtml}
+        ${pendingCardsHtml}
         ${autoZoneSection}
     </div>
 </div>`;
@@ -888,7 +928,7 @@ function saveGroupingSettings(overrides) {
 }
 
 /**
- * 执行移动：将预设移到目标系列（AI-0 重构）
+ * 执行移动：将预设移到目标系列（AI-0 重构 + AQ-1：移入后清理 _pendingCustomGroups）
  */
 function performMove(presetName, targetSeriesKey, container) {
     // 拖到"自动分组"区 = 恢复自动识别
@@ -904,10 +944,23 @@ function performMove(presetName, targetSeriesKey, container) {
     if (autoKey === targetSeriesKey) {
         delete _gmOverrides[presetName];
     } else {
-        // 找到目标系列的显示名（从现有 groups 中查找）
+        // 找到目标系列的显示名（从现有 groups 中查找，或从 _pendingCustomGroups 中查找）
         const { groups } = buildGroupingData();
         const targetGroup = groups.find(g => normalizeSeriesKey(g.series) === targetSeriesKey);
-        _gmOverrides[presetName] = targetGroup ? targetGroup.series : targetSeriesKey;
+        if (targetGroup) {
+            _gmOverrides[presetName] = targetGroup.series;
+        } else {
+            // AQ-1: 可能是从 _pendingCustomGroups 来的空分组
+            const pendingName = [..._pendingCustomGroups].find(n => normalizeSeriesKey(n) === targetSeriesKey);
+            _gmOverrides[presetName] = pendingName || targetSeriesKey;
+        }
+    }
+    // AQ-1: 有预设移入后，该分组不再是"待建"状态
+    for (const pName of _pendingCustomGroups) {
+        if (normalizeSeriesKey(pName) === targetSeriesKey) {
+            _pendingCustomGroups.delete(pName);
+            break;
+        }
     }
     saveGroupingSettings(_gmOverrides);
     refreshGroupingUI(container);
@@ -1030,17 +1083,140 @@ async function showMoveDialog(presetName, container) {
 }
 
 /**
- * 绑定分组管理弹窗的所有事件（AI-0 重构：删除 exclude 菜单项，新增自动分组区拖拽）
+ * AQ-1: 创建自定义空分组
+ */
+async function onCreateCustomGroup(container) {
+    const inputPopup = createPopupSafe(
+        t('Grouping New Group Prompt'),
+        'INPUT',
+        { okButton: t('Confirm'), cancelButton: t('Cancel'), rows: 1 },
+        ''
+    );
+    let name = null;
+    if (inputPopup) {
+        try { name = await inputPopup.show(); } catch (_) {}
+    } else {
+        name = window.prompt(t('Grouping New Group Prompt'));
+    }
+    if (name === null || name === undefined || name === false) return;
+    const trimmed = String(name).trim();
+    if (!trimmed) return;
+
+    // 检查是否已存在同名分组
+    const { groups } = buildGroupingData();
+    const targetKey = normalizeSeriesKey(trimmed);
+    const exists = groups.some(g => normalizeSeriesKey(g.series) === targetKey)
+        || [..._pendingCustomGroups].some(n => normalizeSeriesKey(n) === targetKey);
+    if (exists) {
+        toast.warning(t('Grouping New Group Prompt') + ': ' + trimmed);
+        return;
+    }
+
+    // 添加到待建空分组集合，刷新 UI 让其显示为空卡片
+    _pendingCustomGroups.add(trimmed);
+    toast.success(t('Grouping New Group Created', { name: trimmed }));
+    refreshGroupingUI(container);
+}
+
+/**
+ * AQ-1: 重命名系列分组（批量更新 overrides 中指向 oldSeriesKey 的值）
+ */
+async function onRenameSeriesGroup(oldSeriesKey, container) {
+    // 找到显示名
+    const { groups } = buildGroupingData();
+    const group = groups.find(g => normalizeSeriesKey(g.series) === oldSeriesKey);
+    const displayName = group ? group.series : oldSeriesKey;
+
+    const inputPopup = createPopupSafe(
+        t('Grouping Rename Prompt', { name: displayName }),
+        'INPUT',
+        { okButton: t('Confirm'), cancelButton: t('Cancel'), rows: 1 },
+        displayName
+    );
+    let newName = null;
+    if (inputPopup) {
+        try { newName = await inputPopup.show(); } catch (_) {}
+    } else {
+        newName = window.prompt(t('Grouping Rename Prompt', { name: displayName }), displayName);
+    }
+    if (newName === null || newName === undefined || newName === false) return;
+    const trimmed = String(newName).trim();
+    if (!trimmed || trimmed === displayName) return;
+
+    // 将所有指向 oldSeriesKey 的 overrides 更新为新名
+    for (const [presetName, seriesVal] of Object.entries(_gmOverrides)) {
+        if (normalizeSeriesKey(seriesVal) === oldSeriesKey) {
+            _gmOverrides[presetName] = trimmed;
+        }
+    }
+
+    // 也更新 _pendingCustomGroups
+    for (const pName of _pendingCustomGroups) {
+        if (normalizeSeriesKey(pName) === oldSeriesKey) {
+            _pendingCustomGroups.delete(pName);
+            _pendingCustomGroups.add(trimmed);
+            break;
+        }
+    }
+
+    saveGroupingSettings(_gmOverrides);
+    toast.success(t('Grouping Renamed', { name: trimmed }));
+    refreshGroupingUI(container);
+}
+
+/**
+ * AQ-1: 删除纯自定义分组（将其中所有预设的 overrides 删除，恢复自动分组）
+ */
+async function onDeleteCustomGroup(seriesKey, container) {
+    const { groups } = buildGroupingData();
+    const group = groups.find(g => normalizeSeriesKey(g.series) === seriesKey);
+    const displayName = group ? group.series : seriesKey;
+
+    const ok = await confirmSafe(
+        t('Grouping Menu Delete Group'),
+        t('Grouping Delete Group Confirm', { name: displayName })
+    );
+    if (!ok) return;
+
+    // 删除该分组内所有预设的 overrides
+    if (group) {
+        for (const it of group.items) {
+            delete _gmOverrides[it.presetName];
+        }
+    }
+
+    // 也从 _pendingCustomGroups 移除
+    for (const pName of _pendingCustomGroups) {
+        if (normalizeSeriesKey(pName) === seriesKey) {
+            _pendingCustomGroups.delete(pName);
+            break;
+        }
+    }
+
+    saveGroupingSettings(_gmOverrides);
+    refreshGroupingUI(container);
+}
+
+/**
+ * 绑定分组管理弹窗的所有事件（AI-0 重构 + AQ-1 增强：系列级菜单、复制预设名、新建分组）
  */
 function bindGroupingEvents(container) {
     if (!container) return;
+
+    // --- AQ-1: "+ 新建分组"按钮 ---
+    const newGroupBtn = container.querySelector('.pas-gm-new-group-btn');
+    if (newGroupBtn) {
+        const newBtn = newGroupBtn.cloneNode(true);
+        newGroupBtn.parentNode.replaceChild(newBtn, newGroupBtn);
+        newBtn.addEventListener('click', () => onCreateCustomGroup(container));
+    }
 
     // --- 折叠/展开系列卡片 ---
     container.querySelectorAll('.pas-gm-series-header').forEach(header => {
         const newHeader = header.cloneNode(true);
         header.parentNode.replaceChild(newHeader, header);
         newHeader.addEventListener('click', (e) => {
-            if (e.target.closest('.pas-gm-menu-btn')) return;
+            if (e.target.closest('.pas-gm-menu-btn') || e.target.closest('.pas-gm-series-menu-btn')) return;
             const series = newHeader.closest('.pas-gm-series');
             if (series) series.classList.toggle('collapsed');
         });
@@ -1120,7 +1296,7 @@ function bindGroupingEvents(container) {
         });
     }
 
-    // --- ⋯ 菜单（AI-0：删除"从分组中移除"选项，新增"恢复自动分组"） ---
+    // --- ⋯ 菜单（AI-0 + AQ-1：新增"复制预设名"） ---
     container.querySelectorAll('.pas-gm-menu-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1141,6 +1317,10 @@ function bindGroupingEvents(container) {
                 ${isManual ? `<div class="pas-gm-ctx-item" data-action="reset">
                     <i class="fa-solid fa-wand-magic-sparkles"></i> ${escapeHtml(t('Grouping Menu Reset Auto'))}
                 </div>` : ''}
+                <div class="pas-gm-ctx-separator"></div>
+                <div class="pas-gm-ctx-item" data-action="copy-name">
+                    <i class="fa-solid fa-copy"></i> ${escapeHtml(t('Grouping Menu Copy Name'))}
+                </div>
             `;
 
             const rect = btn.getBoundingClientRect();
@@ -1169,6 +1349,10 @@ function bindGroupingEvents(container) {
                             t('Grouping Reset Confirm', { name: presetName })
                         );
                         if (ok) performResetOne(presetName, container);
+                    } else if (action === 'copy-name') {
+                        navigator.clipboard.writeText(presetName)
+                            .then(() => toast.success(t('Grouping Copied')))
+                            .catch(() => toast.error(t('Copy Failed')));
                     }
                 });
             });
@@ -1180,6 +1364,74 @@ function bindGroupingEvents(container) {
                 }
             };
             setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
+        });
+    });
+
+    // --- AQ-1: 系列卡片级 ⋯ 菜单（重命名分组 / 删除分组） ---
+    container.querySelectorAll('.pas-gm-series-menu-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            container.querySelectorAll('.pas-gm-context-menu').forEach(m => m.remove());
+
+            const seriesEl = btn.closest('.pas-gm-series');
+            const seriesKey = seriesEl?.getAttribute('data-series-key');
+            if (!seriesKey) return;
+
+            const isCustom = seriesEl.getAttribute('data-custom-group') === '1';
+
+            const menu = document.createElement('div');
+            menu.className = 'pas-gm-context-menu';
+            menu.innerHTML = `
+                <div class="pas-gm-ctx-item" data-action="rename-group">
+                    <i class="fa-solid fa-pen"></i> ${escapeHtml(t('Grouping Menu Rename Series'))}
+                </div>
+                ${isCustom ? `<div class="pas-gm-ctx-item pas-gm-ctx-item-danger" data-action="delete-group">
+                    <i class="fa-solid fa-trash"></i> ${escapeHtml(t('Grouping Menu Delete Group'))}
+                </div>` : ''}
+            `;
+
+            const rect = btn.getBoundingClientRect();
+            menu.style.position = 'fixed';
+            menu.style.visibility = 'hidden';
+            document.body.appendChild(menu);
+            const menuWidth = menu.offsetWidth || 150;
+            const menuHeight = menu.offsetHeight || 80;
+            let menuLeft = rect.left - menuWidth;
+            menuLeft = Math.max(8, Math.min(menuLeft, window.innerWidth - menuWidth - 8));
+            let menuTop = rect.bottom + 4;
+            menuTop = Math.min(menuTop, window.innerHeight - menuHeight - 8);
+            menu.style.left = `${menuLeft}px`;
+            menu.style.top = `${menuTop}px`;
+            menu.style.visibility = '';
+
+            menu.querySelectorAll('.pas-gm-ctx-item').forEach(item => {
+                item.addEventListener('click', async () => {
+                    const action = item.getAttribute('data-action');
+                    menu.remove();
+                    if (action === 'rename-group') {
+                        await onRenameSeriesGroup(seriesKey, container);
+                    } else if (action === 'delete-group') {
+                        await onDeleteCustomGroup(seriesKey, container);
+                    }
+                });
+            });
+
+            const closeMenu = (ev) => {
+                if (!menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', closeMenu, true);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
+        });
+    });
+
+    // --- 系列卡片右键菜单 ---
+    container.querySelectorAll('.pas-gm-series-header').forEach(header => {
+        header.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const menuBtn = header.querySelector('.pas-gm-series-menu-btn');
+            if (menuBtn) menuBtn.click();
         });
     });
 
@@ -1203,6 +1455,7 @@ function bindGroupingEvents(container) {
 export async function showGroupingManager(panelCtx) {
     if (_groupingManagerPopup) return;
     _gmPanelCtx = panelCtx;
+    _pendingCustomGroups.clear(); // AQ-1: 每次打开弹窗清空临时空分组
 
     // AK-1 重构：只使用 getAllPresetNames() 作为唯一数据源
     // 不再从快照补充——旧逻辑因为 getAllPresetNames() 返回数字索引导致
