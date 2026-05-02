@@ -948,8 +948,9 @@ export function groupNamesBySeries(names, overrides = null, excluded = null) {
     const map = new Map();
     for (const n of names) {
         const info = getSeriesInfo(n, overrides, excluded);
-        if (info.excluded) continue;
-        const series = info.series || n;
+        // AH-1 fix: excluded 预设"不参与自动分组" ≠ "从界面上隐藏"
+        // 每个 excluded 预设自成一组（系列键 = 原名，不做版本拆分）
+        const series = info.excluded ? n : (info.series || n);
         const normKey = normalizeSeriesKey(series);
 
         if (!map.has(normKey)) {
@@ -957,9 +958,9 @@ export function groupNamesBySeries(names, overrides = null, excluded = null) {
         }
         map.get(normKey).items.push({
             presetName: n,
-            version: info.version,
-            duplicate: info.duplicate,
-            kind: info.kind,
+            version: info.excluded ? '' : info.version,
+            duplicate: info.excluded ? '' : info.duplicate,
+            kind: info.excluded ? '' : info.kind,
             manualOverride: info.manualOverride,
         });
     }
@@ -1022,8 +1023,8 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
         if (!presetName) continue;
 
         const info = getSeriesInfo(presetName, overrides, excluded);
-        if (info.excluded) continue;
-        const rawSeriesKey = info.series || presetName;
+        // AH-1 fix: excluded 预设自成独立系列（系列键 = 原名），不做版本拆分
+        const rawSeriesKey = info.excluded ? presetName : (info.series || presetName);
         const normKey = normalizeSeriesKey(rawSeriesKey);
         // 首次出现的大小写形式作为显示名
         if (!normToDisplay.has(normKey)) {
@@ -1051,9 +1052,10 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
             ver = {
                 apiId,
                 presetName,
-                version: info.version,
-                duplicate: info.duplicate,
-                kind: info.kind,
+                // AH-1: excluded 预设不做版本拆分
+                version: info.excluded ? '' : info.version,
+                duplicate: info.excluded ? '' : info.duplicate,
+                kind: info.excluded ? '' : info.kind,
                 manualOverride: info.manualOverride,
                 snapshots: [],
                 latestTime: 0,

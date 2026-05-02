@@ -542,10 +542,11 @@ export function renderSeriesView(filtered, panelCtx) {
         }
 
         for (const { apiId, presetName } of allEntries.values()) {
-            if (excluded[presetName]) continue;
             const info = getSeriesInfo(presetName, overrides, excluded);
-            if (info.excluded) continue;
-            const seriesKey = _resolveSeriesKey(info.series || presetName);
+            // AH-1 fix: excluded 预设自成独立系列（不跳过，用原名做系列键）
+            const seriesKey = _resolveSeriesKey(
+                info.excluded ? presetName : (info.series || presetName)
+            );
 
             let series = seriesMap.get(seriesKey);
             if (!series) {
@@ -567,9 +568,10 @@ export function renderSeriesView(filtered, panelCtx) {
                 series.versions.push({
                     apiId,
                     presetName,
-                    version: info.version,
-                    duplicate: info.duplicate,
-                    kind: info.kind,
+                    // AH-1: excluded 预设不做版本拆分
+                    version: info.excluded ? '' : info.version,
+                    duplicate: info.excluded ? '' : info.duplicate,
+                    kind: info.excluded ? '' : info.kind,
                     manualOverride: info.manualOverride,
                     snapshots: [],
                     latestTime: 0,
@@ -593,10 +595,12 @@ export function renderSeriesView(filtered, panelCtx) {
             for (const arch of _archivedCache) {
                 if (arch.apiId && arch.apiId !== currentApi) continue;
                 const presetName = arch.presetName;
-                if (!presetName || excluded[presetName]) continue;
+                if (!presetName) continue;
                 const info = getSeriesInfo(presetName, overrides, excluded);
-                if (info.excluded) continue;
-                const seriesKey = _resolveSeriesKey(info.series || presetName);
+                // AH-1 fix: excluded 预设自成独立系列
+                const seriesKey = _resolveSeriesKey(
+                    info.excluded ? presetName : (info.series || presetName)
+                );
 
                 let series = seriesMap.get(seriesKey);
                 if (!series) {
@@ -616,9 +620,10 @@ export function renderSeriesView(filtered, panelCtx) {
                     series.versions.push({
                         apiId: arch.apiId,
                         presetName,
-                        version: info.version,
-                        duplicate: info.duplicate,
-                        kind: info.kind,
+                        // AH-1: excluded 预设不做版本拆分
+                        version: info.excluded ? '' : info.version,
+                        duplicate: info.excluded ? '' : info.duplicate,
+                        kind: info.excluded ? '' : info.kind,
                         manualOverride: info.manualOverride,
                         snapshots: [],
                         latestTime: arch.archivedAt || 0,

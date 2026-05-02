@@ -985,9 +985,9 @@ export function listSeriesFromNativeSelects() {
         const seriesGroups = new Map();
         const seriesDisplayKeys = new Map(); // normKey → first-seen original case
         for (const name of unique) {
-            if (excluded[name]) continue;
             const info = getSeriesInfo(name, overrides, excluded);
-            const rawSeriesKey = info.series || name;
+            // AH-1 fix: excluded 预设自成独立系列，不跳过
+            const rawSeriesKey = info.excluded ? name : (info.series || name);
             const normKey = normalizeSeriesKey(rawSeriesKey);
             if (!seriesGroups.has(normKey)) {
                 seriesGroups.set(normKey, []);
@@ -995,8 +995,9 @@ export function listSeriesFromNativeSelects() {
             }
             seriesGroups.get(normKey).push({
                 presetName: name,
-                version: info.version,
-                duplicate: info.duplicate,
+                // AH-1: excluded 预设不做版本拆分
+                version: info.excluded ? '' : info.version,
+                duplicate: info.excluded ? '' : info.duplicate,
                 manualOverride: info.manualOverride,
             });
         }
