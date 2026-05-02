@@ -20,6 +20,7 @@ import {
     renameSnapshot, togglePinSnapshot,
     addSnapshot, TRIGGER, TRIGGER_LABEL_KEYS, formatBytes,
     hashPreset,
+    getSnapshots,
 } from './history-store.js';
 import {
     sanitizePresetForExport,
@@ -540,14 +541,30 @@ async function onDelete(snapshotId, panelCtx) {
 async function onClearPreset(key, panelCtx) {
     const { apiId, presetName } = parsePresetKey(key);
     if (!apiId || !presetName) return;
+
+    // AY-1: 获取该预设的所有快照，判断是否有可清理的历史
+    const snapshots = await getSnapshots(apiId, presetName);
+    if (!snapshots || snapshots.length <= 1) {
+        toast.info(t('Clear Preset No History'));
+        return;
+    }
+
     const ok = await confirmSafe(
         t('Clear Preset Confirm'),
         t('Clear Preset Hint', { name: escapeHtml(presetName) })
     );
     if (!ok) return;
-    // AX-1: 仅清空快照历史。删除预设文件的功能已由独立的"删除预设"按钮（onDeletePreset）负责，
-    //       不再在此二次询问，避免两个按钮功能串扰。
-    await clearPresetHistory(apiId, presetName);
+
+    // AY-1: 保留最新的一条快照作为当前基准，只删除历史旧快照
+    const sorted = [...snapshots].sort((a, b) => b.timestamp - a.timestamp);
+    // sorted[0] 是最新的，保留它；删除其余的
+    let deletedCount = 0;
+    for (let i = 1; i < sorted.length; i++) {
+        const result = await deleteSnapshot(sorted[i].id, { force: true });
+        if (result) deletedCount++;
+    }
+
+    logger.info(`[onClearPreset] kept newest snapshot, deleted ${deletedCount}/${sorted.length - 1} old snapshots for [${apiId}] ${presetName}`);
     toast.success(t('Cleared'));
     await panelCtx.refreshData();
 }
