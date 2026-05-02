@@ -38,8 +38,6 @@ import {
     refreshTakeover,
     seedSnapshotsIfNeeded,
     seedSnapshotForPreset,
-    restoreAllFromArchive,
-    listAllPresetsIncludingDetached,
 } from './preset-takeover.js';
 import { listArchivedPresets } from './archive-store.js';
 import {

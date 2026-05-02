@@ -29,7 +29,6 @@ import {
 import {
     getSeriesInfo,
     pickRepresentativeVersion,
-    pickLatestVersion,
     normalizeSeriesKey,
 } from './preset-grouping.js';
 import {
