@@ -83,6 +83,7 @@ let _debounceTimer = null;
 let _ignoreInput = false;          // 切换期间忽略输入事件
 let _ignoreInputTimer = null;      // 自动重置定时器，防止永久卡死
 let _isInternalSave = false;       // 内部保存中（防递归）
+let _restoreInProgress = false;    // AL-1: 原子恢复操作进行中（抑制所有事件副作用）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
 let _suspendUntil = 0;             // SETTINGS_UPDATED 风暴期间临时挂起，用 Date.now()
@@ -221,7 +222,7 @@ function startPolling() {
     _pollingMode = idle ? 'low' : 'normal';
 
     _pollingTimer = setInterval(() => {
-        if (!_enabled || _ignoreInput || _isInternalSave) return;
+        if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
         if (Date.now() < _suspendUntil) return;
         if (_debounceTimer) return;
         // 标签页不可见时跳过——节省后台 CPU
@@ -405,7 +406,7 @@ function describeElement(el) {
 }
 
 function onElementInput(event) {
-    if (!_enabled || _ignoreInput || _isInternalSave) return;
+    if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
     if (!isElementWatchable(event.target)) return;
 
     const el = event.target;
@@ -440,7 +441,7 @@ function onElementInput(event) {
 }
 
 function onElementChange(event) {
-    if (!_enabled || _ignoreInput || _isInternalSave) return;
+    if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
     if (!isElementWatchable(event.target)) return;
 
     const el = event.target;
@@ -489,7 +490,7 @@ function bindPromptManagerListeners() {
      * 仅保留 childList observer 来捕获 SortableJS 拖拽排序这种纯 DOM 操作。
      */
     const handler = (event) => {
-        if (!_enabled || _ignoreInput || _isInternalSave) return;
+        if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
 
         const target = event.target;
         if (!target || !target.closest) return;
@@ -536,7 +537,7 @@ function bindPromptManagerListeners() {
     let _pmMutationPending = false;
     try {
         _promptObserver = new MutationObserver((mutations) => {
-            if (!_enabled || _ignoreInput || _isInternalSave) return;
+            if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
             if (_pmMutationPending) return;
 
             // 快速过滤：只关心新增/删除节点
@@ -553,7 +554,7 @@ function bindPromptManagerListeners() {
             _pmMutationPending = true;
             queueMicrotask(() => {
                 _pmMutationPending = false;
-                if (!_enabled || _ignoreInput || _isInternalSave) return;
+                if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
                 _stats.triggeredByPrompt++;
                 logger.debug('[PromptManager] DOM childList mutation');
                 scheduleAutoSave(getSettings().debounceMs, 'prompt-mutation');
@@ -602,8 +603,9 @@ function unbindPromptManagerListeners() {
  * @param {string} [reason] 触发原因（用于日志诊断）
  */
 export function scheduleAutoSave(delay = null, reason = 'unspecified') {
-    // 切换中 / 内部保存中 / 未启用 -> 静默忽略
+    // 切换中 / 内部保存中 / 未启用 / 原子恢复中 -> 静默忽略
     if (!_enabled) return;
+    if (_restoreInProgress) return;
     if (_ignoreInput) {
         // 静默忽略：切换期间这条会爆量，没有诊断价值
         return;
@@ -977,7 +979,7 @@ function bindPresetEvents() {
     // ----- SETTINGS_UPDATED：所有内部 state 变化的可靠信号 -----
     const settingsUpdated = getEventType('SETTINGS_UPDATED', 'settings_updated');
     _eventUnsubscribers.push(on(settingsUpdated, () => {
-        if (!_enabled || _ignoreInput || _isInternalSave) return;
+        if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
         if (Date.now() < _suspendUntil) return;
         _stats.triggeredBySettingsUpdated++;
         logger.debug('[ST event] SETTINGS_UPDATED');
@@ -994,6 +996,7 @@ function bindPresetEvents() {
     //   3. 否则只设置 ignoreInput 跳过即可（高频切换场景几乎不写盘）
     const oaiBefore = getEventType('OAI_PRESET_CHANGED_BEFORE', 'oai_preset_changed_before');
     _eventUnsubscribers.push(on(oaiBefore, async () => {
+        if (_restoreInProgress) return; // AL-1: 恢复期间不做 switch guard
         if (!getSettings().enableSwitchGuard) {
             setIgnoreInput(true);
             return;
@@ -1054,6 +1057,7 @@ function bindPresetEvents() {
     // ----- OpenAI 切换后事件 -----
     const oaiAfter = getEventType('OAI_PRESET_CHANGED_AFTER', 'oai_preset_changed_after');
     _eventUnsubscribers.push(on(oaiAfter, () => {
+        if (_restoreInProgress) return; // AL-1: 恢复期间跳过切换后逻辑
         // 切换 → 大量 SETTINGS_UPDATED + DOM mutation
         // 实测 ST 可能持续 2-3 秒触发各种事件，因此把窗口加大到 4 秒
         _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
@@ -1072,6 +1076,7 @@ function bindPresetEvents() {
     // ----- 通用预设切换事件（适用于所有 API）-----
     const presetChanged = getEventType('PRESET_CHANGED', 'preset_changed');
     _eventUnsubscribers.push(on(presetChanged, async (data) => {
+        if (_restoreInProgress) return; // AL-1: 恢复期间跳过预设切换逻辑
         cancelPendingSave();
         setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
         _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
@@ -1092,6 +1097,7 @@ function bindPresetEvents() {
     // ----- 主 API 切换 -----
     const mainApiChanged = getEventType('MAIN_API_CHANGED', 'main_api_changed');
     _eventUnsubscribers.push(on(mainApiChanged, () => {
+        if (_restoreInProgress) return; // AL-1: 恢复期间跳过 API 切换逻辑
         cancelPendingSave();
         setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
         _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
@@ -1194,6 +1200,74 @@ export function resetLastSavedHash() {
     logger.warn('lastSavedHash forcibly reset');
 }
 
+/**
+ * AL-1: 开始原子恢复操作。
+ * 在此期间，所有自动保存事件处理器（SETTINGS_UPDATED、preset_changed、
+ * OAI_PRESET_CHANGED_BEFORE/AFTER、DOM input/change、MAIN_API_CHANGED）
+ * 均被完全屏蔽，不会产生任何副作用。
+ *
+ * 调用者必须确保在操作完成后调用 endAtomicRestore()。
+ * 内置 10 秒超时自愈，防止异常导致永久卡住。
+ */
+let _restoreAutoResetTimer = null;
+const RESTORE_TIMEOUT_MS = 10_000;
+
+export function beginAtomicRestore() {
+    _restoreInProgress = true;
+    cancelPendingSave();
+    setIgnoreInput(true, RESTORE_TIMEOUT_MS + 1000);
+
+    // 超时自愈
+    if (_restoreAutoResetTimer) clearTimeout(_restoreAutoResetTimer);
+    _restoreAutoResetTimer = setTimeout(() => {
+        if (_restoreInProgress) {
+            logger.warn('Atomic restore auto-reset after timeout');
+            endAtomicRestore(null);
+        }
+    }, RESTORE_TIMEOUT_MS);
+
+    logger.debug('Atomic restore started — all event handlers suppressed');
+}
+
+/**
+ * AL-1: 结束原子恢复操作，恢复正常事件处理。
+ *
+ * @param {string|null} hash - 恢复后预设的指纹哈希。
+ *   传入具体 hash 值：将 _lastSavedHash 设为该值，表示"恢复后的状态就是已保存状态"
+ *   传入 null：回退到 resetLastSavedHash 行为（强制下次认为有变化）
+ * @param {object} [tracking] - 可选的跟踪信息更新
+ * @param {string} [tracking.apiId] - 新的 API ID
+ * @param {string} [tracking.presetName] - 新的预设名
+ */
+export function endAtomicRestore(hash, tracking = null) {
+    if (_restoreAutoResetTimer) {
+        clearTimeout(_restoreAutoResetTimer);
+        _restoreAutoResetTimer = null;
+    }
+
+    // 更新跟踪信息
+    if (tracking) {
+        if (tracking.apiId) _currentApiId = tracking.apiId;
+        if (tracking.presetName) _currentPresetName = tracking.presetName;
+    }
+
+    // 设置 hash：传入具体值表示"已保存"，null 表示强制下次变化
+    if (hash !== null && hash !== undefined) {
+        _lastSavedHash = hash;
+        logger.debug(`Atomic restore ended — hash set to ${hash}`);
+    } else {
+        _lastSavedHash = null;
+        logger.debug('Atomic restore ended — hash reset to null');
+    }
+
+    _dirty = false;
+    _restoreInProgress = false;
+    setIgnoreInput(false);
+    _setStatus('idle');
+
+    logger.debug('Atomic restore completed — event handlers resumed');
+}
+
 // =====================================================
 // 卸载（供 onDelete hook 使用）
 // =====================================================
@@ -1221,5 +1295,10 @@ export function teardown() {
     _ignoreInput = false;
     _dirty = false;
     _isInternalSave = false;
+    _restoreInProgress = false;
+    if (_restoreAutoResetTimer) {
+        clearTimeout(_restoreAutoResetTimer);
+        _restoreAutoResetTimer = null;
+    }
     logger.info('AutoSave torn down');
 }

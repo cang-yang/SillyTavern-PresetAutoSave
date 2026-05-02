@@ -19,6 +19,7 @@ import {
     clearPresetHistory,
     renameSnapshot, togglePinSnapshot,
     addSnapshot, TRIGGER, TRIGGER_LABEL_KEYS, formatBytes,
+    hashPreset,
 } from './history-store.js';
 import { sanitizePresetForExport } from './compatibility.js';
 import {
@@ -29,7 +30,7 @@ import {
     deletePresetSafe,
     createPopupSafe,
 } from './compatibility.js';
-import { saveNow, resetLastSavedHash } from './auto-save.js';
+import { saveNow, resetLastSavedHash, beginAtomicRestore, endAtomicRestore } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
 import { refreshTakeover } from './preset-takeover.js';
 import {
@@ -317,28 +318,43 @@ async function onRestore(snapshotId, panelCtx) {
     );
     if (!ok) return;
 
+    // AL-1: 原子恢复 — 在整个操作期间抑制所有自动保存事件副作用
+    // （savePresetSafe / selectPresetSafe 会触发 preset_changed / OAI_PRESET_CHANGED
+    //  等事件，若不抑制会导致 updateTrackingAfterSwitch → seedSnapshot → resetHash
+    //  与 onRestore 自身的 addSnapshot / resetHash 互相干扰，hash 震荡）
+    beginAtomicRestore();
     try {
+        // 1. 写入预设到磁盘（skipUpdate:false 让 ST 重新加载 UI）
         await savePresetSafe(snapshot.presetName, snapshot.preset, {
             skipUpdate: false, apiId: snapshot.apiId,
         });
+        // 2. 切换到该预设（可能触发 OAI_PRESET_CHANGED 等，已被抑制）
         selectPresetSafe(snapshot.presetName);
 
-        // AB-1: 恢复后立即创建一个新快照，记录恢复点
+        // 3. 创建恢复快照并计算正确的 hash
+        let restoreHash = null;
         try {
             const restoredPreset = getPresetSnapshot(snapshot.presetName);
             if (restoredPreset) {
                 await addSnapshot(snapshot.presetName, snapshot.apiId, restoredPreset, TRIGGER.RESTORE);
+                restoreHash = hashPreset(restoredPreset);
             }
         } catch (snapErr) {
             logger.warn('Post-restore snapshot failed (non-fatal):', snapErr);
         }
 
-        // AB-1: 更新自动保存基准哈希，避免恢复后立即又触发一次自动保存
-        resetLastSavedHash();
+        // 4. 结束原子恢复：将 tracking hash 设为恢复后的真实指纹
+        //    （而非 null，避免"下次必定认为有变化"的错误行为）
+        endAtomicRestore(restoreHash, {
+            apiId: snapshot.apiId,
+            presetName: snapshot.presetName,
+        });
 
         toast.success(t('Restored To Time', { time }));
         await panelCtx.refreshData();
     } catch (e) {
+        // 异常时也必须结束原子恢复，防止卡住
+        endAtomicRestore(null);
         logger.error('Restore failed:', e);
         toast.error(t('Restore Failed', { message: e?.message || String(e) }));
     }
