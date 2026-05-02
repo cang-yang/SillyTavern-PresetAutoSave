@@ -407,5 +407,8 @@
     "Export Preset B": "Export B",
     "Export Preset B Title": "Export snapshot B as a complete preset JSON file",
 
-    "Preset Switch Failed": "Failed to switch preset"
+    "Preset Switch Failed": "Failed to switch preset",
+
+    "Restore Cross Preset Warning": "This snapshot belongs to \"{{snapshotPreset}}\". Please switch to that preset first before restoring.",
+    "Restore Cross Preset Title": "Cannot restore cross-preset"
 }

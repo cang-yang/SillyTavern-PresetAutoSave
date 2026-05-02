@@ -29,6 +29,8 @@ import {
     getAllPresetNames,
     deletePresetSafe,
     createPopupSafe,
+    getCurrentApiId,
+    getSelectedPresetName,
 } from './compatibility.js';
 import { saveNow, resetLastSavedHash, beginAtomicRestore, endAtomicRestore } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
@@ -292,7 +294,23 @@ async function onTogglePin(snapshotId, panelCtx) {
     await panelCtx.refreshData();
 }
 
+let _restoreBusy = false;
+
 async function onRestore(snapshotId, panelCtx) {
+    // AM-0: 重入防护 — 防止快速连续点击恢复按钮
+    if (_restoreBusy) {
+        logger.warn('[onRestore] blocked reentrant call');
+        return;
+    }
+    _restoreBusy = true;
+    try {
+        await _onRestoreImpl(snapshotId, panelCtx);
+    } finally {
+        _restoreBusy = false;
+    }
+}
+
+async function _onRestoreImpl(snapshotId, panelCtx) {
     const snapshot = await getSnapshotById(snapshotId);
     if (!snapshot) return toast.error(t('Snapshot Not Found'));
 
@@ -309,6 +327,20 @@ async function onRestore(snapshotId, panelCtx) {
         return;
     }
 
+    // AM-0 P0: 跨预设安全检查 — 禁止恢复不属于当前预设的快照
+    const currentPreset = getSelectedPresetName();
+    const currentApi = getCurrentApiId();
+    if (snapshot.presetName !== currentPreset || snapshot.apiId !== currentApi) {
+        toast.warning(t('Restore Cross Preset Warning', {
+            snapshotPreset: snapshot.presetName,
+            currentPreset: currentPreset || '(unknown)',
+        }));
+        logger.warn(
+            `[onRestore] blocked cross-preset restore: snapshot="${snapshot.presetName}" current="${currentPreset}"`
+        );
+        return;
+    }
+
     const time = formatTime(snapshot.timestamp);
     const ok = await confirmSafe(
         t('Confirm Restore'),
@@ -319,35 +351,36 @@ async function onRestore(snapshotId, panelCtx) {
     if (!ok) return;
 
     // AL-1: 原子恢复 — 在整个操作期间抑制所有自动保存事件副作用
-    // （savePresetSafe / selectPresetSafe 会触发 preset_changed / OAI_PRESET_CHANGED
-    //  等事件，若不抑制会导致 updateTrackingAfterSwitch → seedSnapshot → resetHash
+    // （savePresetSafe 会触发 SETTINGS_UPDATED 等事件，若不抑制会导致
+    //  updateTrackingAfterSwitch → seedSnapshot → resetHash
     //  与 onRestore 自身的 addSnapshot / resetHash 互相干扰，hash 震荡）
     beginAtomicRestore();
     try {
         // 1. 写入预设到磁盘（skipUpdate:false 让 ST 重新加载 UI）
-        await savePresetSafe(snapshot.presetName, snapshot.preset, {
-            skipUpdate: false, apiId: snapshot.apiId,
+        //    AM-0 P1a: 使用当前预设名/API（已通过 P0 验证与快照一致），
+        //    不再调用 selectPresetSafe()，因为当前预设就是目标预设
+        await savePresetSafe(currentPreset, snapshot.preset, {
+            skipUpdate: false, apiId: currentApi,
         });
-        // 2. 切换到该预设（可能触发 OAI_PRESET_CHANGED 等，已被抑制）
-        selectPresetSafe(snapshot.presetName);
 
-        // 3. 创建恢复快照并计算正确的 hash
+        // 2. 创建恢复快照并计算正确的 hash
         let restoreHash = null;
         try {
-            const restoredPreset = getPresetSnapshot(snapshot.presetName);
+            const restoredPreset = getPresetSnapshot(currentPreset);
             if (restoredPreset) {
-                await addSnapshot(snapshot.presetName, snapshot.apiId, restoredPreset, TRIGGER.RESTORE);
+                await addSnapshot(currentPreset, currentApi, restoredPreset, TRIGGER.RESTORE);
                 restoreHash = hashPreset(restoredPreset);
             }
         } catch (snapErr) {
             logger.warn('Post-restore snapshot failed (non-fatal):', snapErr);
         }
 
-        // 4. 结束原子恢复：将 tracking hash 设为恢复后的真实指纹
+        // 3. 结束原子恢复：将 tracking hash 设为恢复后的真实指纹
         //    （而非 null，避免"下次必定认为有变化"的错误行为）
+        //    endAtomicRestore 内部会设置 2 秒抑制窗口（AM-0 P1b）
         endAtomicRestore(restoreHash, {
-            apiId: snapshot.apiId,
-            presetName: snapshot.presetName,
+            apiId: currentApi,
+            presetName: currentPreset,
         });
 
         toast.success(t('Restored To Time', { time }));

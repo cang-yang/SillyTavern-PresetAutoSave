@@ -1262,10 +1262,21 @@ export function endAtomicRestore(hash, tracking = null) {
 
     _dirty = false;
     _restoreInProgress = false;
-    setIgnoreInput(false);
+
+    // AM-0 P1b: 恢复后 2 秒抑制窗口，防止 PromptManager DOM 变化触发 doSave
+    // savePresetSafe(skipUpdate:false) 会让 ST 重新加载预设数据到 UI，
+    // PromptManager 重建 DOM 子树的 childList mutations 在此后数百毫秒内才完成。
+    // 与 OAI_PRESET_CHANGED_AFTER 的处理模式一致（参见 bindPresetEvents）。
+    const POST_RESTORE_SUSPEND_MS = 2000;
+    _suspendUntil = Date.now() + POST_RESTORE_SUSPEND_MS;
+    setIgnoreInput(true, POST_RESTORE_SUSPEND_MS + 500);
+    setTimeout(() => {
+        setIgnoreInput(false);
+    }, POST_RESTORE_SUSPEND_MS);
+
     _setStatus('idle');
 
-    logger.debug('Atomic restore completed — event handlers resumed');
+    logger.debug('Atomic restore completed — event handlers resumed, 2s suppress window active');
 }
 
 // =====================================================

@@ -407,5 +407,8 @@
     "Export Preset B": "导出 B",
     "Export Preset B Title": "将快照 B 导出为完整预设 JSON 文件",
 
-    "Preset Switch Failed": "切换预设失败"
+    "Preset Switch Failed": "切换预设失败",
+
+    "Restore Cross Preset Warning": "此快照属于预设「{{snapshotPreset}}」，请先切换到该预设再进行恢复。",
+    "Restore Cross Preset Title": "无法跨预设恢复"
 }
