@@ -36,6 +36,7 @@ export const TRIGGER = Object.freeze({
     AUTO: 'auto',                   // 自动保存
     SWITCH_GUARD: 'switch_guard',   // 切换保护
     MANUAL: 'manual',               // 手动快照
+    RESTORE: 'restore',             // 恢复快照
 });
 
 /** trigger -> i18n key 映射，渲染时再用 t() 翻译 */
@@ -43,6 +44,7 @@ export const TRIGGER_LABEL_KEYS = Object.freeze({
     auto: 'Trigger Auto',
     switch_guard: 'Trigger Switch Guard',
     manual: 'Trigger Manual',
+    restore: 'Trigger Restore',
 });
 
 // =====================================================
@@ -609,6 +611,7 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
     if (
         settings.skipUnchangedSave
         && trigger !== TRIGGER.MANUAL
+        && trigger !== TRIGGER.RESTORE
         && list.length > 0
         && list[0].hash === hash
     ) {

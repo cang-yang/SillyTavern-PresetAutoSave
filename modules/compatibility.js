@@ -400,12 +400,13 @@ export const EXPORT_EXCLUDED_FIELDS = new Set([
     // ---- 其他 provider 配置 ----
     'chutes_sort_models',
     'electronhub_sort_models', 'electronhub_group_models',
-    'zai_endpoint',
+    'zai_endpoint', 'siliconflow_endpoint',
 
     // ---- 内部/UI 状态 ----
     'show_external_models', 'bypass_status_check',
     'bind_preset_to_connection',
     'preset_settings_openai',
+    'tool_reasoning_mode',  // ST preset includes this (is_connection=false), but we exclude it as it's a UI-level setting not typically user-tuned
 ]);
 
 // =====================================================

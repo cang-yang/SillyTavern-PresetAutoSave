@@ -23,6 +23,7 @@
 .pas-view-popup,
 .pas-diff-popup,
 .pas-grouping-manager,
+.pas-gm-popup,
 .pas-firstscan {
     /* 文字 */
     --pas-fg:        var(--SmartThemeBodyColor, #e2e8f0);
@@ -384,6 +385,7 @@
 .popup:has(.pas-view-popup) .popup-button-close,
 .popup:has(.pas-diff-popup) .popup-button-close,
 .popup:has(.pas-grouping-manager) .popup-button-close,
+.popup:has(.pas-gm-popup) .popup-button-close,
 .popup:has(.pas-firstscan) .popup-button-close {
     font-size: 28px !important;
     width: 36px !important;
@@ -404,6 +406,7 @@
 .popup:has(.pas-view-popup) .popup-button-close:hover,
 .popup:has(.pas-diff-popup) .popup-button-close:hover,
 .popup:has(.pas-grouping-manager) .popup-button-close:hover,
+.popup:has(.pas-gm-popup) .popup-button-close:hover,
 .popup:has(.pas-firstscan) .popup-button-close:hover {
     color: var(--pas-c-del, #f87171) !important;
     background: rgba(248, 113, 113, 0.14) !important;
@@ -414,6 +417,7 @@
 .popup:has(.pas-view-popup) .popup-button-close:active,
 .popup:has(.pas-diff-popup) .popup-button-close:active,
 .popup:has(.pas-grouping-manager) .popup-button-close:active,
+.popup:has(.pas-gm-popup) .popup-button-close:active,
 .popup:has(.pas-firstscan) .popup-button-close:active {
     transform: rotate(90deg) scale(0.95);
     transition-duration: 0.08s;
@@ -1184,6 +1188,329 @@
     user-select: none;
 }
 .pas-grouping-row-exclude input { accent-color: var(--pas-c-del); }
+
+/* =========================================================
+ * 分组管理弹窗 — AA-3 重构版 (.pas-gm-*)
+ * 系列卡片为核心视图，拖拽 + 上下文菜单
+ * ========================================================= */
+.pas-gm-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px 0;
+    color: var(--pas-fg);
+}
+
+/* --- 头部 --- */
+.pas-gm-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.pas-gm-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pas-gm-header-left i {
+    color: var(--pas-accent);
+    font-size: 1.1em;
+}
+.pas-gm-header h3 {
+    margin: 0;
+    font-weight: 600;
+    font-size: 1.15em;
+    color: var(--pas-fg);
+}
+.pas-gm-reset-all-btn {
+    font-size: 0.82em !important;
+    padding: 4px 10px !important;
+    opacity: 0.75;
+    transition: opacity var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-gm-reset-all-btn:hover { opacity: 1; }
+
+/* --- 说明文字 --- */
+.pas-gm-desc {
+    font-size: 0.85em;
+    color: var(--pas-fg-muted);
+    padding: 8px 12px;
+    background: rgba(96, 165, 250, 0.06);
+    border-left: 3px solid rgba(96, 165, 250, 0.5);
+    border-radius: var(--pas-radius-sm);
+    line-height: 1.5;
+}
+
+/* --- 滚动区域 --- */
+.pas-gm-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 2px 0;
+    contain: layout style;
+}
+.pas-gm-body::-webkit-scrollbar { width: 6px; }
+.pas-gm-body::-webkit-scrollbar-track { background: transparent; }
+.pas-gm-body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
+.pas-gm-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* --- 系列卡片 --- */
+.pas-gm-series {
+    background: var(--pas-surface-1);
+    border-radius: 8px;
+    border: 1px solid var(--pas-border);
+    border-left: 3px solid var(--pas-accent);
+    transition: border-color var(--pas-dur) var(--pas-ease-fast);
+    overflow: hidden;
+}
+.pas-gm-series:hover {
+    border-color: var(--pas-border-strong);
+    border-left-color: var(--pas-accent);
+}
+
+/* --- 系列头部 --- */
+.pas-gm-series-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-gm-series-header:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-series-icon {
+    color: var(--pas-accent);
+    font-size: 0.95em;
+    flex-shrink: 0;
+}
+.pas-gm-series-name {
+    font-weight: 600;
+    font-size: 0.95em;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pas-gm-series-count {
+    font-size: 0.78em;
+    color: var(--pas-fg-muted);
+    flex-shrink: 0;
+}
+.pas-gm-chevron {
+    font-size: 0.75em;
+    color: var(--pas-fg-3);
+    transition: transform var(--pas-dur) var(--pas-ease);
+    flex-shrink: 0;
+}
+.pas-gm-series.collapsed .pas-gm-chevron {
+    transform: rotate(-90deg);
+}
+
+/* --- 系列内容区 --- */
+.pas-gm-series-body {
+    padding: 4px 8px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 28px;
+    transition: background var(--pas-dur) var(--pas-ease-fast),
+                border-color var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-gm-series.collapsed .pas-gm-series-body { display: none; }
+
+/* 空提示 */
+.pas-gm-empty {
+    padding: 12px 16px;
+    font-size: 0.83em;
+    color: var(--pas-fg-faint);
+    text-align: center;
+    font-style: italic;
+}
+
+/* --- 预设条目 --- */
+.pas-gm-preset {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 16px;
+    border-radius: 4px;
+    cursor: grab;
+    transition: background 0.15s, opacity 0.15s;
+    user-select: none;
+}
+.pas-gm-preset:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-preset.dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+}
+.pas-gm-preset-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9em;
+}
+
+/* --- 徽章 --- */
+.pas-gm-badge {
+    font-size: 0.7em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    line-height: 1.6;
+    font-weight: 500;
+}
+.pas-gm-badge-auto {
+    background: rgba(74, 222, 128, 0.12);
+    color: #4ade80;
+}
+.pas-gm-badge-manual {
+    background: rgba(167, 139, 250, 0.14);
+    color: #a78bfa;
+}
+.pas-gm-badge-excluded {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+}
+
+/* --- 菜单按钮 --- */
+.pas-gm-menu-btn {
+    opacity: 0.4;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 1em;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 1px;
+    transition: opacity var(--pas-dur) var(--pas-ease-fast),
+                background var(--pas-dur) var(--pas-ease-fast);
+    flex-shrink: 0;
+    user-select: none;
+}
+.pas-gm-preset:hover .pas-gm-menu-btn { opacity: 1; }
+.pas-gm-menu-btn:hover {
+    background: var(--pas-surface-3);
+    opacity: 1;
+}
+
+/* --- 拖拽提示 --- */
+.pas-gm-series-body.pas-gm-drop-zone {
+    border: 1px dashed transparent;
+    border-radius: 4px;
+}
+.pas-gm-series-body.drag-over {
+    background: rgba(167, 139, 250, 0.08) !important;
+    border-color: var(--pas-accent) !important;
+}
+
+/* --- 未分组特殊样式 --- */
+.pas-gm-ungrouped {
+    border-left-color: #6b7280 !important;
+}
+.pas-gm-ungrouped .pas-gm-series-icon {
+    color: #6b7280;
+}
+
+/* --- 上下文菜单 --- */
+.pas-gm-context-menu {
+    background: var(--SmartThemeBlurTintColor, rgba(30, 30, 45, 0.97));
+    border: 1px solid var(--pas-border-strong);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    z-index: 99999;
+    min-width: 160px;
+    padding: 4px 0;
+    animation: pas-gm-menu-in 0.12s var(--pas-ease);
+}
+@keyframes pas-gm-menu-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.pas-gm-ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    font-size: 0.88em;
+    cursor: pointer;
+    transition: background 0.1s;
+    color: var(--pas-fg);
+}
+.pas-gm-ctx-item:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-ctx-item i {
+    color: var(--pas-fg-muted);
+    font-size: 0.9em;
+    width: 16px;
+    text-align: center;
+}
+
+/* --- 移动对话框 --- */
+.pas-gm-move-dialog {
+    color: var(--pas-fg);
+}
+.pas-gm-move-dialog h4 {
+    margin: 0 0 4px 0;
+    font-weight: 600;
+    font-size: 1.05em;
+}
+.pas-gm-move-desc {
+    font-size: 0.85em;
+    color: var(--pas-fg-muted);
+    margin: 0 0 12px 0;
+}
+.pas-gm-move-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 45vh;
+    overflow-y: auto;
+}
+.pas-gm-move-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--pas-radius-sm);
+    cursor: pointer;
+    transition: background 0.12s;
+    font-size: 0.9em;
+}
+.pas-gm-move-option:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-move-option i {
+    color: var(--pas-accent);
+    font-size: 0.9em;
+}
+.pas-gm-move-count {
+    margin-left: auto;
+    font-size: 0.78em;
+    color: var(--pas-fg-faint);
+}
+.pas-gm-move-new {
+    border-top: 1px solid var(--pas-border);
+    margin-top: 4px;
+    padding-top: 8px;
+    color: var(--pas-accent);
+    font-weight: 500;
+}
+.pas-gm-move-new i { color: var(--pas-accent); }
 
 /* =========================================================
  * 首次扫描向导弹窗
@@ -3266,6 +3593,7 @@ body.pas-light .pas-panel,
 body.pas-light .pas-view-popup,
 body.pas-light .pas-diff-popup,
 body.pas-light .pas-grouping-manager,
+body.pas-light .pas-gm-popup,
 body.pas-light .pas-firstscan,
 body.pas-light .pas-dd-wrapper {
     /* 文字 */
@@ -3778,6 +4106,7 @@ body.pas-light .popup:has(.pas-panel) .popup-button-close:hover,
 body.pas-light .popup:has(.pas-view-popup) .popup-button-close:hover,
 body.pas-light .popup:has(.pas-diff-popup) .popup-button-close:hover,
 body.pas-light .popup:has(.pas-grouping-manager) .popup-button-close:hover,
+body.pas-light .popup:has(.pas-gm-popup) .popup-button-close:hover,
 body.pas-light .popup:has(.pas-firstscan) .popup-button-close:hover {
     background: rgba(220, 38, 38, 0.10) !important;
 }
@@ -3800,4 +4129,72 @@ body.pas-light .pas-summary-line-reorder{
 }
 body.pas-light .pas-summary-line-field{
     background: rgba(99, 102, 241, 0.06);
+}
+
+/* --- 19. 分组管理弹窗 AA-3（亮色主题） --- */
+body.pas-light .pas-gm-series {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.10);
+    border-left-color: rgba(147, 51, 234, 0.50);
+}
+body.pas-light .pas-gm-series:hover {
+    border-color: rgba(0, 0, 0, 0.18);
+    border-left-color: rgba(147, 51, 234, 0.70);
+}
+body.pas-light .pas-gm-series-header:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+body.pas-light .pas-gm-series-icon {
+    color: rgba(147, 51, 234, 0.80);
+}
+body.pas-light .pas-gm-preset:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.pas-light .pas-gm-badge-auto {
+    background: rgba(22, 163, 74, 0.10);
+    color: #16a34a;
+}
+body.pas-light .pas-gm-badge-manual {
+    background: rgba(147, 51, 234, 0.10);
+    color: #7c3aed;
+}
+body.pas-light .pas-gm-badge-excluded {
+    background: rgba(220, 38, 38, 0.10);
+    color: #dc2626;
+}
+body.pas-light .pas-gm-menu-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+}
+body.pas-light .pas-gm-ungrouped {
+    border-left-color: rgba(0, 0, 0, 0.25) !important;
+}
+body.pas-light .pas-gm-ungrouped .pas-gm-series-icon {
+    color: rgba(0, 0, 0, 0.40);
+}
+body.pas-light .pas-gm-series-body.drag-over {
+    background: rgba(147, 51, 234, 0.06) !important;
+    border-color: rgba(147, 51, 234, 0.50) !important;
+}
+body.pas-light .pas-gm-context-menu {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.97));
+    border-color: rgba(0, 0, 0, 0.12);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+body.pas-light .pas-gm-ctx-item:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.pas-light .pas-gm-ctx-item i {
+    color: rgba(0, 0, 0, 0.45);
+}
+body.pas-light .pas-gm-move-option:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.pas-light .pas-gm-move-new {
+    border-top-color: rgba(0, 0, 0, 0.10);
+}
+body.pas-light .pas-gm-body::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.18);
+}
+body.pas-light .pas-gm-body::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.30);
 }
