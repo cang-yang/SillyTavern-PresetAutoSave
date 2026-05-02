@@ -1711,6 +1711,28 @@
     font-size: 0.85em;
 }
 
+/* AT0: "建立分组"确认按钮绿色样式 */
+.pas-btn-confirm-green {
+    background-color: #22c55e !important;
+    border-color: #16a34a !important;
+    color: #fff !important;
+}
+.pas-btn-confirm-green:hover {
+    background-color: #16a34a !important;
+    border-color: #15803d !important;
+}
+.pas-btn-confirm-green:active {
+    background-color: #15803d !important;
+}
+/* 浅色主题下的绿色按钮 */
+body.pas-light .pas-btn-confirm-green {
+    background-color: #16a34a !important;
+    border-color: #15803d !important;
+}
+body.pas-light .pas-btn-confirm-green:hover {
+    background-color: #15803d !important;
+}
+
 /* select 控件（设置 Tab） */
 .pas-select-input {
     min-width: 160px;

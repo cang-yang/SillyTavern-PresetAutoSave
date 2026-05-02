@@ -600,20 +600,33 @@ function bindEvents() {
     });
 
     // 重新扫描分组（重置 firstScanDone 后再次弹向导）
+    // AT0: 不再在弹向导前清空 groupingManualOverrides，
+    //      改为仅在用户确认"建立分组"后才清空（showGroupingFirstScanWizard 返回 true 时）
     $('.pas-btn-rescan-grouping')?.addEventListener('click', async () => {
         try {
-            // AJ-1: 清除所有手动分组覆盖，真正"从零开始"重新识别
-            batchUpdate({
-                groupingManualOverrides: {},
-                groupingFirstScanDone: false,
-            });
-            // 清空分组解析缓存（万一用户改了正则等）
+            // AT0: 先备份当前手动覆盖，以便用户取消时恢复
+            const prevSettings = getSettings();
+            const prevOverrides = { ...(prevSettings.groupingManualOverrides || {}) };
+            const prevFirstScanDone = prevSettings.groupingFirstScanDone;
+
+            // 清空分组解析缓存
             clearParseCache();
-            await showGroupingFirstScanWizard();
-            // Q-1 fix: 向导完成后强制重新种子——
-            // 如果用户清空了所有快照后再点"重新扫描分组"，
-            // 需要为每个预设重新建立初始快照才能在面板中显示
-            await seedSnapshotsIfNeeded({ force: true, silent: false });
+
+            // AT0: 调用向导并通过返回值可靠判断用户选择
+            const confirmed = await showGroupingFirstScanWizard({ isRescan: true });
+
+            if (confirmed) {
+                // 用户点了"建立分组" — 清空手动覆盖，重新自动识别
+                batchUpdate({ groupingManualOverrides: {} });
+                // Q-1 fix: 向导完成后强制重新种子
+                await seedSnapshotsIfNeeded({ force: true, silent: false });
+            } else {
+                // 用户点了"返回" — 恢复之前的状态，确保不丢数据
+                batchUpdate({
+                    groupingManualOverrides: prevOverrides,
+                    groupingFirstScanDone: prevFirstScanDone,
+                });
+            }
             await refreshData();
             refreshTakeover({ force: true });
         } catch (e) {

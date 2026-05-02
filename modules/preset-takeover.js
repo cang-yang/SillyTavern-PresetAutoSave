@@ -1094,6 +1094,11 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
         logger.debug('[Seed] disabled by settings, skip');
         return { skipped: true };
     }
+    // AT0: 如果首次扫描向导尚未完成（用户还没确认"建立分组"），跳过自动种子
+    if (!force && !settings.groupingFirstScanDone) {
+        logger.debug('[Seed] groupingFirstScanDone=false, skip until user confirms');
+        return { skipped: true };
+    }
     if (!force && !settings.autoSeedOnTakeover) {
         logger.debug('[Seed] autoSeedOnTakeover=false, skip');
         return { skipped: true };

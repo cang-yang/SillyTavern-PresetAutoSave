@@ -1681,6 +1681,7 @@ export async function showGroupingManager(panelCtx) {
  * 调用方：当扩展加载，且 settings.groupingFirstScanDone === false 且 enabled === true 时
  */
 export async function showGroupingFirstScanWizard(opts = {}) {
+    const { isRescan = false } = opts;
     if (_firstScanWizardPopup) return;
     const ctx = (() => {
         try { return SillyTavern.getContext(); } catch (_) { return null; }
@@ -1701,8 +1702,9 @@ export async function showGroupingFirstScanWizard(opts = {}) {
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
     const groups = groupNamesBySeries(names, overrides);
-    const significantGroups = groups.filter(g => g.items.length >= 2);
-    const previewHtml = significantGroups.slice(0, 12).map(g => `
+    // AT0: 不再过滤单版本组，全部显示；多版本组排前面
+    const sortedGroups = [...groups].sort((a, b) => b.items.length - a.items.length);
+    const previewHtml = sortedGroups.slice(0, 12).map(g => `
 <div class="pas-firstscan-group">
     <div class="pas-firstscan-group-name">
         <i class="fa-solid fa-folder"></i>
@@ -1714,7 +1716,7 @@ export async function showGroupingFirstScanWizard(opts = {}) {
     </div>
 </div>`).join('');
 
-    const moreCount = significantGroups.length > 12 ? significantGroups.length - 12 : 0;
+    const moreCount = sortedGroups.length > 12 ? sortedGroups.length - 12 : 0;
 
     const html = `
 <div class="pas-firstscan">
@@ -1731,15 +1733,27 @@ export async function showGroupingFirstScanWizard(opts = {}) {
     </div>
 </div>`;
 
+    // AT0: 首次向导用"暂不分组"，魔法棒重新扫描用"返回"
+    const cancelText = isRescan ? t('Grouping Rescan Back') : t('Grouping First Scan Skip');
     _firstScanWizardPopup = createPopupSafe(html, 'CONFIRM', {
         okButton: t('Grouping First Scan Confirm'),
-        cancelButton: t('Grouping First Scan Skip'),
+        cancelButton: cancelText,
     });
 
     if (!_firstScanWizardPopup) {
         logger.error('[showGroupingFirstScanWizard] createPopupSafe returned null');
         return;
     }
+
+    // AT0: 弹出后给 OK 按钮加绿色样式
+    try {
+        requestAnimationFrame(() => {
+            const okBtn = document.querySelector('.popup:last-of-type .popup-button-ok, .popup:last-of-type [data-result="1"]');
+            if (okBtn) {
+                okBtn.classList.add('pas-btn-confirm-green');
+            }
+        });
+    } catch (_) {}
 
     let result = false;
     try {
@@ -1757,7 +1771,11 @@ export async function showGroupingFirstScanWizard(opts = {}) {
             series: groups.length,
             versions: names.length,
         }));
-    } else {
+    } else if (!isRescan) {
+        // AT0: 首次向导 → 点"暂不分组"：标记向导已完成（避免每次启动都弹）
+        // 注意：不关闭 groupingEnabled，因为接管模块依赖它（preset-takeover refresh）
         updateSetting('groupingFirstScanDone', true);
     }
+    // AT0: 返回布尔值，调用方可靠判断用户选择，不再依赖间接读 settings
+    return !!result;
 }

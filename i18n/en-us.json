@@ -317,6 +317,7 @@
     "Grouping First Scan Sample": "Scan preview (detected {{series}} series)",
     "Grouping First Scan Confirm": "Create groups",
     "Grouping First Scan Skip": "Not now",
+    "Grouping Rescan Back": "Back",
     "Grouping First Scan Done": "Done — {{series}} series / {{versions}} versions",
     "Grouping Import Detected Title": "New preset detected",
     "Grouping Import Detected Hint": "The new preset \"{{name}}\" looks similar to existing series \"{{series}}\". Add it to that series?",

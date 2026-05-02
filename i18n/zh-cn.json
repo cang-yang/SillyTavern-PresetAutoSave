@@ -317,6 +317,7 @@
     "Grouping First Scan Sample": "扫描预览（共识别出 {{series}} 个系列）",
     "Grouping First Scan Confirm": "建立分组",
     "Grouping First Scan Skip": "暂不分组",
+    "Grouping Rescan Back": "返回",
     "Grouping First Scan Done": "分组建立完成，共 {{series}} 个系列 / {{versions}} 个版本",
     "Grouping Import Detected Title": "检测到新预设",
     "Grouping Import Detected Hint": "新预设「{{name}}」与现有系列「{{series}}」相似，是否归到该系列？",
