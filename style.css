@@ -1246,11 +1246,10 @@
 .pas-gm-body {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     max-height: 60vh;
     overflow-y: auto;
-    padding: 2px 0;
-    contain: layout style;
+    padding: 4px 0;
 }
 .pas-gm-body::-webkit-scrollbar { width: 6px; }
 .pas-gm-body::-webkit-scrollbar-track { background: transparent; }
@@ -1267,7 +1266,7 @@
     border: 1px solid var(--pas-border);
     border-left: 3px solid var(--pas-accent);
     transition: border-color var(--pas-dur) var(--pas-ease-fast);
-    overflow: hidden;
+    /* overflow:hidden removed — it clips series-body content when layout reflows */
 }
 .pas-gm-series:hover {
     border-color: var(--pas-border-strong);
@@ -1321,12 +1320,11 @@
     padding: 4px 8px 8px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    min-height: 28px;
+    gap: 4px;
     transition: background var(--pas-dur) var(--pas-ease-fast),
                 border-color var(--pas-dur) var(--pas-ease-fast);
 }
-.pas-gm-series.collapsed .pas-gm-series-body { display: none; }
+.pas-gm-series.collapsed .pas-gm-series-body { display: none !important; }
 
 /* 空提示 */
 .pas-gm-empty {
@@ -1347,6 +1345,7 @@
     cursor: grab;
     transition: background 0.15s, opacity 0.15s;
     user-select: none;
+    min-height: 32px;
 }
 .pas-gm-preset:hover {
     background: var(--pas-surface-2);

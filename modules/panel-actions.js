@@ -777,7 +777,7 @@ function renderGroupingHTML(groups, excludedNames) {
 
         const seriesKey = normalizeSeriesKey(g.series);
         return `
-        <div class="pas-gm-series" data-series-key="${escapeAttr(seriesKey)}">
+        <div class="pas-gm-series collapsed" data-series-key="${escapeAttr(seriesKey)}">
             <div class="pas-gm-series-header">
                 <i class="fa-solid fa-box-open pas-gm-series-icon"></i>
                 <span class="pas-gm-series-name">${escapeHtml(g.series)}</span>
@@ -803,7 +803,7 @@ function renderGroupingHTML(groups, excludedNames) {
     }).join('');
 
     const ungroupedSection = `
-    <div class="pas-gm-series pas-gm-ungrouped" data-series-key="__ungrouped__">
+    <div class="pas-gm-series pas-gm-ungrouped collapsed" data-series-key="__ungrouped__">
         <div class="pas-gm-series-header">
             <i class="fa-solid fa-ban pas-gm-series-icon"></i>
             <span class="pas-gm-series-name">${escapeHtml(t('Grouping Ungrouped Title'))}</span>
