@@ -489,7 +489,22 @@ function compareScalars(prev, curr) {
 function deepEqualStrict(a, b) {
     if (a === b) return true;
     if (a === null || b === null || a === undefined || b === undefined) return a === b;
-    if (typeof a !== typeof b) return false;
+    // AU-0: 数字/字符串类型宽松比较
+    // ST 内部的数值字段会在 number 和 string 之间波动（如 2000000 vs "2000000"），
+    // 旧快照可能存了字符串、新快照经 normalizeScalarTypes 后已是数字。
+    // 将两者视为相同，避免产生虚假 diff（如"从2万变2万"）。
+    if (typeof a !== typeof b) {
+        if ((typeof a === 'number' || typeof a === 'string') &&
+            (typeof b === 'number' || typeof b === 'string')) {
+            // 两者都是数字或能安全转换为数字时比较数值
+            const na = Number(a);
+            const nb = Number(b);
+            if (Number.isFinite(na) && Number.isFinite(nb) && na === nb) return true;
+            // 如果不是数字，按字符串比较
+            if (String(a) === String(b)) return true;
+        }
+        return false;
+    }
     if (typeof a !== 'object') return a === b;
     return stableStringify(a) === stableStringify(b);
 }
