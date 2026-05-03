@@ -283,6 +283,13 @@
     "Field reasoning_show_hidden": "显示隐藏的推理时间",
     "Field reasoning_add_to_prompts": "添加推理块到提示词",
     "Field bypass_status_check": "绕过 API 状态检查",
+    "Field stream_openai": "流式传输（OpenAI）",
+    "Field media_inlining": "发送内联媒体",
+    "Field use_sysprompt": "使用系统提示词",
+    "Field verbosity": "回复详细程度",
+    "Field tool_reasoning_mode": "工具推理模式",
+    "Field request_image_aspect_ratio": "图片宽高比",
+    "Field request_image_resolution": "图片分辨率",
 
     "Grouping Group": "预设分组",
     "Grouping Enabled": "启用预设系列分组",

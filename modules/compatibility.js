@@ -425,7 +425,9 @@ export const DISPLAY_IGNORED_FIELDS = new Set([
 
     // ---- 内部/噪音字段 ----
     'bias_presets', 'bias_preset_selected',
-    'names_behavior',
+    // 注意：names_behavior 已移除——它是"角色行为"栏中的用户可见设置，
+    // 修改后应在变更摘要中正常显示。之前被误列为噪音字段导致用户
+    // 调整角色名前缀设置后摘要显示"细微改动"而非具体变更。
 ]);
 
 /**

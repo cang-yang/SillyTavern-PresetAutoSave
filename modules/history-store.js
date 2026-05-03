@@ -471,7 +471,13 @@ function compareScalars(prev, curr) {
         'max_context_unlocked', 'openai_max_tokens', 'openai_max_context',
         'stream_response', 'streaming',
         'function_calling', 'request_images',
-        'continue_prefill', 'squash_system_messages', 'wrap_in_quotes',
+        // 角色行为 / Character Behavior 栏目
+        'names_behavior', 'continue_prefill', 'continue_postfix',
+        'squash_system_messages', 'wrap_in_quotes',
+        'assistant_prefill', 'assistant_impersonation',
+        'use_sysprompt', 'media_inlining', 'inline_image_quality',
+        'enable_web_search', 'send_if_empty', 'verbosity',
+        'request_image_aspect_ratio', 'request_image_resolution',
     ];
     out.sort((a, b) => {
         const ai = PRIORITY.indexOf(a.key);

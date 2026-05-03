@@ -917,6 +917,12 @@ function computeFingerprint(preset) {
         'wrap_in_quotes', 'wi_format', 'show_external_links',
         'function_calling', 'request_images',
         'reasoning_effort', 'show_thoughts',
+        // 角色行为 / Character Behavior 栏目
+        'names_behavior', 'continue_prefill', 'continue_postfix',
+        'squash_system_messages', 'assistant_prefill', 'assistant_impersonation',
+        'use_sysprompt', 'media_inlining', 'inline_image_quality',
+        'enable_web_search', 'send_if_empty', 'verbosity',
+        'request_image_aspect_ratio', 'request_image_resolution',
         // 预设标识
         'preset', 'name',
     ];

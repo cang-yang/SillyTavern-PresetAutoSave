@@ -283,6 +283,13 @@
     "Field reasoning_show_hidden": "Show hidden reasoning time",
     "Field reasoning_add_to_prompts": "Add reasoning to prompts",
     "Field bypass_status_check": "Bypass API status check",
+    "Field stream_openai": "Stream (OpenAI)",
+    "Field media_inlining": "Send inline media",
+    "Field use_sysprompt": "Use system prompt",
+    "Field verbosity": "Response verbosity",
+    "Field tool_reasoning_mode": "Tool reasoning mode",
+    "Field request_image_aspect_ratio": "Image aspect ratio",
+    "Field request_image_resolution": "Image resolution",
 
     "Grouping Group": "Preset grouping",
     "Grouping Enabled": "Enable preset series grouping",
