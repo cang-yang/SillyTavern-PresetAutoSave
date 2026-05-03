@@ -23,7 +23,9 @@ import {
     getCurrentApiId,
     getSelectedPresetName,
     getPresetSnapshot,
+    getPresetManager,
     savePresetSafe,
+    syncPresetToMemory,
     toast,
     t,
 } from './compatibility.js';
@@ -86,6 +88,7 @@ let _isInternalSave = false;       // 内部保存中（防递归）
 let _restoreInProgress = false;    // AL-1: 原子恢复操作进行中（抑制所有事件副作用）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
+let _lastQuickFingerprint = null;  // 快速预检指纹（轻量级，避免每次做完整深拷贝+hash）
 let _suspendUntil = 0;             // SETTINGS_UPDATED 风暴期间临时挂起，用 Date.now()
 let _suspendNoticeShown = false;   // 在挂起期内只 log 一次，避免日志爆量
 let _noChangeCount = 0;            // 连续无变化次数，用于日志降噪
@@ -135,6 +138,7 @@ export async function initAutoSave() {
     const initialPreset = getPresetSnapshot();
     if (initialPreset) {
         _lastSavedHash = hashPreset(initialPreset);
+        _lastQuickFingerprint = _computeQuickFingerprint(_currentApiId);
         const keys = Object.keys(initialPreset).length;
         logger.debug(
             `Initial baseline: [${_currentApiId}] ${_currentPresetName} hash=${_lastSavedHash} fields=${keys}`
@@ -534,7 +538,15 @@ function bindPromptManagerListeners() {
     // MutationObserver：仅监听 childList（拖拽排序 / 删除条目），
     // 不监听 attributes（class 切换走 click handler 已覆盖，attributes
     // observer 在 prompt 列表频繁 hover/选中时会被疯狂触发，是发热元凶之一）
+    //
+    // 性能优化：双层节流
+    //   1. _pmMutationPending（microtask 级）：同一 tick 内的多个 mutation 合并
+    //   2. _pmMutationThrottleUntil（时间窗口级）：500ms 内的多批 mutation 合并
+    //   一次用户操作（如 toggle prompt）会产生 4-8 个分散在几百毫秒内的 mutation，
+    //   不加时间窗口的话每批都会触发 scheduleAutoSave → doSave → 完整深拷贝+hash。
     let _pmMutationPending = false;
+    let _pmMutationThrottleUntil = 0;
+    const PM_MUTATION_THROTTLE_MS = 500;
     try {
         _promptObserver = new MutationObserver((mutations) => {
             if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
@@ -549,6 +561,11 @@ function bindPromptManagerListeners() {
                 }
             }
             if (!hasChild) return;
+
+            // 时间窗口节流：500ms 内只触发一次
+            const now = Date.now();
+            if (now < _pmMutationThrottleUntil) return;
+            _pmMutationThrottleUntil = now + PM_MUTATION_THROTTLE_MS;
 
             // 节流：同一 tick 内多个 mutation 合并为一次
             _pmMutationPending = true;
@@ -743,10 +760,32 @@ function _buildSavePayload(reason, explicitTarget) {
         _currentPresetName = presetName;
         _currentApiId = apiId;
         _lastSavedHash = null;
+        _lastQuickFingerprint = null;
         _dirty = false;
         _setStatus('idle');
         _stats.aborted++;
         return null;
+    }
+
+    // 性能优化：快速预检（避免昂贵的深拷贝 + 完整序列化 hash）
+    // 直接从 ST 内存的 live 引用读取几个关键属性构建轻量级指纹，
+    // 与上次保存时的指纹比较。如果完全一致则大概率没有变化，
+    // 可以跳过 getPresetSnapshot()（structuredClone ~94KB）和 hashPreset()（递归序列化）。
+    // 仅在非 switch-guard 的常规保存中使用（switch-guard 必须保证完整性）。
+    if (!explicitTarget && _lastSavedHash && _lastQuickFingerprint) {
+        const qfp = _computeQuickFingerprint(apiId);
+        if (qfp && qfp === _lastQuickFingerprint) {
+            _noChangeCount++;
+            if (_noChangeCount <= 3 || _noChangeCount % 20 === 0) {
+                logger.debug(
+                    `[doSave] No change (quick-check) reason=${reason} (×${_noChangeCount} consecutive)`
+                );
+            }
+            _stats.skippedUnchanged++;
+            _dirty = false;
+            _setStatus('idle');
+            return null;
+        }
     }
 
     const preset = getPresetSnapshot(presetName);
@@ -844,7 +883,7 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
             return null;
         }
 
-        // 写入磁盘 — 如果失败，回滚刚写入的快照避免历史与磁盘不一致
+        // 写入磁盘（skipUpdate:true — 不触发 ST UI 重载，避免 PromptManager DOM 重建导致的性能开销）
         try {
             await savePresetSafe(presetName, preset, { skipUpdate: true, apiId });
         } catch (diskErr) {
@@ -858,7 +897,13 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
             throw diskErr; // 重新抛出，让外层 catch 处理状态 & toast
         }
 
+        // 同步 ST 内存中的 presets[] 数组（零开销 — 仅对象属性赋值，无 DOM/事件触发）。
+        // 这确保用户通过原生列表或托管列表切换预设时，ST 从 presets[] 加载的是最新保存的版本，
+        // 而非初始导入时的旧版本。不同步的话切换预设会导致用户修改丢失。
+        syncPresetToMemory(presetName, preset, apiId);
+
         _lastSavedHash = snapshot.hash;
+        _lastQuickFingerprint = _computeQuickFingerprint(apiId);
         _dirty = false;
         _setStatus('saved');
         _stats.saved++;
@@ -944,6 +989,74 @@ function computeFingerprint(preset) {
         return JSON.stringify(fp).slice(0, 200);
     } catch {
         return '(unserializable)';
+    }
+}
+
+/**
+ * 快速预检指纹：直接从 ST 内存的 live 引用（不深拷贝）读取关键属性，
+ * 构建一个轻量级字符串。用于 _buildSavePayload 中在昂贵的 getPresetSnapshot + hashPreset
+ * 之前快速判断"是否大概率没有变化"。
+ *
+ * 覆盖范围：
+ *   - 标量字段（temperature、top_p 等用户常改的参数）
+ *   - prompts 数组长度 + 每个 prompt 的 enabled/marker 状态
+ *   - prompt_order 数组长度 + 每个 order entry 的 enabled 状态
+ *
+ * 开销：仅遍历 live 对象的顶层属性 + prompts/prompt_order 的长度和少量字段，
+ * 不做深拷贝、不做递归序列化。约为 getPresetSnapshot + hashPreset 的 1/100。
+ *
+ * @param {string} apiId
+ * @returns {string|null} 指纹字符串，null 表示无法计算（应 fallback 到完整检查）
+ */
+function _computeQuickFingerprint(apiId) {
+    try {
+        const pm = getPresetManager(apiId);
+        if (!pm || typeof pm.getPresetList !== 'function') return null;
+        const list = pm.getPresetList(apiId);
+        const live = list?.settings;
+        if (!live || typeof live !== 'object') return null;
+
+        // 采样关键标量字段
+        const parts = [];
+        const scalarKeys = [
+            'temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty',
+            'min_p', 'top_a', 'openai_max_tokens', 'openai_max_context', 'seed',
+            'streaming', 'function_calling', 'reasoning_effort', 'show_thoughts',
+            'names_behavior', 'squash_system_messages', 'use_sysprompt',
+            'wi_format', 'send_if_empty',
+        ];
+        for (const k of scalarKeys) {
+            if (k in live) parts.push(k + '=' + live[k]);
+        }
+
+        // prompts 数组：长度 + 每个 prompt 的 identifier+enabled+content长度
+        // content 长度变化检测：用户修改 prompt 文本时 identifier/enabled 不变，
+        // 但 content 长度一定会变（即使长度相同也是极小概率的假阴性，
+        // 后续完整 hash 仍会在下一个 trigger 中捕获）。
+        if (Array.isArray(live.prompts)) {
+            parts.push('p#' + live.prompts.length);
+            for (let i = 0; i < live.prompts.length; i++) {
+                const p = live.prompts[i];
+                if (p) {
+                    const cLen = typeof p.content === 'string' ? p.content.length : 0;
+                    parts.push(i + ':' + (p.identifier || '') + (p.enabled ? '1' : '0') + '/' + cLen);
+                }
+            }
+        }
+
+        // prompt_order：长度 + 每个 entry 的 identifier+enabled
+        if (Array.isArray(live.prompt_order) && live.prompt_order[0]?.order) {
+            const order = live.prompt_order[0].order;
+            parts.push('o#' + order.length);
+            for (let i = 0; i < order.length; i++) {
+                const o = order[i];
+                if (o) parts.push(i + ':' + (o.identifier || '') + (o.enabled ? '1' : '0'));
+            }
+        }
+
+        return parts.join('|');
+    } catch (e) {
+        return null;
     }
 }
 
@@ -1150,6 +1263,7 @@ function updateTrackingAfterSwitch() {
     _currentApiId = newApiId;
     _currentPresetName = newPresetName;
     _lastSavedHash = newHash;
+    _lastQuickFingerprint = _computeQuickFingerprint(newApiId);
     _dirty = false;
     _setStatus('idle');
 
@@ -1202,6 +1316,7 @@ export function getCurrentTracking() {
  */
 export function resetLastSavedHash() {
     _lastSavedHash = null;
+    _lastQuickFingerprint = null;
     _dirty = false;
     logger.warn('lastSavedHash forcibly reset');
 }
@@ -1260,9 +1375,11 @@ export function endAtomicRestore(hash, tracking = null) {
     // 设置 hash：传入具体值表示"已保存"，null 表示强制下次变化
     if (hash !== null && hash !== undefined) {
         _lastSavedHash = hash;
+        _lastQuickFingerprint = _computeQuickFingerprint(_currentApiId);
         logger.debug(`Atomic restore ended — hash set to ${hash}`);
     } else {
         _lastSavedHash = null;
+        _lastQuickFingerprint = null;
         logger.debug('Atomic restore ended — hash reset to null');
     }
 

@@ -698,6 +698,64 @@ export async function savePresetSafe(presetName, settings = null, options = {}) 
 }
 
 /**
+ * 将预设数据同步到 ST 内存中的 presets[] 数组（不触发 UI 更新）。
+ *
+ * 背景：doSave 使用 skipUpdate:true 写磁盘以避免 PromptManager DOM 重建（性能），
+ * 但 ST 内存中 presets[] 数组不会被 skipUpdate:true 更新。当用户切换预设时，
+ * ST 从 presets[] 加载预设数据，如果 presets[] 还是旧版本就会导致修改丢失。
+ *
+ * 此函数直接操作内存引用（presets[idx] = newData），没有任何 DOM 操作或事件触发，
+ * 开销极低（仅对象赋值），确保切换预设时 ST 加载的是最新保存的版本。
+ *
+ * @param {string} presetName 预设名
+ * @param {object} presetData 要同步的预设数据
+ * @param {string} [apiId] API 标识（默认当前）
+ * @returns {boolean} 是否成功同步
+ */
+export function syncPresetToMemory(presetName, presetData, apiId) {
+    const id = apiId || getCurrentApiId();
+    const pm = getPresetManager(id);
+    if (!pm || typeof pm.getPresetList !== 'function') {
+        return false;
+    }
+
+    try {
+        const list = pm.getPresetList(id);
+        if (!list || !list.presets || !list.preset_names) return false;
+
+        const { presets, preset_names } = list;
+        let idx = -1;
+
+        if (Array.isArray(preset_names)) {
+            idx = preset_names.indexOf(presetName);
+        } else if (typeof preset_names === 'object') {
+            idx = preset_names[presetName];
+            if (typeof idx !== 'number') idx = -1;
+        }
+
+        if (idx < 0 || !presets[idx]) {
+            logger.debug(`[syncPresetToMemory] preset "${presetName}" not found in presets[] (apiId=${id})`);
+            return false;
+        }
+
+        // 直接替换内存引用：将 presets[idx] 的所有属性更新为新数据
+        // 使用 Object.assign 保留 presets[idx] 的引用不变（ST 其他代码可能也持有该引用）
+        // 先清除旧属性，再合入新属性
+        const target = presets[idx];
+        for (const key of Object.keys(target)) {
+            delete target[key];
+        }
+        Object.assign(target, presetData);
+
+        logger.debug(`[syncPresetToMemory] synced "${presetName}" to presets[${idx}] (apiId=${id})`);
+        return true;
+    } catch (e) {
+        logger.debug(`[syncPresetToMemory] failed for "${presetName}":`, e);
+        return false;
+    }
+}
+
+/**
  * 安全选中预设
  *
  * Custom Dropdown Overlay 架构下，所有 option 始终存在于 select 中，
