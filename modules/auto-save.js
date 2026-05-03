@@ -768,11 +768,17 @@ function _buildSavePayload(reason, explicitTarget) {
     }
 
     // 性能优化：快速预检（避免昂贵的深拷贝 + 完整序列化 hash）
-    // 直接从 ST 内存的 live 引用读取几个关键属性构建轻量级指纹，
+    // 直接从 ST 内存的 live 引用计算轻量级指纹（JSON.stringify 长度 + 关键标量字段），
     // 与上次保存时的指纹比较。如果完全一致则大概率没有变化，
     // 可以跳过 getPresetSnapshot()（structuredClone ~94KB）和 hashPreset()（递归序列化）。
-    // 仅在非 switch-guard 的常规保存中使用（switch-guard 必须保证完整性）。
-    if (!explicitTarget && _lastSavedHash && _lastQuickFingerprint) {
+    //
+    // ⚠️ 仅对 settings_updated 触发生效。
+    //    prompt-mutation / prompt-action 等由用户操作触发的保存始终走完整路径，
+    //    因为快速指纹无法覆盖所有可能的变化（如修改 prompt 名称时 JSON 长度不变的边界情况）。
+    //    settings_updated 是"高频无变化重复触发"的主要来源（ST 内部大量操作都会触发），
+    //    快速预检在此场景下收益最高、漏检风险最低。
+    const isSettingsUpdated = reason === 'settings_updated';
+    if (!explicitTarget && isSettingsUpdated && _lastSavedHash && _lastQuickFingerprint) {
         const qfp = _computeQuickFingerprint(apiId);
         if (qfp && qfp === _lastQuickFingerprint) {
             _noChangeCount++;
@@ -1016,42 +1022,34 @@ function _computeQuickFingerprint(apiId) {
         const live = list?.settings;
         if (!live || typeof live !== 'object') return null;
 
-        // 采样关键标量字段
-        const parts = [];
-        const scalarKeys = [
-            'temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty',
-            'min_p', 'top_a', 'openai_max_tokens', 'openai_max_context', 'seed',
-            'streaming', 'function_calling', 'reasoning_effort', 'show_thoughts',
-            'names_behavior', 'squash_system_messages', 'use_sysprompt',
-            'wi_format', 'send_if_empty',
-        ];
-        for (const k of scalarKeys) {
-            if (k in live) parts.push(k + '=' + live[k]);
-        }
+        // 使用 JSON.stringify 的长度作为全局变化感知器。
+        // JSON.stringify 比 structuredClone + stableStringify + fnv1aHash 轻量得多：
+        //   - 不做深拷贝（直接序列化 live 引用）
+        //   - 不做递归键排序（stableStringify 需要 Object.keys().sort()）
+        //   - 不做 sanitize/normalize
+        //   - 仅取 .length，不遍历字符串
+        // 对 ~94KB 预设：JSON.stringify ≈ 2-5ms，vs structuredClone+stableStringify+hash ≈ 15-30ms。
+        //
+        // 长度相同但内容不同的假阴性概率极低（需要恰好删减和增加同样多字节）。
+        // 即使发生，下一次 trigger 会再次检测，不会永久漏掉。
+        const jsonLen = JSON.stringify(live).length;
 
-        // prompts 数组：长度 + 每个 prompt 的 identifier+enabled+content长度
-        // content 长度变化检测：用户修改 prompt 文本时 identifier/enabled 不变，
-        // 但 content 长度一定会变（即使长度相同也是极小概率的假阴性，
-        // 后续完整 hash 仍会在下一个 trigger 中捕获）。
+        // 加上几个最常变化的标量字段值，进一步降低假阴性
+        const parts = [
+            'L' + jsonLen,
+            'T' + live.temperature,
+            'P' + live.top_p,
+            'K' + live.top_k,
+            'MT' + live.openai_max_tokens,
+            'MC' + live.openai_max_context,
+        ];
+
+        // prompts 数量 + prompt_order 数量（结构性变化快速感知）
         if (Array.isArray(live.prompts)) {
             parts.push('p#' + live.prompts.length);
-            for (let i = 0; i < live.prompts.length; i++) {
-                const p = live.prompts[i];
-                if (p) {
-                    const cLen = typeof p.content === 'string' ? p.content.length : 0;
-                    parts.push(i + ':' + (p.identifier || '') + (p.enabled ? '1' : '0') + '/' + cLen);
-                }
-            }
         }
-
-        // prompt_order：长度 + 每个 entry 的 identifier+enabled
         if (Array.isArray(live.prompt_order) && live.prompt_order[0]?.order) {
-            const order = live.prompt_order[0].order;
-            parts.push('o#' + order.length);
-            for (let i = 0; i < order.length; i++) {
-                const o = order[i];
-                if (o) parts.push(i + ':' + (o.identifier || '') + (o.enabled ? '1' : '0'));
-            }
+            parts.push('o#' + live.prompt_order[0].order.length);
         }
 
         return parts.join('|');
