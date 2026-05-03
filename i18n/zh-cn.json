@@ -291,6 +291,15 @@
     "Field request_image_aspect_ratio": "图片宽高比",
     "Field request_image_resolution": "图片分辨率",
 
+    "Enum names_behavior none": "无",
+    "Enum names_behavior default": "默认",
+    "Enum names_behavior completion": "补全对象",
+    "Enum names_behavior content": "消息内容",
+    "Enum wi_format none": "无",
+    "Enum wi_format square_bracket": "方括号",
+    "Enum wi_format bold": "粗体",
+    "Enum send_if_empty none": "无",
+
     "Grouping Group": "预设分组",
     "Grouping Enabled": "启用预设系列分组",
     "Grouping Enabled Desc": "把同名不同版本的预设（如 梦境思客V1 / V2）自动归为一个系列展示，记录面板将变成三级（系列 → 版本 → 历史）",

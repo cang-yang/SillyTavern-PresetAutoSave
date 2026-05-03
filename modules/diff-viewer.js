@@ -14,6 +14,7 @@
 import { logger } from './logger.js';
 import { t, toast, escapeHtml as esc, formatTime, createPopupSafe, normalizePresetFields, sanitizePresetForExport, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 import { stableStringify, formatBytes } from './history-store.js';
+import { formatEnumValue } from './panel-summary.js';
 
 let _popup = null;
 
@@ -486,18 +487,18 @@ function paramRowHTML(s) {
     const hasFN = friendly && friendly !== `Field ${s.key}` && friendly !== s.key;
     let vH = '';
     if (s.status === 'only-a') {
-        vH = `<code class="pas-diff-val-old">${esc(fmtV(s.aVal))}</code> <span class="pas-diff-arrow">→</span> <span class="pas-diff-val-gone">${esc(t('Diff Cell Empty'))}</span>`;
+        vH = `<code class="pas-diff-val-old">${esc(fmtFieldV(s.key, s.aVal))}</code> <span class="pas-diff-arrow">→</span> <span class="pas-diff-val-gone">${esc(t('Diff Cell Empty'))}</span>`;
     } else if (s.status === 'only-b') {
-        vH = `<span class="pas-diff-val-gone">${esc(t('Diff Cell Empty'))}</span> <span class="pas-diff-arrow">→</span> <code class="pas-diff-val-new">${esc(fmtV(s.bVal))}</code>`;
+        vH = `<span class="pas-diff-val-gone">${esc(t('Diff Cell Empty'))}</span> <span class="pas-diff-arrow">→</span> <code class="pas-diff-val-new">${esc(fmtFieldV(s.key, s.bVal))}</code>`;
     } else if (s.status === 'changed') {
-        vH = `<code class="pas-diff-val-old">${esc(fmtV(s.aVal))}</code> <span class="pas-diff-arrow">→</span> <code class="pas-diff-val-new">${esc(fmtV(s.bVal))}</code>`;
+        vH = `<code class="pas-diff-val-old">${esc(fmtFieldV(s.key, s.aVal))}</code> <span class="pas-diff-arrow">→</span> <code class="pas-diff-val-new">${esc(fmtFieldV(s.key, s.bVal))}</code>`;
         if (s.delta !== null) {
             const sign = s.delta > 0 ? '+' : '';
             const dc = s.delta > 0 ? 'pas-diff-delta-up' : 'pas-diff-delta-down';
             vH += ` <span class="pas-diff-param-delta ${dc}">(${sign}${rd(s.delta)})</span>`;
         }
     } else {
-        vH = `<code class="pas-diff-val-same">${esc(fmtV(s.aVal))}</code>`;
+        vH = `<code class="pas-diff-val-same">${esc(fmtFieldV(s.key, s.aVal))}</code>`;
     }
     const statusIcon = s.status === 'changed' ? '<i class="fa-solid fa-pen-to-square pas-diff-param-status-icon"></i>'
         : s.status === 'only-a' ? '<i class="fa-solid fa-circle-minus pas-diff-param-status-icon"></i>'
@@ -694,6 +695,16 @@ function fmtV(v) {
     if (Array.isArray(v)) return '[' + v.length + ']';
     if (typeof v === 'object') { const s = stableStringify(v); return s.length > 200 ? s.slice(0, 200) + '…' : s; }
     return String(v);
+}
+
+/**
+ * 带字段上下文的值格式化：优先使用枚举映射（如 names_behavior: 0 → "默认"），
+ * 回落到通用 fmtV()。
+ * @param {string} key 字段名
+ * @param {*} v 原始值
+ */
+function fmtFieldV(key, v) {
+    return formatEnumValue(key, v) ?? fmtV(v);
 }
 
 function rd(d) { return parseFloat(d.toFixed(4)); }

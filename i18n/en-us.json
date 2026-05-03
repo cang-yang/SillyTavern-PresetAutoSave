@@ -291,6 +291,15 @@
     "Field request_image_aspect_ratio": "Image aspect ratio",
     "Field request_image_resolution": "Image resolution",
 
+    "Enum names_behavior none": "None",
+    "Enum names_behavior default": "Default",
+    "Enum names_behavior completion": "Completion object",
+    "Enum names_behavior content": "Message content",
+    "Enum wi_format none": "None",
+    "Enum wi_format square_bracket": "Square brackets",
+    "Enum wi_format bold": "Bold",
+    "Enum send_if_empty none": "None",
+
     "Grouping Group": "Preset grouping",
     "Grouping Enabled": "Enable preset series grouping",
     "Grouping Enabled Desc": "Group different versions of the same preset (e.g. DreamThinker V1 / V2) under one series. The history panel becomes 3-level (series → version → snapshots).",

@@ -17,6 +17,57 @@ export { escapeHtml, escapeAttr, formatTime };
 // escapeAttr 已从 compatibility.js 导入并 re-export
 
 // =====================================================
+// 枚举字段值映射：把 ST 内部的数字/代码转成用户可读标签
+// 键 = 字段名，值 = { [rawValue]: i18nKey }
+// formatSummaryValue() 会查询此表，命中则用 t() 翻译
+// =====================================================
+
+/**
+ * 枚举字段的值→显示标签映射。
+ *
+ * SillyTavern 中部分字段以整数或短字符串存储选项值，
+ * 例如 names_behavior: -1/0/1/2 对应 无/默认/补全对象/消息内容。
+ * 直接展示原始值会让用户困惑，需要翻译成人话。
+ *
+ * 格式：{ fieldName: { rawValue: i18nKey } }
+ * i18nKey 对应 i18n/*.json 中的翻译条目。
+ */
+export const ENUM_VALUE_LABELS = Object.freeze({
+    names_behavior: {
+        [-1]: 'Enum names_behavior none',
+        [0]:  'Enum names_behavior default',
+        [1]:  'Enum names_behavior completion',
+        [2]:  'Enum names_behavior content',
+    },
+    wi_format: {
+        [0]: 'Enum wi_format none',
+        [1]: 'Enum wi_format square_bracket',
+        [2]: 'Enum wi_format bold',
+    },
+    send_if_empty: {
+        '': 'Enum send_if_empty none',
+    },
+});
+
+/**
+ * 尝试把字段枚举值翻译为可读标签。
+ * 如果字段不在 ENUM_VALUE_LABELS 中或值不匹配，返回 null（调用者回落到默认格式化）。
+ *
+ * @param {string} fieldKey 字段名
+ * @param {*} value 原始值
+ * @returns {string|null} 翻译后的标签，或 null
+ */
+export function formatEnumValue(fieldKey, value) {
+    const map = ENUM_VALUE_LABELS[fieldKey];
+    if (!map) return null;
+    const key = map[value];
+    if (!key) return null;
+    const translated = t(key);
+    // t() 找不到翻译时会返回 key 本身，此时回落
+    return (translated && translated !== key) ? translated : null;
+}
+
+// =====================================================
 // Label dictionaries
 // =====================================================
 
@@ -349,9 +400,9 @@ export function describeFieldChange(item) {
             label: `<span class="pas-summary-fkey">${escapeHtml(label)}</span>`,
         });
     }
-    // scalar
-    const fromStr = formatSummaryValue(item.from);
-    const toStr = formatSummaryValue(item.to);
+    // scalar — 优先使用枚举映射，回落到通用格式化
+    const fromStr = formatEnumValue(item.key, item.from) ?? formatSummaryValue(item.from);
+    const toStr = formatEnumValue(item.key, item.to) ?? formatSummaryValue(item.to);
     return `<span class="pas-summary-fkey">${escapeHtml(label)}</span>: <code class="pas-summary-from">${escapeHtml(fromStr)}</code> <span class="pas-summary-arrow">→</span> <code class="pas-summary-to">${escapeHtml(toStr)}</code>`;
 }
 
