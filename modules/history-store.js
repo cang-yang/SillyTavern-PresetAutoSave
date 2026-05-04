@@ -23,7 +23,7 @@
 
 import { logger } from './logger.js';
 import { getSettings } from './settings.js';
-import { createStorage, normalizePresetFields, sanitizePresetForExport, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
+import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 
 const STORAGE_NAME = 'PresetAutoSave';
 const STORE_NAME = 'history';
@@ -225,8 +225,16 @@ export function computeChangeSummary(prev, curr) {
         return result;
     }
 
-    const prevPrompts = Array.isArray(prev.prompts) ? prev.prompts : [];
-    const currPrompts = Array.isArray(curr.prompts) ? curr.prompts : [];
+    // 对比前过滤扩展注入的 prompt（确保新旧快照使用相同标准，
+    // 避免旧快照包含而新快照不包含时产生虚假的"删除"摘要）
+    const prevPrompts = filterExtensionPrompts(
+        Array.isArray(prev.prompts) ? prev.prompts : [],
+        prev.prompt_order,
+    );
+    const currPrompts = filterExtensionPrompts(
+        Array.isArray(curr.prompts) ? curr.prompts : [],
+        curr.prompt_order,
+    );
 
     // 1. Prompts 增删改（带 name + 改动字段明细）
     const promptDiff = comparePromptsDetail(prevPrompts, currPrompts);

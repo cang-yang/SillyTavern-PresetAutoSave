@@ -473,39 +473,54 @@ export function sanitizePresetForExport(preset) {
     //    在这里统一把"看起来像数字的字符串"转为真正的数字。
     normalizeScalarTypes(cleaned);
     // 4. 过滤 prompts 数组中被扩展动态注入的非用户 prompt
-    //    ST 运行时 oai_settings.prompts 中可能包含其他扩展（如 SPreset 等）
-    //    注入的条目，它们的 content 通常包含 HTML/前端代码，不是用户编写的 prompt。
-    //    这些条目会污染快照 hash（导致虚假变更）和变更摘要（显示乱码内容）。
-    //
-    //    过滤策略：保留以下任一条件成立的 prompt entry：
-    //      a) 在 prompt_order 中被引用（用户管理的 prompt）
-    //      b) 是 ST 已知的系统 prompt（main/nsfw/jailbreak/enhanceDefinitions 等，
-    //         它们不在 prompt_order 中但属于预设数据，用户可编辑其内容）
-    //      c) identifier 是 UUID 格式（用户创建的自定义 prompt，极少情况下可能不在 order 中）
-    //    不满足任何条件的 prompt 被视为扩展动态注入，予以排除。
-    if (Array.isArray(cleaned.prompts) && Array.isArray(cleaned.prompt_order)) {
-        const orderIds = new Set();
-        for (const group of cleaned.prompt_order) {
+    if (Array.isArray(cleaned.prompts)) {
+        cleaned.prompts = filterExtensionPrompts(cleaned.prompts, cleaned.prompt_order);
+    }
+    return cleaned;
+}
+
+/**
+ * 过滤 prompts 数组中被扩展动态注入的非用户 prompt。
+ *
+ * ST 运行时 oai_settings.prompts 中可能包含其他扩展（如 SPreset 等）
+ * 注入的条目，它们的 content 通常包含 HTML/前端代码，不是用户编写的 prompt。
+ *
+ * 过滤策略：保留以下任一条件成立的 prompt entry：
+ *   a) 在 prompt_order 中被引用（用户管理的 prompt）
+ *   b) 是 ST 已知的系统 prompt（main/nsfw/jailbreak/enhanceDefinitions）
+ *   c) identifier 是 UUID 格式（用户创建的自定义 prompt）
+ *
+ * 此函数同时用于 sanitizePresetForExport（新快照过滤）和
+ * computeChangeSummary（旧快照对比前过滤），确保新旧快照使用相同标准。
+ *
+ * @param {Array} prompts - prompt 数组
+ * @param {Array} [promptOrder] - prompt_order 数组（可选）
+ * @returns {Array} 过滤后的 prompts 数组
+ */
+export function filterExtensionPrompts(prompts, promptOrder) {
+    if (!Array.isArray(prompts)) return prompts;
+
+    const orderIds = new Set();
+    if (Array.isArray(promptOrder)) {
+        for (const group of promptOrder) {
             if (group?.order && Array.isArray(group.order)) {
                 for (const entry of group.order) {
                     if (entry?.identifier) orderIds.add(entry.identifier);
                 }
             }
         }
-        if (orderIds.size > 0) {
-            cleaned.prompts = cleaned.prompts.filter(p => {
-                if (!p || !p.identifier) return false;
-                // a) 在 prompt_order 中
-                if (orderIds.has(p.identifier)) return true;
-                // b) ST 已知系统 prompt
-                if (ST_SYSTEM_PROMPT_IDS.has(p.identifier)) return true;
-                // c) UUID 格式（用户自定义 prompt）
-                if (UUID_RE.test(p.identifier)) return true;
-                return false;
-            });
-        }
     }
-    return cleaned;
+
+    return prompts.filter(p => {
+        if (!p || !p.identifier) return false;
+        // a) 在 prompt_order 中
+        if (orderIds.has(p.identifier)) return true;
+        // b) ST 已知系统 prompt
+        if (ST_SYSTEM_PROMPT_IDS.has(p.identifier)) return true;
+        // c) UUID 格式（用户自定义 prompt）
+        if (UUID_RE.test(p.identifier)) return true;
+        return false;
+    });
 }
 
 /**

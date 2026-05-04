@@ -12,7 +12,7 @@
  */
 
 import { logger } from './logger.js';
-import { t, toast, escapeHtml as esc, formatTime, createPopupSafe, normalizePresetFields, sanitizePresetForExport, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
+import { t, toast, escapeHtml as esc, formatTime, createPopupSafe, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 import { stableStringify, formatBytes } from './history-store.js';
 import { formatEnumValue } from './panel-summary.js';
 
@@ -222,8 +222,9 @@ function diffSettings(A, B) {
 }
 
 function diffPrompts(A, B) {
-    const aArr = Array.isArray(A.prompts) ? A.prompts : [];
-    const bArr = Array.isArray(B.prompts) ? B.prompts : [];
+    // 过滤扩展注入的 prompt，确保对比视图不显示非用户 prompt
+    const aArr = filterExtensionPrompts(Array.isArray(A.prompts) ? A.prompts : [], A.prompt_order);
+    const bArr = filterExtensionPrompts(Array.isArray(B.prompts) ? B.prompts : [], B.prompt_order);
     const aM = new Map(aArr.filter(p => p?.identifier).map(p => [p.identifier, p]));
     const bM = new Map(bArr.filter(p => p?.identifier).map(p => [p.identifier, p]));
     const seen = new Set(), ids = [];
