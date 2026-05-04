@@ -359,6 +359,20 @@ export function normalizePresetFields(preset) {
 }
 
 // =====================================================
+// =====================================================
+// ST 内置系统 prompt 标识符（不在 prompt_order 中但属于预设数据）
+// 参考 ST 源码 openai.js 中的 OPENAI_PROMPT_IDS / oai_settings.prompts 初始化
+// =====================================================
+const ST_SYSTEM_PROMPT_IDS = new Set([
+    'main',                 // Main Prompt (系统主提示)
+    'nsfw',                 // Auxiliary Prompt (NSFW 辅助提示)
+    'jailbreak',            // Post-History Instructions (越狱/后置指令)
+    'enhanceDefinitions',   // Enhance Definitions (增强定义)
+]);
+
+// UUID v4 格式正则（匹配用户自定义 prompt 的 identifier）
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // R-1 / S-1: 导出预设时排除的敏感/环境配置字段（黑名单）
 // 基于 ST openai.js getChatCompletionPreset() 中不包含的字段。
 // 比 HASH_EXCLUDED_FIELDS 更全面，覆盖所有 provider-specific 配置。
@@ -458,6 +472,39 @@ export function sanitizePresetForExport(preset) {
     //    ST 内部处理后又转成数字），导致 hash 不稳定、产生虚假变更。
     //    在这里统一把"看起来像数字的字符串"转为真正的数字。
     normalizeScalarTypes(cleaned);
+    // 4. 过滤 prompts 数组中被扩展动态注入的非用户 prompt
+    //    ST 运行时 oai_settings.prompts 中可能包含其他扩展（如 SPreset 等）
+    //    注入的条目，它们的 content 通常包含 HTML/前端代码，不是用户编写的 prompt。
+    //    这些条目会污染快照 hash（导致虚假变更）和变更摘要（显示乱码内容）。
+    //
+    //    过滤策略：保留以下任一条件成立的 prompt entry：
+    //      a) 在 prompt_order 中被引用（用户管理的 prompt）
+    //      b) 是 ST 已知的系统 prompt（main/nsfw/jailbreak/enhanceDefinitions 等，
+    //         它们不在 prompt_order 中但属于预设数据，用户可编辑其内容）
+    //      c) identifier 是 UUID 格式（用户创建的自定义 prompt，极少情况下可能不在 order 中）
+    //    不满足任何条件的 prompt 被视为扩展动态注入，予以排除。
+    if (Array.isArray(cleaned.prompts) && Array.isArray(cleaned.prompt_order)) {
+        const orderIds = new Set();
+        for (const group of cleaned.prompt_order) {
+            if (group?.order && Array.isArray(group.order)) {
+                for (const entry of group.order) {
+                    if (entry?.identifier) orderIds.add(entry.identifier);
+                }
+            }
+        }
+        if (orderIds.size > 0) {
+            cleaned.prompts = cleaned.prompts.filter(p => {
+                if (!p || !p.identifier) return false;
+                // a) 在 prompt_order 中
+                if (orderIds.has(p.identifier)) return true;
+                // b) ST 已知系统 prompt
+                if (ST_SYSTEM_PROMPT_IDS.has(p.identifier)) return true;
+                // c) UUID 格式（用户自定义 prompt）
+                if (UUID_RE.test(p.identifier)) return true;
+                return false;
+            });
+        }
+    }
     return cleaned;
 }
 
