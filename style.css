@@ -1887,6 +1887,13 @@ body.pas-light .pas-btn-confirm-green:hover {
     border-color: rgba(251, 191, 36, 0.42);
     text-shadow: none;
 }
+/* "子组" 计数标签 —— 蓝色半透明，区分于"当前预设"的金色 */
+.pas-tag-subgroup {
+    background: rgba(96, 165, 250, 0.12);
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.3);
+    text-shadow: none;
+}
 /* 系列副标题：→ 实际预设名 */
 .pas-series-subtitle {
     font-size: 0.85em;
@@ -4473,4 +4480,145 @@ body.pas-light .pas-batch-delete-btn:hover:not(:disabled) {
 }
 body.pas-light .pas-batch-checkbox {
     accent-color: #dc2626;
+}
+
+/* ========================================
+   嵌套分组 — 分组管理弹窗
+   ======================================== */
+
+/* 嵌套分组卡片缩进 */
+.pas-gm-nested {
+    margin-left: 8px;
+    border-left: 2px solid var(--SmartThemeBorderColor, #444);
+    padding-left: 12px;
+}
+
+/* 嵌套子分组指示线 */
+.pas-gm-nested .pas-gm-series-name::before {
+    content: '└ ';
+    color: var(--SmartThemeEmColor, #888);
+    font-size: 14px;
+}
+
+/* 拖拽手柄 */
+.pas-gm-drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    cursor: grab;
+    opacity: 0.5;
+    margin-right: 6px;
+    font-size: 14px;
+    user-select: none;
+    flex-shrink: 0;
+}
+.pas-gm-drag-handle:hover {
+    opacity: 0.9;
+}
+.pas-gm-drag-handle:active {
+    cursor: grabbing;
+}
+
+/* 拖拽目标高亮 */
+.pas-gm-drop-target {
+    outline: 2px dashed var(--SmartThemeActiveColor, #4a9eff) !important;
+    outline-offset: -2px;
+    background-color: rgba(74, 158, 255, 0.05) !important;
+}
+
+/* 禁用的操作按钮 */
+.pas-gm-action-disabled {
+    opacity: 0.35;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+
+/* 系列菜单按钮 */
+.pas-gm-series-menu-btn {
+    cursor: pointer;
+    opacity: 0.6;
+    padding: 2px 6px;
+    font-size: 16px;
+}
+.pas-gm-series-menu-btn:hover {
+    opacity: 1;
+}
+
+/* ========================================
+   嵌套分组 — 接管下拉面板 (.pas-dd-*)
+   
+   层级缩进策略：
+     每层增加 16px padding-left + 左侧边框线。
+     由于子分组 DOM 嵌套在父分组的 .pas-dd-group-body 内，
+     缩进值自动累积，视觉上 depth=N → 约 N×16px。
+   
+   与分组管理弹窗的区别：
+     分组管理弹窗 (.pas-gm-series) 使用内联 style="padding-left:Npx"
+     直接设置缩进（同样 depth*16px），不依赖 CSS 类名累积。
+     两套 UI 场景独立，类名前缀不同，互不冲突。
+   ======================================== */
+
+/* 嵌套组层级缩进 — 每层 16px，由 DOM 嵌套自然累积 */
+.pas-dd-level-0 .pas-dd-group-header {
+    /* 根级无额外缩进，保持默认 */
+}
+
+.pas-dd-level-1 {
+    padding-left: 16px;
+    border-left: 1px solid var(--SmartThemeBorderColor, #333);
+    margin-left: 4px;
+}
+
+.pas-dd-level-2 {
+    padding-left: 16px;
+    border-left: 1px solid var(--SmartThemeBorderColor, #333);
+    margin-left: 4px;
+}
+
+/* 嵌套组体 */
+.pas-dd-nested {
+    margin-bottom: 2px;
+}
+
+/* 嵌套组头层级标记 — 越深层级字号越小、透明度越低 */
+.pas-dd-level-1 > .pas-dd-group-header {
+    font-size: 0.93em;
+    opacity: 0.9;
+}
+
+.pas-dd-level-2 > .pas-dd-group-header {
+    font-size: 0.88em;
+    opacity: 0.82;
+}
+
+/* 嵌套组头缩进装饰 — 树状连接线前缀 */
+.pas-dd-level-1 > .pas-dd-group-header::before {
+    content: '└ ';
+    color: var(--SmartThemeEmColor, #888);
+    font-size: 12px;
+}
+
+.pas-dd-level-2 > .pas-dd-group-header::before {
+    content: '└─ ';
+    color: var(--SmartThemeEmColor, #888);
+    font-size: 12px;
+}
+
+/* 统计标签 */
+.pas-dd-group-stats {
+    font-size: 0.75em;
+    opacity: 0.65;
+    margin-left: 6px;
+    font-weight: normal;
+}
+
+/* 嵌套组内预设项额外缩进 */
+.pas-dd-level-1 .pas-dd-preset-item {
+    padding-left: 10px;
+}
+
+.pas-dd-level-2 .pas-dd-preset-item {
+    padding-left: 10px;
 }

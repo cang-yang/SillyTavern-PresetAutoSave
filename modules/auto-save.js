@@ -91,6 +91,7 @@ let _lastSavedHash = null;         // 最后保存的内容哈希
 let _lastQuickFingerprint = null;  // 快速预检指纹（轻量级，避免每次做完整深拷贝+hash）
 let _suspendUntil = 0;             // SETTINGS_UPDATED 风暴期间临时挂起，用 Date.now()
 let _suspendNoticeShown = false;   // 在挂起期内只 log 一次，避免日志爆量
+let _suspendCompensationTimer = null;  // A6-fix: 挂起过期后补偿保存的定时器
 let _noChangeCount = 0;            // 连续无变化次数，用于日志降噪
 
 let _currentApiId = null;          // 当前跟踪的 API
@@ -640,6 +641,16 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified') {
         if (!_suspendNoticeShown) {
             _suspendNoticeShown = true;
             logger.debug(`scheduleAutoSave suspended (reason=${reason}, ${_suspendUntil - Date.now()}ms)`);
+        }
+        // A6-fix: 挂起窗口内安排补偿定时器，到期后重新触发保存检查，避免修改丢失
+        if (!_suspendCompensationTimer) {
+            const remaining = _suspendUntil - Date.now() + 50; // 加 50ms 缓冲确保窗口已过
+            _suspendCompensationTimer = setTimeout(() => {
+                _suspendCompensationTimer = null;
+                if (_dirty) {
+                    scheduleAutoSave(null, 'compensation');
+                }
+            }, remaining);
         }
         return;
     }
@@ -1431,6 +1442,10 @@ export function teardown() {
     if (_restoreAutoResetTimer) {
         clearTimeout(_restoreAutoResetTimer);
         _restoreAutoResetTimer = null;
+    }
+    if (_suspendCompensationTimer) {
+        clearTimeout(_suspendCompensationTimer);
+        _suspendCompensationTimer = null;
     }
     logger.info('AutoSave torn down');
 }

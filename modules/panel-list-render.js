@@ -24,6 +24,7 @@ import {
     getSeriesInfo,
     groupSnapshotsBySeries,
     normalizeSeriesKey,
+    buildNestedGroupTree,
 } from './preset-grouping.js';
 import {
     listAllPresetsIncludingDetached,
@@ -696,7 +697,125 @@ export function renderSeriesView(filtered, panelCtx) {
         </div>`;
     }
 
-    // 系列按"最新时间"倒序，无快照的系列按系列名 A→Z 排在最后
+    // 嵌套模式：使用 buildNestedGroupTree 构建树并递归渲染
+    if (settings.nestingEnabled && settings.groupingTree && Object.keys(settings.groupingTree).length > 0) {
+        // 收集所有 presetName → 用于 buildNestedGroupTree
+        const allPresetNames = [];
+        for (const series of seriesMap.values()) {
+            for (const v of series.versions) {
+                allPresetNames.push(v.presetName);
+            }
+        }
+
+        // 构建嵌套树
+        const tree = settings.groupingTree || {};
+        const maxDepth = settings.nestingMaxDepth || 3;
+        const rootNodes = buildNestedGroupTree(allPresetNames, settings.groupingManualOverrides || {}, tree, maxDepth);
+
+        // 构建 normKey → seriesInfo（从 seriesMap 查找版本数据）
+        const normKeyToSeries = new Map();
+        for (const [seriesKey, series] of seriesMap) {
+            normKeyToSeries.set(normalizeSeriesKey(seriesKey), series);
+        }
+
+        // 构建 presetName → versionData 快速查找（跨所有系列）
+        const presetToVersion = new Map();
+        for (const series of seriesMap.values()) {
+            for (const v of series.versions) {
+                presetToVersion.set(v.presetName, { ver: v, seriesKey: series.series, allVersions: series.versions });
+            }
+        }
+
+        // 递归渲染函数（复用 panelCtx.state() 中的 expandedSeries 管理展开/折叠状态）
+        function renderNode(node) {
+            const normKey = normalizeSeriesKey(node.key);
+            const seriesData = normKeyToSeries.get(normKey);
+            const isExpanded = _state.expandedSeries.has(node.key);
+
+            const indentPx = Math.min(node.depth * 16, 48);
+            const hasChildren = node.children && node.children.length > 0;
+            const hasItems = node.items && node.items.length > 0;
+
+            // 过滤空壳节点：无预设、无快照、无子组数据 → 跳过
+            // 递归子节点（先递归，获取子节点 HTML）
+            let childrenHtml = '';
+            if (hasChildren) {
+                childrenHtml = node.children.map(child => renderNode(child)).join('');
+            }
+
+            if (!hasItems && !childrenHtml.trim() && !seriesData) return '';
+
+            // 构建这个节点下的版本列表
+            let versionsHtml = '';
+            // 元信息
+            let versionCount = 0, snapshotCount = 0, totalSize = 0, latestTime = 0;
+            if (seriesData && seriesData.versions && seriesData.versions.length > 0) {
+                versionCount = seriesData.versionCount || seriesData.versions.length;
+                snapshotCount = seriesData.snapshotCount || 0;
+                totalSize = seriesData.totalSize || 0;
+                latestTime = seriesData.latestTime || 0;
+                versionsHtml = seriesData.versions.map(v => renderVersionGroup(v, node.key, seriesData.versions, panelCtx)).join('');
+            } else if (hasItems) {
+                versionCount = itemCount = node.items.length;
+                versionsHtml = node.items.map(presetName => {
+                    const found = presetToVersion.get(presetName);
+                    if (found) {
+                        return renderVersionGroup(found.ver, found.seriesKey, found.allVersions, panelCtx);
+                    }
+                    return `<div class="pas-version-group pas-version-empty" data-series-key="${escapeAttr(node.key)}" data-preset-name="${escapeAttr(presetName)}">
+                        <div class="pas-version-header">
+                            <div class="pas-version-header-row pas-version-header-row-title">
+                                <i class="fa-solid fa-code-branch pas-version-icon"></i>
+                                <span class="pas-version-rawname">${escapeHtml(presetName)}</span>
+                            </div>
+                            <div class="pas-version-header-row pas-version-header-row-tags">
+                                <span class="pas-tag pas-tag-empty">${escapeHtml(t('No Snapshots Yet'))}</span>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+
+
+            const displayName = node.displayName || node.key;
+            const itemCount = node.items ? node.items.length : 0;
+            const childCount = node.children ? node.children.length : 0;
+
+            // 子组计数标签
+            let childCountHtml = '';
+            if (childCount > 0) {
+                childCountHtml = `<span class="pas-tag pas-tag-subgroup">${childCount} ${escapeHtml(t('子组'))}</span>`;
+            }
+
+            // 使用与 renderSeriesGroup 一致的样式结构：两排 header + chevron 箭头 + 元信息行
+            return `<div class="pas-series-group pas-series-nested" data-series-key="${escapeAttr(node.key)}" style="margin-left:${indentPx}px; border-left:${node.depth > 0 ? '2px solid var(--SmartThemeBorderColor)' : 'none'}; padding-left:${node.depth > 0 ? '8px' : '0'};">
+                <div class="pas-series-header" data-action="toggle-series">
+                    <div class="pas-series-header-row pas-series-header-row-title">
+                        <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
+                        <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"></i>
+                        <span class="pas-series-name" title="${escapeAttr(displayName)}">${escapeHtml(displayName)}</span>
+                        ${versionCount > 0 ? `<span class="pas-series-version-pill" title="${escapeAttr(t('Grouping Series Header Versions', { count: versionCount }))}"><i class="fa-solid fa-code-branch"></i> ${versionCount}</span>` : ''}
+                        ${childCountHtml}
+                    </div>
+                    <div class="pas-series-header-row pas-series-header-row-meta">
+                        <span class="pas-series-snapshots" title="${escapeAttr(t('Grouping Series Header Snapshots', { count: snapshotCount }))}"><i class="fa-solid fa-camera"></i> ${snapshotCount}</span>
+                        <span class="pas-divider">\u00b7</span>
+                        <span class="pas-series-size">${formatBytes(totalSize)}</span>
+                        <span class="pas-divider">\u00b7</span>
+                        <span class="pas-series-latest">${latestTime ? formatTime(latestTime) : '\u2014'}</span>
+                    </div>
+                </div>
+                <div class="pas-series-body"${isExpanded ? '' : ' hidden'}>
+                    ${versionsHtml}
+                    ${childrenHtml}
+                </div>
+            </div>`;
+        }
+
+        return rootNodes.map(root => renderNode(root)).join('');
+    }
+
+    // 扁平模式（nestingEnabled=false 或无 groupingTree）：保持原有逻辑
     const seriesList = Array.from(seriesMap.values()).sort((a, b) => {
         if (a.latestTime !== b.latestTime) return b.latestTime - a.latestTime;
         return a.series.localeCompare(b.series);

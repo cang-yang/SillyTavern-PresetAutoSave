@@ -45,6 +45,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     groupingManualOverrides: {},    // { [presetName]: seriesName } 用户手动覆盖
     groupingDefaultExpand: 'current', // 'current' | 'all' | 'none' 系列默认展开策略
 
+    // 预设分组嵌套
+    nestingEnabled: true,           // 是否启用嵌套分组功能
+    nestingMaxDepth: 3,             // 最大嵌套深度（1=无嵌套，2=父子，3=祖-父-孙）
+    groupingTree: {},               // { [childNormKey]: parentNormKey } 父子关系映射（key和value均为归一化系列键）
+
     // 预设接管（核心特性：用一级系列名替换原生预设下拉）
     takeoverEnabled: true,          // 是否启用接管（关闭后原生下拉恢复原状）
     takeoverDefaultStrategy: 'latest', // 'latest' | 'manual' 选中代表版本的默认策略
@@ -82,6 +87,9 @@ const VALIDATORS = {
     groupingPromptOnImport: (v) => Boolean(v),
     groupingManualOverrides: (v) => sanitizeStringMap(v),
     groupingDefaultExpand: (v) => (v === 'all' || v === 'none' || v === 'current') ? v : 'current',
+    nestingEnabled: (v) => Boolean(v),
+    nestingMaxDepth: (v) => clamp(toInt(v, 3), 1, 3),
+    groupingTree: (v) => sanitizeStringMap(v),
     takeoverEnabled: (v) => Boolean(v),
     takeoverDefaultStrategy: (v) => (v === 'manual' ? 'manual' : 'latest'),
     seriesDefaultApply: (v) => sanitizeStringMap(v),

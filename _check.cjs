@@ -12,6 +12,8 @@ const MODULES_DIR = path.join(BASE, 'modules');
 const ALL_FILES = [
   'index.js',
   'modules/compatibility.js',
+  'modules/key-utils.js',
+  'modules/time-utils.js',
   'modules/preset-takeover.js',
   'modules/auto-save.js',
   'modules/history-panel.js',
@@ -19,6 +21,7 @@ const ALL_FILES = [
   'modules/panel-settings-log.js',
   'modules/panel-list-render.js',
   'modules/panel-actions.js',
+  'modules/panel-group-manager.js',
   'modules/history-store.js',
   'modules/preset-grouping.js',
   'modules/settings.js',

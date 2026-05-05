@@ -21,10 +21,10 @@ import {
 } from './history-store.js';
 import {
     confirmSafe, toast, t,
+    escapeHtml, escapeAttr,
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { forceReseedSnapshots, refreshTakeover } from './preset-takeover.js';
-import { escapeHtml, escapeAttr } from './panel-summary.js';
 
 // =====================================================
 // 内部工具函数
@@ -442,7 +442,13 @@ export async function onImport(panelCtx) {
 
         try {
             const text = await file.text();
-            const data = JSON.parse(text);
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (_) {
+                toast.error(t('Import Failed JSON'));
+                return;
+            }
 
             const ok = await confirmSafe(
                 t('Import Backup'),

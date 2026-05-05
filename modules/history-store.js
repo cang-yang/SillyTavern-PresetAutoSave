@@ -375,9 +375,15 @@ function diffPromptFields(a, b) {
  */
 function extractOrder(prompt_order) {
     if (!Array.isArray(prompt_order) || !prompt_order.length) return [];
-    const first = prompt_order[0];
-    if (!first || !Array.isArray(first.order)) return [];
-    return first.order.map(o => o?.identifier).filter(Boolean);
+    const merged = [];
+    for (const group of prompt_order) {
+        if (group && Array.isArray(group.order)) {
+            for (const o of group.order) {
+                if (o?.identifier) merged.push(o.identifier);
+            }
+        }
+    }
+    return merged;
 }
 
 /**
@@ -399,9 +405,12 @@ function countReorderedPositions(prevOrder, currOrder) {
  */
 function compareEnabledDetail(prevOrder, currOrder, currPrompts, prevPrompts) {
     const prevMap = new Map();
-    if (Array.isArray(prevOrder) && prevOrder[0]?.order) {
-        for (const o of prevOrder[0].order) {
-            if (o?.identifier) prevMap.set(o.identifier, !!o.enabled);
+    if (Array.isArray(prevOrder)) {
+        for (const group of prevOrder) {
+            if (!group || !Array.isArray(group.order)) continue;
+            for (const o of group.order) {
+                if (o?.identifier) prevMap.set(o.identifier, !!o.enabled);
+            }
         }
     }
 
@@ -417,19 +426,22 @@ function compareEnabledDetail(prevOrder, currOrder, currPrompts, prevPrompts) {
 
     const toggledOn = [];
     const toggledOff = [];
-    if (Array.isArray(currOrder) && currOrder[0]?.order) {
-        for (const o of currOrder[0].order) {
-            if (!o?.identifier) continue;
-            if (!prevMap.has(o.identifier)) continue;
-            const wasEnabled = prevMap.get(o.identifier);
-            const isEnabled = !!o.enabled;
-            if (wasEnabled === isEnabled) continue;
-            const item = {
-                identifier: o.identifier,
-                name: nameMap.get(o.identifier) || '',
-            };
-            if (isEnabled) toggledOn.push(item);
-            else toggledOff.push(item);
+    if (Array.isArray(currOrder)) {
+        for (const group of currOrder) {
+            if (!group || !Array.isArray(group.order)) continue;
+            for (const o of group.order) {
+                if (!o?.identifier) continue;
+                if (!prevMap.has(o.identifier)) continue;
+                const wasEnabled = prevMap.get(o.identifier);
+                const isEnabled = !!o.enabled;
+                if (wasEnabled === isEnabled) continue;
+                const item = {
+                    identifier: o.identifier,
+                    name: nameMap.get(o.identifier) || '',
+                };
+                if (isEnabled) toggledOn.push(item);
+                else toggledOff.push(item);
+            }
         }
     }
     return { toggledOn, toggledOff };

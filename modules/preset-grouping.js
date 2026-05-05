@@ -1131,6 +1131,261 @@ export function suggestSeriesForName(name, existingSeries = []) {
 }
 
 // =====================================================
+// 预设分组嵌套：从扁平分组构建嵌套树
+// =====================================================
+
+/**
+ * 从扁平分组构建嵌套分组树。
+ *
+ * 根据 `groupingTree` 中定义的父子关系，将 {@link groupNamesBySeries} 返回的扁平分组
+ * 组织为树形结构。当节点深度达到 `maxDepth - 1` 时，其子孙节点的 items 会被
+ * 合并到该节点中（平铺显示），而不再作为嵌套 children 保留。
+ *
+ * 循环引用会被检测并跳过，不会导致无限递归。
+ *
+ * @param {string[]} names - 所有预设名
+ * @param {object} [overrides] - groupingManualOverrides: { [presetName]: seriesName }
+ * @param {object} [tree] - groupingTree: { [childNormKey]: parentNormKey } 父子关系映射，
+ *   键和值都应为归一化系列键（通过 {@link normalizeSeriesKey} 处理）
+ * @param {number} [maxDepth=3] - 最大嵌套深度（1 = 无嵌套，2 = 父子，3 = 祖-父-孙）
+ * @returns {Array<{key: string, displayName: string, children: Array, items: string[], depth: number}>}
+ *   根节点数组，每个节点的 children 已递归填充。节点的 items 为属于该系列的预设名数组。
+ */
+export function buildNestedGroupTree(names, overrides = null, tree = null, maxDepth = 3) {
+    // 防御：确保 maxDepth 合法
+    const effectiveMaxDepth = Math.max(1, Math.min(10, Math.floor(Number(maxDepth)) || 3));
+
+    // 1. 获取扁平分组
+    const flatGroups = groupNamesBySeries(names, overrides);
+    /** @type {Map<string, {displayName: string, items: string[]}>} */
+    const flatMap = new Map();
+    for (const g of flatGroups) {
+        const normKey = normalizeSeriesKey(g.series);
+        flatMap.set(normKey, {
+            displayName: g.series,
+            items: g.items.map(it => it.presetName),
+        });
+    }
+
+    // 2. 收集所有已知的归一化系列键
+    const knownKeys = new Set(flatMap.keys());
+    if (overrides) {
+        for (const v of Object.values(overrides)) {
+            if (typeof v === 'string' && v.trim()) {
+                knownKeys.add(normalizeSeriesKey(v));
+            }
+        }
+    }
+    if (tree) {
+        for (const k of Object.keys(tree)) {
+            if (typeof k === 'string' && k.trim()) knownKeys.add(normalizeSeriesKey(k));
+        }
+        for (const v of Object.values(tree)) {
+            if (typeof v === 'string' && v.trim()) knownKeys.add(normalizeSeriesKey(v));
+        }
+    }
+
+    // 3. 为每个已知系列键创建节点对象
+    /** @type {Map<string, {key: string, displayName: string, children: Array, items: string[], depth: number, parent: object|null}>} */
+    const nodeMap = new Map();
+    for (const key of knownKeys) {
+        const flatEntry = flatMap.get(key);
+        nodeMap.set(key, {
+            key,
+            displayName: flatEntry ? flatEntry.displayName : key,
+            children: [],
+            items: flatEntry ? [...flatEntry.items] : [],
+            depth: 0,
+            parent: null,
+        });
+    }
+
+    // 4. 建立父子关系
+    if (tree) {
+        for (const [childRaw, parentRaw] of Object.entries(tree)) {
+            if (typeof childRaw !== 'string' || !childRaw.trim()) continue;
+            if (typeof parentRaw !== 'string' || !parentRaw.trim()) continue;
+            const childKey = normalizeSeriesKey(childRaw);
+            const parentKey = normalizeSeriesKey(parentRaw);
+            if (childKey === parentKey) continue;  // 跳过自引用
+            const childNode = nodeMap.get(childKey);
+            const parentNode = nodeMap.get(parentKey);
+            if (!childNode || !parentNode) continue;
+            // 防止重复添加父子关系
+            if (childNode.parent) {
+                // 已有父节点，从旧父节点的 children 中移除
+                const oldParent = childNode.parent;
+                const idx = oldParent.children.indexOf(childNode);
+                if (idx >= 0) oldParent.children.splice(idx, 1);
+            }
+            childNode.parent = parentNode;
+            parentNode.children.push(childNode);
+        }
+    }
+
+    // 5. 找出根节点（无 parent 的节点）
+    const roots = [];
+    for (const node of nodeMap.values()) {
+        if (!node.parent) {
+            roots.push(node);
+        }
+    }
+
+    // 6. DFS 构建树，处理深度和循环引用
+    const visited = new Set();
+
+    /**
+     * 递归收集某个节点及其所有子孙的 items 到目标节点
+     * @param {object} node
+     * @param {object} targetNode
+     */
+    function flattenDescendantsInto(node, targetNode) {
+        for (const item of node.items) {
+            if (!targetNode.items.includes(item)) {
+                targetNode.items.push(item);
+            }
+        }
+        for (const child of node.children) {
+            flattenDescendantsInto(child, targetNode);
+        }
+    }
+
+    /**
+     * DFS 遍历并设置深度
+     * @param {object} node
+     * @param {number} depth
+     */
+    function processNode(node, depth) {
+        if (visited.has(node.key)) return;  // 循环引用：已处理过，跳过
+        visited.add(node.key);
+        node.depth = depth;
+
+        if (depth >= effectiveMaxDepth - 1) {
+            // 达到最大深度：将子孙节点的 items 平铺合并到当前节点
+            const descendants = [...node.children];
+            node.children = [];
+            for (const child of descendants) {
+                flattenDescendantsInto(child, node);
+            }
+        } else {
+            // 继续递归，同时过滤掉已访问的节点（循环引用检测）
+            const validChildren = [];
+            for (const child of node.children) {
+                if (visited.has(child.key)) continue;  // 循环引用：跳过
+                processNode(child, depth + 1);
+                validChildren.push(child);
+            }
+            node.children = validChildren;
+        }
+    }
+
+    for (const root of roots) {
+        processNode(root, 0);
+    }
+
+    // 7. 清理内部 parent 引用后返回
+    for (const node of nodeMap.values()) {
+        delete node.parent;
+    }
+
+    return roots;
+}
+
+// =====================================================
+// 共享树操作工具函数（panel-group-manager + preset-takeover 共用）
+// =====================================================
+
+/**
+ * 获取某个归一化系列键在 groupingTree 中的完整祖先路径（从根到自身）。
+ *
+ * 根据平铺的父子关系映射 `tree`（{childKey: parentKey}），沿 parent 链向上追溯，
+ * 收集所有经过的键，最后反转得到根→...→自身的路径。
+ *
+ * 内置循环引用检测，防止因错误数据导致无限循环。
+ *
+ * @param {object|null} tree - groupingTree: { [childNormKey]: parentNormKey }
+ * @param {string} nodeKey - 归一化系列键
+ * @returns {string[]} 从根到该节点的路径数组（根为第一项，自身为最后一项）；
+ *   如果节点不存在或 tree 无效，返回空数组。
+ *
+ * @example
+ *   // tree = { child: 'parent', grandchild: 'child' }
+ *   getNodePath(tree, 'grandchild')  // → ['parent', 'child', 'grandchild']
+ *   getNodePath(tree, 'parent')      // → ['parent']
+ *   getNodePath(null, 'x')           // → []
+ */
+export function getNodePath(tree, nodeKey) {
+    if (!tree || typeof tree !== 'object' || !nodeKey) return [];
+    const path = [];
+    let current = nodeKey;
+    const visited = new Set();
+    while (current && typeof tree[current] === 'string' && tree[current].trim()) {
+        if (visited.has(current)) break;  // 循环引用防护
+        visited.add(current);
+        path.push(current);
+        current = tree[current];
+    }
+    // 加上根节点（没有 parent 的那个）
+    if (current) path.push(current);
+    return path.reverse();
+}
+
+/**
+ * 在嵌套树中 DFS 查找指定 key 的节点。
+ *
+ * @param {Array<{key: string, displayName: string, children: Array, items: string[], depth: number}>} rootNodes
+ *   来自 {@link buildNestedGroupTree} 的根节点数组
+ * @param {string} key - 要查找的归一化系列键
+ * @returns {object|null} 找到的节点对象，找不到返回 null
+ *
+ * @example
+ *   const node = findNodeByKey(rootNodes, 'mur-api');
+ *   if (node) console.log(node.displayName, node.items);
+ */
+export function findNodeByKey(rootNodes, key) {
+    if (!Array.isArray(rootNodes) || !key) return null;
+    for (const node of rootNodes) {
+        if (node.key === key) return node;
+        if (node.children && node.children.length > 0) {
+            const found = findNodeByKey(node.children, key);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+/**
+ * 递归收集嵌套树中所有预设名（去重）。
+ *
+ * @param {Array<{key: string, items: string[], children: Array}>} rootNodes
+ *   来自 {@link buildNestedGroupTree} 的根节点数组
+ * @returns {string[]} 所有预设名的去重数组
+ *
+ * @example
+ *   const allNames = collectAllPresetNames(rootNodes);
+ *   console.log(`${allNames.length} presets in tree`);
+ */
+export function collectAllPresetNames(rootNodes) {
+    if (!Array.isArray(rootNodes)) return [];
+    const names = new Set();
+    /** @param {Array} nodes */
+    function collect(nodes) {
+        for (const node of nodes) {
+            if (Array.isArray(node.items)) {
+                for (const name of node.items) {
+                    if (typeof name === 'string' && name) names.add(name);
+                }
+            }
+            if (node.children && node.children.length > 0) {
+                collect(node.children);
+            }
+        }
+    }
+    collect(rootNodes);
+    return [...names];
+}
+
+// =====================================================
 // 自检 / Smoke Test（仅在调试模式下打印）
 // =====================================================
 const _SAMPLES = Object.freeze([

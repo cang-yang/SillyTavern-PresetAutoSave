@@ -10,6 +10,8 @@
  */
 
 import { logger } from './logger.js';
+export { escapeHtml, escapeAttr } from './key-utils.js';
+export { formatTime } from './time-utils.js';
 
 // =====================================================
 // 环境能力标识
@@ -717,7 +719,15 @@ function cloneDeepSafe(obj) {
     try {
         return JSON.parse(JSON.stringify(obj));
     } catch (_) {
-        return obj; // 最后回退：返回引用（外部不应修改）
+        // JSON 序列化失败（BigInt、循环引用等），回退到浅拷贝
+        logger.warn('[cloneDeepSafe] JSON fallback failed, using shallow copy');
+        if (Array.isArray(obj)) {
+            return Array.from(obj);
+        }
+        if (obj && typeof obj === 'object') {
+            return { ...obj };
+        }
+        return obj; // 原始类型直接返回
     }
 }
 
@@ -1027,10 +1037,10 @@ export async function confirmSafe(title, message) {
         .replace(/<\/p>/gi, '\n')
         .replace(/<[^>]+>/g, '')
         .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>')
+        .replace(/"/g, '"')
         .replace(/&#039;/g, "'")
         .replace(/[ \t]+/g, ' ')
         .replace(/\n{3,}/g, '\n\n')
@@ -1196,48 +1206,9 @@ function createLocalStorageAdapter(prefix) {
 }
 
 // =====================================================
-// 通用 HTML / 时间工具
+// 通用 HTML / 时间工具 — 已迁移至 key-utils.js 和 time-utils.js
+// 上方通过 re-export 保持向后兼容
 // =====================================================
-
-/**
- * HTML 转义 — 防止 XSS，适用于标签内文本与属性值
- * @param {*} s
- * @returns {string}
- */
-export function escapeHtml(s) {
-    if (s === null || s === undefined) return '';
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-/**
- * HTML 属性转义 — 当前实现等价于 escapeHtml，语义别名便于模板中区分用途
- * @param {*} s
- * @returns {string}
- */
-export function escapeAttr(s) {
-    return escapeHtml(s);
-}
-
-/**
- * 格式化时间戳为 YYYY-MM-DD HH:mm:ss
- * @param {number} ts  Unix 毫秒时间戳
- * @returns {string}
- */
-export function formatTime(ts) {
-    if (!ts) return '\u2014';
-    try {
-        const d = new Date(ts);
-        const pad = n => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    } catch (_) {
-        return String(ts);
-    }
-}
 
 // =====================================================
 // 诊断报告
