@@ -454,7 +454,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
         if (items.length === 1 && !items[0].manualOverride) {
             const it = items[0];
             const isActive = it.value === currentValue;
-            html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+            html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}" title="${escapeAttr(it.presetName)}">
                 <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
             </div>`;
             continue;
@@ -465,7 +465,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
         const hasActiveInGroup = items.some(it => it.value === currentValue);
         // T7: 移除 ⭐ 默认预设标记；T5: group-body 默认 display:none（收起）
         html += `<div class="pas-dd-group" data-series-key="${escapeAttr(normKey)}">
-            <div class="pas-dd-group-header${hasActiveInGroup ? ' pas-dd-group--has-active' : ''}">
+            <div class="pas-dd-group-header${hasActiveInGroup ? ' pas-dd-group--has-active' : ''}" title="${escapeAttr(displayName)}">
                 <span class="pas-dd-series-name">${escapeHtml(displayName)}</span>
                 <span class="pas-dd-badge pas-dd-version-count">${items.length}</span>
                 <i class="fas fa-chevron-right pas-dd-group-chevron"></i>
@@ -473,7 +473,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
             <div class="pas-dd-group-body" style="display:none;">`;
         for (const it of items) {
             const isActive = it.value === currentValue;
-            html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+            html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}" title="${escapeAttr(it.presetName)}">
                     <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
                     ${it.version ? `<span class="pas-dd-version-tag">${escapeHtml(it.version)}</span>` : ''}
                 </div>`;
@@ -484,7 +484,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
     for (const it of standaloneOptions) {
         if (!it.presetName) continue;
         const isActive = it.value === currentValue;
-        html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+        html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}" title="${escapeAttr(it.presetName)}">
             <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
         </div>`;
     }
@@ -585,7 +585,7 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
         if (!name && !opt.value) continue;
         const display = name || opt.value;
         const isActive = opt.value === currentValue;
-        html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(opt.value)}" data-preset-name="${escapeAttr(display)}">
+        html += `<div class="pas-dd-item pas-dd-standalone${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(opt.value)}" data-preset-name="${escapeAttr(display)}" title="${escapeAttr(display)}">
             <span class="pas-dd-item-name">${escapeHtml(display)}</span>
         </div>`;
     }
@@ -660,7 +660,7 @@ function renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrid
         if (itemCount > 0) badgeText += `${itemCount}项`;
         if (childCount > 0) badgeText += (badgeText ? `, ${childCount}子组` : `${childCount}子组`);
         html += `<div class="pas-dd-group pas-dd-nested" data-series-key="${escapeAttr(node.key)}">
-            <div class="pas-dd-group-header pas-dd-level-${depth}${hasActive ? ' pas-dd-group--has-active' : ''}">
+            <div class="pas-dd-group-header pas-dd-level-${depth}${hasActive ? ' pas-dd-group--has-active' : ''}" title="${escapeAttr(node.displayName)}">
                 <span class="pas-dd-series-name">${escapeHtml(node.displayName)}</span>
                 ${badgeText ? `<span class="pas-dd-badge pas-dd-version-count">${escapeHtml(badgeText)}</span>` : ''}
                 <i class="fas fa-chevron-right pas-dd-group-chevron"></i>
@@ -673,7 +673,7 @@ function renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrid
         directItems.sort((a, b) => compareVersion(b.version, a.version));
         for (const it of directItems) {
             const isActive = it.value === currentValue;
-            html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}">
+            html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}" title="${escapeAttr(it.presetName)}">
                     <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
                     ${it.version ? `<span class="pas-dd-version-tag">${escapeHtml(it.version)}</span>` : ''}
                 </div>`;

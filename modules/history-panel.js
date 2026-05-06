@@ -119,6 +119,7 @@ function newState() {
         log: { level: 'all', search: '', autoScroll: true },
         batchMode: false,           // AR-0: 批量模式
         batchSelected: new Set(),   // AR-0: 批量选中的预设名
+        _cachedSeriesMap: null,     // 性能优化：缓存 groupSnapshotsBySeries() 结果，避免 loadData→render 重复计算
     };
 }
 
@@ -324,6 +325,9 @@ async function loadData() {
         // O-1: 默认全部收起（'none'），用户可在设置中改为 'current' 或 'all'
         const expandMode = settings.groupingDefaultExpand || 'none';
         const seriesMap = groupSnapshotsBySeries(_state.snapshots, { overrides });
+
+        // 性能优化：缓存 seriesMap，避免 _renderListTabImpl → renderSeriesView 重复计算
+        _state._cachedSeriesMap = seriesMap;
 
         if (expandMode === 'all') {
             for (const k of seriesMap.keys()) _state.expandedSeries.add(k);
@@ -863,9 +867,10 @@ function _renderListTabImpl() {
         return;
     }
 
-    // ⚡ 大数据量优化：>5000 条时分批 render，避免主线程长任务
+    // ⚡ 性能优化：将 loadData() 中缓存的 seriesMap 传递给 renderSeriesView，
+    //    避免 groupSnapshotsBySeries() 重复计算（每个面板打开周期计算2次→1次）
     const html = (_state.viewMode === 'series')
-        ? renderSeriesView(filtered, _panelCtx())
+        ? renderSeriesView(filtered, _panelCtx(), _state._cachedSeriesMap)
         : renderFlatView(filtered, _panelCtx());
     list.innerHTML = html;
     updateBadge(filtered.length);

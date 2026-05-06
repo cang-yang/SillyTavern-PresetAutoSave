@@ -23,7 +23,7 @@
 
 import { logger } from './logger.js';
 import { getSettings } from './settings.js';
-import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
+import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, extractCanonicalForDiff, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 
 const STORAGE_NAME = 'PresetAutoSave';
 const STORE_NAME = 'history';
@@ -450,19 +450,23 @@ function compareEnabledDetail(prevOrder, currOrder, currPrompts, prevPrompts) {
 /**
  * 标量字段比较 - 排除明显属于 prompt 范畴或内部用途的键
  */
-// 使用 DISPLAY_IGNORED_FIELDS（从 compatibility.js 导入），与导出排除字段保持同步
-const SUMMARY_IGNORED_KEYS = DISPLAY_IGNORED_FIELDS;
-
 function compareScalars(prev, curr) {
     // 规范化字段名后再比较，避免同义字段产生虚假 diff
     const nPrev = normalizePresetFields(prev);
     const nCurr = normalizePresetFields(curr);
+
+    // 阶段7：Canonical 提取 —— 只比较 ST 预设定义中的有效标量字段
+    // 基于 ST openai.js settingsToUpdate 白名单，而非黑名单排除法。
+    // 任何不在 ST 预设定义中的字段（扩展注入、ST 新字段、字段名拼写差异等）
+    // 都不会参与比较，从根本上根治"修改1个参数却显示10个字段变化"的问题。
+    const canonPrev = extractCanonicalForDiff(nPrev);
+    const canonCurr = extractCanonicalForDiff(nCurr);
+    const allKeys = new Set([...Object.keys(canonPrev), ...Object.keys(canonCurr)]);
+
     const out = [];
-    const allKeys = new Set([...Object.keys(nPrev), ...Object.keys(nCurr)]);
     for (const k of allKeys) {
-        if (SUMMARY_IGNORED_KEYS.has(k)) continue;
-        const a = nPrev[k];
-        const b = nCurr[k];
+        const a = canonPrev[k];
+        const b = canonCurr[k];
         if (deepEqualStrict(a, b)) continue;
 
         const ta = typeof a, tb = typeof b;
@@ -489,7 +493,7 @@ function compareScalars(prev, curr) {
         'frequency_penalty', 'presence_penalty', 'repetition_penalty',
         'reasoning_effort', 'show_thoughts',
         'max_context_unlocked', 'openai_max_tokens', 'openai_max_context',
-        'stream_response', 'streaming',
+        'stream_openai',
         'function_calling', 'request_images',
         // 角色行为 / Character Behavior 栏目
         'names_behavior', 'continue_prefill', 'continue_postfix',
@@ -514,7 +518,16 @@ function compareScalars(prev, curr) {
 
 function deepEqualStrict(a, b) {
     if (a === b) return true;
-    if (a === null || b === null || a === undefined || b === undefined) return a === b;
+
+    // 阶段7：空值归一化 —— 将 null / undefined / '' 统一视为等价的"空值"
+    // ST 内部字段在不存在时可能是 undefined，在预设重建后又变成 ""，
+    // 这导致 deepEqualStrict 将 undefined 和 "" 视为不等，产生"从空变为X"的无意义变更。
+    // 归一化后："" == null == undefined → 视为相同，不产生 diff。
+    const isNullish = (v) => v === null || v === undefined || v === '';
+    if (isNullish(a) && isNullish(b)) return true;
+    // 一个为空、另一个非空 → 不等
+    if (isNullish(a) || isNullish(b)) return false;
+
     // AU-0: 数字/字符串类型宽松比较
     // ST 内部的数值字段会在 number 和 string 之间波动（如 2000000 vs "2000000"），
     // 旧快照可能存了字符串、新快照经 normalizeScalarTypes 后已是数字。

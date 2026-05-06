@@ -3489,12 +3489,16 @@ body.pas-light .pas-btn-confirm-green:hover {
 }
 
 /* --- 下拉面板 --- */
+/* 阶段5：自适应宽度 — 按内容撑开，同时保持最小/最大宽度约束 */
 .pas-dd-panel {
     display: none;
     position: absolute;
     top: calc(100% + 4px);
     left: 0;
-    right: 0;
+    /* right: 0;  移除 — 阶段5：不再固定拉伸至触发器宽度 */
+    min-width: 100%;              /* 至少和 trigger 一样宽 */
+    width: max-content;           /* 按内容撑开 */
+    max-width: min(380px, 90vw);  /* 上限保护，避免超出视口 */
     z-index: 9999;
     max-height: 400px;
     overflow-y: auto;
@@ -3541,6 +3545,11 @@ body.pas-light .pas-btn-confirm-green:hover {
 }
 .pas-dd-group-header:hover {
     background: rgba(255, 255, 255, 0.06);
+}
+.pas-dd-group-header:focus-visible {
+    background: rgba(255, 255, 255, 0.06);
+    outline: 2px solid var(--SmartThemeQuoteColor, #a78bfa);
+    outline-offset: -2px;
 }
 
 /* --- 分组折叠箭头 --- */
@@ -3589,8 +3598,9 @@ body.pas-light .pas-btn-confirm-green:hover {
 }
 
 /* --- 分组内容体 --- */
+/* 阶段5：减少缩进消耗 14px→10px，为深层嵌套留出更多空间 */
 .pas-dd-group-body {
-    padding-left: 14px;
+    padding-left: 10px;
 }
 
 /* --- 选项条目 --- */
@@ -4185,6 +4195,19 @@ body.pas-light .pas-dd-version-tag{
     border-color: rgba(37, 99, 235, 0.20);
 }
 
+/* 🟢 阶段6：下拉组件遗漏的亮色覆盖 */
+body.pas-light .pas-dd-trigger:focus-visible{
+    background: rgba(0, 0, 0, 0.04);
+    box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.35);
+}
+body.pas-light .pas-dd-group-header:focus-visible{
+    background: rgba(0, 0, 0, 0.05);
+    outline-color: var(--SmartThemeQuoteColor, #7c3aed);
+}
+body.pas-light .pas-dd-group-header.pas-dd-group--has-active{
+    border-left-color: rgba(217, 119, 6, 0.55);
+}
+
 /* --- 14. 面板标题图标渐变 --- */
 body.pas-light .pas-panel-title i{
     background:
@@ -4565,14 +4588,15 @@ body.pas-light .pas-batch-checkbox {
     /* 根级无额外缩进，保持默认 */
 }
 
+/* 阶段5：减少每层缩进 16px→12px，为深层嵌套留出更多空间 */
 .pas-dd-level-1 {
-    padding-left: 16px;
+    padding-left: 12px;
     border-left: 1px solid var(--SmartThemeBorderColor, #333);
     margin-left: 4px;
 }
 
 .pas-dd-level-2 {
-    padding-left: 16px;
+    padding-left: 12px;
     border-left: 1px solid var(--SmartThemeBorderColor, #333);
     margin-left: 4px;
 }

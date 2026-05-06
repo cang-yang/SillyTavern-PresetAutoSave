@@ -25,6 +25,7 @@ import {
     groupSnapshotsBySeries,
     normalizeSeriesKey,
     buildNestedGroupTree,
+    getNodePath,
 } from './preset-grouping.js';
 import {
     listAllPresetsIncludingDetached,
@@ -479,16 +480,57 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
  * @param {Array} filtered - 已过滤的快照数组
  * @param {object} panelCtx - 面板上下文，需提供 state(), archivedCache()
  */
-export function renderSeriesView(filtered, panelCtx) {
+export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
     const settings = getSettings();
     const currentApi = getCurrentApiId() || 'openai';
 
     // 1) 历史快照：按当前 API 过滤（snapshot.apiId 必须 === currentApi）
     const filteredByApi = (filtered || []).filter(s => s && s.apiId === currentApi);
 
-    const seriesMap = groupSnapshotsBySeries(filteredByApi, {
-        overrides: settings.groupingManualOverrides,
-    });
+    // 性能优化：如果 loadData() 已缓存 seriesMap，则复用并按 filter/search 过滤，
+    // 避免 O(N) 的 groupSnapshotsBySeries() 重复计算
+    let seriesMap;
+    if (cachedSeriesMap && cachedSeriesMap.size > 0) {
+        const filteredSnapshotIds = new Set(filteredByApi.map(s => s.id).filter(Boolean));
+        seriesMap = new Map();
+        for (const [key, series] of cachedSeriesMap) {
+            const filteredVersions = [];
+            let seriesSnapCount = 0, seriesTotalSize = 0, seriesLatest = 0;
+            for (const v of series.versions) {
+                if (v.apiId !== currentApi) continue;
+                const matchingSnaps = (v.snapshots || []).filter(s => filteredSnapshotIds.has(s.id));
+                // 既无匹配快照又非归档 → 跳过（保留归档项以显示"已归档"空壳）
+                if (matchingSnaps.length === 0 && !v.archived) continue;
+                const verSnapCount = matchingSnaps.length;
+                const verTotalSize = matchingSnaps.reduce((sum, s) => sum + (s.size || 0), 0);
+                const verLatest = matchingSnaps.reduce((max, s) => Math.max(max, s.timestamp || 0), 0);
+                filteredVersions.push({
+                    ...v,
+                    snapshots: matchingSnaps,
+                    snapshotCount: verSnapCount,
+                    totalSize: verTotalSize,
+                    latestTime: Math.max(verLatest, v.latestTime || 0),
+                });
+                seriesSnapCount += verSnapCount;
+                seriesTotalSize += verTotalSize;
+                seriesLatest = Math.max(seriesLatest, verLatest, v.latestTime || 0);
+            }
+            if (filteredVersions.length > 0) {
+                seriesMap.set(key, {
+                    ...series,
+                    versions: filteredVersions,
+                    versionCount: filteredVersions.length,
+                    snapshotCount: seriesSnapCount,
+                    totalSize: seriesTotalSize,
+                    latestTime: seriesLatest,
+                });
+            }
+        }
+    } else {
+        seriesMap = groupSnapshotsBySeries(filteredByApi, {
+            overrides: settings.groupingManualOverrides,
+        });
+    }
 
     // ⚡ 关键修复 B3：用 normKey 做"二次归并"
     //   seriesMap 的 key 是首次出现的"显示名"形式（如"mur 鹿鹿 API"），
@@ -726,11 +768,60 @@ export function renderSeriesView(filtered, panelCtx) {
             }
         }
 
+        // 构建当前预设所在的祖先节点集合（用于嵌套模式下金色高亮）
+        const currentName = getSelectedPresetName();
+        const currentApi = getCurrentApiId();
+        const currentPresetAncestors = new Set();
+
+        if (currentName && currentApi) {
+            const tree = settings.groupingTree || {};
+
+            function collectCurrentNodes(nodes) {
+                for (const node of nodes) {
+                    let hasCurrent = false;
+
+                    // 通过 node.items（预设名列表）检查
+                    if (node.items && node.items.length > 0) {
+                        hasCurrent = node.items.some(name => {
+                            const found = presetToVersion.get(name);
+                            return found && found.ver.apiId === currentApi && found.ver.presetName === currentName;
+                        });
+                    }
+
+                    // 通过 seriesData.versions 检查（直接归属于该节点的快照数据）
+                    if (!hasCurrent) {
+                        const normKey = normalizeSeriesKey(node.key);
+                        const seriesData = normKeyToSeries.get(normKey);
+                        if (seriesData && seriesData.versions && seriesData.versions.length > 0) {
+                            hasCurrent = seriesData.versions.some(
+                                v => v.apiId === currentApi && v.presetName === currentName
+                            );
+                        }
+                    }
+
+                    if (hasCurrent) {
+                        // 添加该节点及其所有祖先节点 key 到高亮集合
+                        const path = getNodePath(tree, node.key);
+                        for (const k of path) {
+                            currentPresetAncestors.add(k);
+                        }
+                    }
+
+                    // 递归检查子节点（即使当前节点未命中，子孙可能命中）
+                    if (node.children && node.children.length > 0) {
+                        collectCurrentNodes(node.children);
+                    }
+                }
+            }
+            collectCurrentNodes(rootNodes);
+        }
+
         // 递归渲染函数（复用 panelCtx.state() 中的 expandedSeries 管理展开/折叠状态）
         function renderNode(node) {
             const normKey = normalizeSeriesKey(node.key);
             const seriesData = normKeyToSeries.get(normKey);
             const isExpanded = _state.expandedSeries.has(node.key);
+            const isCurrent = currentPresetAncestors.has(node.key);
 
             const indentPx = Math.min(node.depth * 16, 48);
             const hasChildren = node.children && node.children.length > 0;
@@ -787,15 +878,23 @@ export function renderSeriesView(filtered, panelCtx) {
                 childCountHtml = `<span class="pas-tag pas-tag-subgroup">${childCount} ${escapeHtml(t('子组'))}</span>`;
             }
 
-            // 使用与 renderSeriesGroup 一致的样式结构：两排 header + chevron 箭头 + 元信息行
-            return `<div class="pas-series-group pas-series-nested" data-series-key="${escapeAttr(node.key)}" style="margin-left:${indentPx}px; border-left:${node.depth > 0 ? '2px solid var(--SmartThemeBorderColor)' : 'none'}; padding-left:${node.depth > 0 ? '8px' : '0'};">
+            // 嵌套模式：使用 inline style 精确控制金色高亮，避免 CSS 后代选择器 .pas-series-current .pas-series-icon
+            // 泄漏到平级兄弟节点。不使用 pas-series-current CSS 类。
+            const borderLeft = node.depth > 0
+                ? `2px solid ${isCurrent ? 'var(--pas-c-pin)' : 'var(--SmartThemeBorderColor)'}`
+                : 'none';
+            const iconStyle = isCurrent ? ' style="color: var(--pas-c-pin)"' : '';
+            const pillBgStyle = isCurrent ? ' style="background: rgba(245, 158, 11, 0.16)"' : '';
+
+            return `<div class="pas-series-group pas-series-nested" data-series-key="${escapeAttr(node.key)}" style="margin-left:${indentPx}px; border-left:${borderLeft}; padding-left:${node.depth > 0 ? '8px' : '0'};">
                 <div class="pas-series-header" data-action="toggle-series">
                     <div class="pas-series-header-row pas-series-header-row-title">
                         <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
-                        <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"></i>
+                        <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"${iconStyle}></i>
                         <span class="pas-series-name" title="${escapeAttr(displayName)}">${escapeHtml(displayName)}</span>
-                        ${versionCount > 0 ? `<span class="pas-series-version-pill" title="${escapeAttr(t('Grouping Series Header Versions', { count: versionCount }))}"><i class="fa-solid fa-code-branch"></i> ${versionCount}</span>` : ''}
+                        ${versionCount > 0 ? `<span class="pas-series-version-pill"${pillBgStyle} title="${escapeAttr(t('Grouping Series Header Versions', { count: versionCount }))}"><i class="fa-solid fa-code-branch"></i> ${versionCount}</span>` : ''}
                         ${childCountHtml}
+                        ${isCurrent ? `<span class="pas-tag pas-tag-current" title="${escapeAttr(t('Current Preset'))}"><i class="fa-solid fa-circle-dot"></i></span>` : ''}
                     </div>
                     <div class="pas-series-header-row pas-series-header-row-meta">
                         <span class="pas-series-snapshots" title="${escapeAttr(t('Grouping Series Header Snapshots', { count: snapshotCount }))}"><i class="fa-solid fa-camera"></i> ${snapshotCount}</span>

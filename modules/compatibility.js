@@ -335,6 +335,9 @@ export const FIELD_SYNONYMS = new Map([
     ['top_a_openai',                 'top_a'],
     ['min_p_openai',                 'min_p'],
     ['repetition_penalty_openai',    'repetition_penalty'],
+    // 阶段7: 流式开关字段名对齐 —— ST 实际字段名是 stream_openai，
+    // 旧快照可能存为 streaming，统一到规范名称
+    ['streaming',                    'stream_openai'],
 ]);
 
 /**
@@ -355,6 +358,90 @@ export function normalizePresetFields(preset) {
                 result[canonical] = result[alt];
             }
             delete result[alt];
+        }
+    }
+    return result;
+}
+
+// =====================================================
+// 阶段7：Canonical 预设字段白名单（用于 diff 比较阶段）
+//
+// 基于 ST openai.js settingsToUpdate 的白名单设计：
+//   旧方案用黑名单（EXPORT_EXCLUDED_FIELDS）过滤，任何不在黑名单的字段
+//   （扩展注入、ST 新字段、字段名拼写差异等）都会被捕获，导致修改 1 个参数
+//   却显示 10 个字段变化。
+//
+//   新方案在 diff 阶段用此白名单精确提取：只比较 ST 预设定义中
+//   isConnection=false 的标量字段。连接配置字段（模型选择、URL 等）和
+//   非预设字段（运行时计算值、扩展注入等）自动被排除。
+//
+// 来源：ST openai.js settingsToUpdate（约第288-387行）
+// 维护：若 ST 新增预设字段，需同步更新此列表
+// =====================================================
+export const CANONICAL_PRESET_FIELDS = new Set([
+    // ---- 采样参数 ----
+    'temperature', 'frequency_penalty', 'presence_penalty',
+    'top_p', 'top_k', 'top_a', 'min_p', 'repetition_penalty',
+    'seed', 'n',
+
+    // ---- 上下文 & tokens ----
+    'max_context_unlocked', 'openai_max_context', 'openai_max_tokens',
+
+    // ---- 流式传输 ----
+    'stream_openai',
+
+    // ---- 推理 ----
+    'reasoning_effort', 'show_thoughts', 'tool_reasoning_mode',
+
+    // ---- 角色行为 / Character Behavior ----
+    'names_behavior', 'continue_prefill', 'continue_postfix',
+    'squash_system_messages', 'assistant_prefill', 'assistant_impersonation',
+    'use_sysprompt',
+
+    // ---- 媒体 ----
+    'media_inlining', 'inline_image_quality',
+    'request_images', 'request_image_aspect_ratio', 'request_image_resolution',
+
+    // ---- 功能开关 ----
+    'function_calling', 'enable_web_search', 'verbosity',
+
+    // ---- 提示词模板（标量文本字段，非 prompts 数组） ----
+    'send_if_empty', 'impersonation_prompt', 'new_chat_prompt',
+    'new_group_chat_prompt', 'new_example_chat_prompt', 'continue_nudge_prompt',
+    'group_nudge_prompt',
+
+    // ---- 格式化 ----
+    'wi_format', 'scenario_format', 'personality_format',
+
+    // ---- 偏置 ----
+    'bias_preset_selected',
+
+    // ---- 后处理 ----
+    'custom_prompt_post_processing',
+]);
+
+/**
+ * 从预设对象中提取 canonical 字段（仅用于 diff 比较阶段）。
+ *
+ * 基于 ST openai.js settingsToUpdate 的白名单设计：
+ *   - 只保留 ST 预设定义中 isConnection=false 的标量字段
+ *   - prompts / prompt_order / extensions 由专门 diff 处理，不在此提取
+ *
+ * 这样任何不在 ST 预设定义中的字段（扩展注入、ST 新字段、字段名拼写差异等）
+ * 都不会参与比较，从根本上根治"修改1个参数却显示10个字段变化"的问题。
+ *
+ * ⚠️ 此函数不改变快照存储格式（向后兼容）。
+ *    只在 compareScalars() 中调用，对旧快照和新快照均适用，无需数据迁移。
+ *
+ * @param {object} preset - 规范化后的预设对象
+ * @returns {object} 只包含 canonical 字段的新对象
+ */
+export function extractCanonicalForDiff(preset) {
+    if (!preset || typeof preset !== 'object') return {};
+    const result = {};
+    for (const key of CANONICAL_PRESET_FIELDS) {
+        if (key in preset) {
+            result[key] = preset[key];
         }
     }
     return result;
@@ -414,7 +501,7 @@ export const EXPORT_EXCLUDED_FIELDS = new Set([
     'openrouter_allow_fallbacks', 'openrouter_middleout',
 
     // ---- 其他 provider 配置 ----
-    'chutes_sort_models',
+    'chutes_sort_models', 'chutes_group_models',
     'electronhub_sort_models', 'electronhub_group_models',
     'zai_endpoint', 'siliconflow_endpoint',
 
