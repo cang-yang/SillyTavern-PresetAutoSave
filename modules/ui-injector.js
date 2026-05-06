@@ -280,8 +280,12 @@ export function setStatusDot(state) {
     const label = statusLabel(state);
     const dots = document.querySelectorAll(`.${STATUS_DOT_CLASS}`);
     for (const dot of dots) {
+        // 去重：如果已经在目标状态，跳过 DOM 操作（消除无效 classList 闪烁）
+        const targetClass = `pas-status-${state}`;
+        if (dot.classList.contains(targetClass)) continue;
+
         validStates.forEach(s => dot.classList.remove(`pas-status-${s}`));
-        dot.classList.add(`pas-status-${state}`);
+        dot.classList.add(targetClass);
         dot.title = label;
     }
 

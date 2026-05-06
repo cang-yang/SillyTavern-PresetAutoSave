@@ -75,11 +75,11 @@
  * ========================================================= */
 .pas-status-dot {
     display: inline-block;
-    width: 7px;
-    height: 7px;
+    width: 5px;           /* 7px → 5px，更精致紧凑 */
+    height: 5px;          /* 7px → 5px */
     border-radius: 50%;
-    margin-right: 6px;
-    margin-left: 2px;
+    margin-right: 4px;    /* 6px → 4px */
+    margin-left: 1px;     /* 2px → 1px */
     vertical-align: middle;
     background: #6b7280;
     transition: background var(--pas-dur) var(--pas-ease-fast),
@@ -87,7 +87,7 @@
     flex-shrink: 0;
 }
 .pas-status-idle    { background: #6b7280; opacity: 0.45; }
-.pas-status-pending { background: #facc15; animation: pas-pulse 1.2s infinite; }
+.pas-status-pending { background: #facc15; opacity: 0.75; /* 静态，不闪烁 */ }
 .pas-status-saving  { background: #3b82f6; animation: pas-pulse 0.7s infinite; }
 .pas-status-saved   { background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.45); }
 .pas-status-error   { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.45); }
@@ -3489,16 +3489,15 @@ body.pas-light .pas-btn-confirm-green:hover {
 }
 
 /* --- 下拉面板 --- */
-/* 阶段5：自适应宽度 — 按内容撑开，同时保持最小/最大宽度约束 */
+/* 阶段9紧急修复：恢复 width:max-content 按内容自适应（绕过 compact 主题下 wrapper 过窄问题） */
 .pas-dd-panel {
     display: none;
     position: absolute;
     top: calc(100% + 4px);
     left: 0;
-    /* right: 0;  移除 — 阶段5：不再固定拉伸至触发器宽度 */
-    min-width: 100%;              /* 至少和 trigger 一样宽 */
-    width: max-content;           /* 按内容撑开 */
-    max-width: min(380px, 90vw);  /* 上限保护，避免超出视口 */
+    width: max-content;
+    min-width: 100%;
+    max-width: min(380px, calc(100vw - 32px));
     z-index: 9999;
     max-height: 400px;
     overflow-y: auto;

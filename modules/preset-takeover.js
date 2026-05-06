@@ -806,6 +806,10 @@ function updateActiveState(select, wrapper) {
 // =====================================================
 function openPanel(panel, trigger) {
     panel.style.display = 'block';
+    // 阶段11：动态 max-width（面板左边缘到视口右边缘-16px安全边距）
+    const triggerRect = trigger.getBoundingClientRect();
+    panel.style.maxWidth = Math.min(380, window.innerWidth - triggerRect.left - 16) + 'px';
+    
     if (trigger) {
         trigger.classList.add('pas-dd-trigger--open');
         const chevron = trigger.querySelector('.pas-dd-chevron');
@@ -814,8 +818,8 @@ function openPanel(panel, trigger) {
             chevron.classList.add('fa-chevron-up');
         }
     }
-    // T6: 打开面板时更新 active 状态，确保高亮正确
-    const wrapper = panel.closest('.pas-dd-wrapper');
+    // panel 仍留在 wrapper 内 → panel.parentElement 即 wrapper
+    const wrapper = panel.parentElement;
     if (wrapper) {
         const select = wrapper.querySelector('select');
         if (select) {
@@ -851,7 +855,10 @@ function openPanel(panel, trigger) {
     // expandAll=false 时，所有组保持收起，不展开任何组
 }
 function closePanel(panel, trigger) {
-    if (panel) panel.style.display = 'none';
+    if (panel) {
+        panel.style.display = 'none';
+        panel.style.maxWidth = '';
+    }
     if (trigger) {
         trigger.classList.remove('pas-dd-trigger--open');
         const chevron = trigger.querySelector('.pas-dd-chevron');
