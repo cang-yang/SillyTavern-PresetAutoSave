@@ -42,6 +42,7 @@ import {
 } from './archive-store.js';
 import { getSnapshots, addSnapshot, TRIGGER } from './history-store.js';
 import { restoreArchiveEntries } from './core/archive-recovery.js';
+import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 // =====================================================
 // 常量
 // =====================================================
@@ -75,6 +76,28 @@ let _forceNextRefresh = false;
 // Bug fix: 缓存最后一次 refreshTakeover 传入的 overrides/tree，防止 SETTINGS_UPDATED 触发的二次 refresh() 用空值覆盖
 let _cachedOverrides = null;
 let _cachedTree = null;
+const _runtimeTimers = new RuntimeTimerRegistry();
+let _tearingDown = false;
+let _seedActivityCount = 0;
+let _seedIdleWaiters = [];
+
+function beginSeedActivity() {
+    _seedActivityCount++;
+}
+
+function endSeedActivity() {
+    _seedActivityCount = Math.max(0, _seedActivityCount - 1);
+    if (_seedActivityCount === 0) {
+        const waiters = _seedIdleWaiters.splice(0);
+        for (const resolve of waiters) resolve();
+    }
+}
+
+function whenSeedIdle() {
+    return _seedActivityCount === 0
+        ? Promise.resolve()
+        : new Promise(resolve => _seedIdleWaiters.push(resolve));
+}
 const REFRESH_DEBOUNCE_MS = 220;
 const REFRESH_MIN_INTERVAL_MS = 350;
 const REFRESH_FORCE_MIN_INTERVAL_MS = 50;   // P0-4: force 模式下的硬节流，防止连续调用导致性能雪崩
@@ -104,12 +127,13 @@ export async function initPresetTakeover() {
         return;
     }
     _initialized = true;
+    _tearingDown = false;
     logger.info('[Takeover] Starting initialization (Custom Dropdown Overlay)...');
     // 初始化归档存储
-    try {
-        await initArchiveStore();
-    } catch (e) {
-        logger.warn('[Takeover] archive store init failed:', e);
+    const archiveStore = await initArchiveStore();
+    if (!archiveStore) {
+        _initialized = false;
+        throw new Error('Archive store is unavailable; takeover was not started');
     }
     // 监听设置变化
     _settingUnsubscribe = onSettingChange(({ key }) => {
@@ -165,9 +189,9 @@ export async function initPresetTakeover() {
     setupDocObserver();
     // 立即应用一次 + 800ms 兜底
     refresh();
-    setTimeout(() => refresh(), INIT_REFRESH_RETRY_MS);
+    _runtimeTimers.schedule(() => refresh(), INIT_REFRESH_RETRY_MS);
     // 启动种子
-    setTimeout(() => {
+    _runtimeTimers.schedule(() => {
         seedSnapshotsIfNeeded({ silent: true }).catch(e =>
             logger.warn('[Takeover] seed snapshots failed:', e)
         );
@@ -691,13 +715,11 @@ function renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrid
 function onItemClick(select, value, panel) {
     // 通过 jQuery 设值并触发 change — ST 原生 handler 完全接管
     try {
-        const $ = window.jQuery || window.$;
-        if ($) {
-            $(select).val(String(value)).trigger('change');
-        } else {
-            select.value = String(value);
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-        }
+        // Native dispatch preserves capture-phase switch guards. jQuery.trigger()
+        // may invoke target handlers without DOM capture, which can skip the last
+        // unsaved edit on APIs that expose only a post-switch event.
+        select.value = String(value);
+        select.dispatchEvent(new Event('change', { bubbles: true }));
         // 验证 val 是否实际生效（option 不存在时 jQuery 会静默失败）
         const actual = select.value;
         if (actual !== String(value)) {
@@ -714,7 +736,7 @@ function onItemClick(select, value, panel) {
         closePanel(panel, trigger);
     }
     // 刷新 UI（trigger 显示 + active 状态）
-    setTimeout(() => {
+    _runtimeTimers.schedule(() => {
         const w = select.closest('.pas-dd-wrapper');
         if (w) {
             updateTriggerDisplay(select, w);
@@ -1161,7 +1183,9 @@ export function getSeriesDefaultApply(seriesKey) {
 // =====================================================
 // 卸载
 // =====================================================
-export function teardown() {
+export async function teardown() {
+    _tearingDown = true;
+    _runtimeTimers.clearAll();
     try { teardownAllDropdowns(); } catch (_) {}
     if (_refreshTimer) {
         clearTimeout(_refreshTimer);
@@ -1194,6 +1218,7 @@ export function teardown() {
     _refreshSuppressUntil = 0;
     _takeoverActive = false;
     _initialized = false;
+    await whenSeedIdle();
     logger.info('Preset takeover torn down');
 }
 // =====================================================
@@ -1228,6 +1253,7 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
         return { skipped: true };
     }
     _seedingRunning = true;
+    beginSeedActivity();
     try {
         const apiId = getCurrentApiId();
         if (!apiId) {
@@ -1256,6 +1282,10 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
         let failed = 0;
         const total = allNames.length;
         for (let i = 0; i < allNames.length; i++) {
+            if (_tearingDown) {
+                logger.debug('[Seed] stopped because takeover is tearing down');
+                break;
+            }
             const name = allNames[i];
             try {
                 const existing = await getSnapshots(apiId, name);
@@ -1298,15 +1328,18 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
                 }
             } catch (_) {}
         }
-        try {
-            updateSetting('seedSnapshotsDone', true);
-        } catch (_) {}
+        if (!_tearingDown) {
+            try {
+                updateSetting('seedSnapshotsDone', true);
+            } catch (_) {}
+        }
         return { added, skipped, failed, total };
     } catch (e) {
         logger.error('[Seed] seedSnapshotsIfNeeded failed:', e);
         return { error: String(e) };
     } finally {
         _seedingRunning = false;
+        endSeedActivity();
     }
 }
 /**
@@ -1318,10 +1351,13 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
  * @returns {Promise<{seeded: boolean}>}
  */
 export async function seedSnapshotForPreset(presetName, apiId) {
+    if (_tearingDown) return { seeded: false };
+    beginSeedActivity();
     try {
         const aid = apiId || getCurrentApiId();
         if (!aid || !presetName) return { seeded: false };
         const existing = await getSnapshots(aid, presetName);
+        if (_tearingDown) return { seeded: false };
         if (Array.isArray(existing) && existing.length > 0) {
             return { seeded: false };
         }
@@ -1339,6 +1375,8 @@ export async function seedSnapshotForPreset(presetName, apiId) {
     } catch (e) {
         logger.debug(`[Seed] seedSnapshotForPreset error for "${presetName}":`, e);
         return { seeded: false };
+    } finally {
+        endSeedActivity();
     }
 }
 /**

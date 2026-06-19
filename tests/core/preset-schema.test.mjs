@@ -71,3 +71,14 @@ test('classifies provider and custom connection settings as ignored', () => {
         { path: 'openai_model', reason: 'connection-setting' },
     ]);
 });
+
+test('classifies official model-list presentation controls as connection settings', () => {
+    const result = canonicalizePreset({
+        temperature: 1,
+        group_models: true,
+        sort_models: 'alphabetically',
+    });
+
+    assert.deepEqual(result.canonical, { temperature: 1 });
+    assert.deepEqual(result.ignored.map(item => item.path), ['group_models', 'sort_models']);
+});

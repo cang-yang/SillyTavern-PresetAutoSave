@@ -142,3 +142,26 @@ test('matches completion state only to the request target', () => {
         { apiId: 'openai', presetName: 'B' },
     ), false);
 });
+
+test('coalesces a burst of 1000 revisions without growing execution work', async () => {
+    const gate = deferred();
+    const executed = [];
+    const coordinator = new SaveCoordinator({
+        worker: async request => {
+            executed.push(request.revision);
+            if (request.revision === 0) await gate.promise;
+        },
+    });
+
+    const requests = [coordinator.enqueue({ apiId: 'openai', presetName: 'Burst', revision: 0 })];
+    await Promise.resolve();
+    for (let revision = 1; revision <= 1000; revision++) {
+        requests.push(coordinator.enqueue({ apiId: 'openai', presetName: 'Burst', revision }));
+    }
+    assert.equal(coordinator.getState().queued, 1);
+
+    gate.resolve();
+    const results = await Promise.all(requests);
+    assert.deepEqual(executed, [0, 1000]);
+    assert.equal(results.filter(result => result.status === 'superseded').length, 999);
+});

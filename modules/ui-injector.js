@@ -12,6 +12,7 @@ import { logger } from './logger.js';
 import { getSettings, onSettingChange } from './settings.js';
 import { on, getEventType, t } from './compatibility.js';
 import { registerStatusSetter } from './auto-save.js';
+import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 
 // =====================================================
 // 常量
@@ -44,6 +45,7 @@ let _intervalId = null;
 let _initialized = false;
 let _settingUnsubscribe = null;
 let _eventUnsubscribers = [];
+const _runtimeTimers = new RuntimeTimerRegistry();
 
 // =====================================================
 // 初始化
@@ -81,10 +83,10 @@ export async function initUIInjector(onHistoryClick) {
     //   - 这个 interval 仅用来兜底"页面早期 ST 还在加载"的极端场景
     //   - 30 秒后大概率早就注入完成；此后由 MutationObserver 接管
     let _earlyInjectChecks = 0;
-    _intervalId = setInterval(() => {
+    _intervalId = _runtimeTimers.repeat(() => {
         _earlyInjectChecks++;
         if (hasInjected() || _earlyInjectChecks > 15) {
-            clearInterval(_intervalId);
+            _runtimeTimers.cancel(_intervalId);
             _intervalId = null;
             return;
         }
@@ -102,7 +104,7 @@ function scheduleInject() {
     if (_injectScheduled) return;
     _injectScheduled = true;
 
-    setTimeout(() => {
+    _runtimeTimers.schedule(() => {
         _injectScheduled = false;
         try {
             injectAll();
@@ -290,11 +292,11 @@ export function setStatusDot(state) {
     }
 
     // saved/error 状态自动恢复 idle
-    clearTimeout(_statusResetTimer);
+    if (_statusResetTimer) _runtimeTimers.cancel(_statusResetTimer);
     if (state === 'saved') {
-        _statusResetTimer = setTimeout(() => setStatusDot('idle'), 2000);
+        _statusResetTimer = _runtimeTimers.schedule(() => setStatusDot('idle'), 2000);
     } else if (state === 'error') {
-        _statusResetTimer = setTimeout(() => setStatusDot('idle'), 4000);
+        _statusResetTimer = _runtimeTimers.schedule(() => setStatusDot('idle'), 4000);
     }
 }
 
@@ -322,7 +324,7 @@ function setupEventListeners() {
     for (const evtName of events) {
         const evt = getEventType(evtName, evtName.toLowerCase());
         const unsub = on(evt, () => {
-            setTimeout(scheduleInject, 100);
+            _runtimeTimers.schedule(scheduleInject, 100);
         });
         if (typeof unsub === 'function') {
             _eventUnsubscribers.push(unsub);
@@ -352,7 +354,7 @@ function setupObserver() {
         if (!relevant) return;
 
         pending = true;
-        setTimeout(() => {
+        _runtimeTimers.schedule(() => {
             pending = false;
             // 仅在按钮丢失时才重新注入（避免无意义的工作）
             if (!hasInjected()) {
@@ -391,16 +393,16 @@ function setupObserver() {
 // 卸载（onDelete 用）
 // =====================================================
 export function teardown() {
+    _runtimeTimers.clearAll();
+    _injectScheduled = false;
     if (_observer) {
         _observer.disconnect();
         _observer = null;
     }
     if (_intervalId) {
-        clearInterval(_intervalId);
         _intervalId = null;
     }
     if (_statusResetTimer) {
-        clearTimeout(_statusResetTimer);
         _statusResetTimer = null;
     }
 

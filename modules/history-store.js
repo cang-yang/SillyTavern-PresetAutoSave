@@ -27,6 +27,7 @@ import { createStorage, normalizePresetFields, sanitizePresetForExport, filterEx
 import { createChangeSet, assertExplainableChange } from './core/change-set.js';
 import { canonicalizePreset } from './core/preset-schema.js';
 import { HistoryRepository } from './core/history-repository.js';
+import { SerialTaskQueue } from './core/serial-task-queue.js';
 import {
     applyHistoryImportPlan,
     buildHistoryImportPlan,
@@ -66,6 +67,7 @@ let _initialized = false;
 let _keysCache = null;
 let _keysCacheTime = 0;
 const KEYS_CACHE_TTL = 5000;  // 5秒
+const _historyMutations = new SerialTaskQueue();
 
 // =====================================================
 // 初始化
@@ -84,7 +86,9 @@ export async function initHistoryStore() {
         logger.success(`History repository v2 ready: ${presetCount} preset histories (lazy migration enabled)`);
     } catch (e) {
         logger.error('Failed to init history store:', e);
+        _store = null;
         _initialized = false;
+        throw e;
     }
 }
 
@@ -111,24 +115,17 @@ function generateId() {
 /**
  * 稳定的 JSON.stringify（key 排序，保证相同对象产生相同字符串）
  *
- * 性能优化：
- *  - 对同一对象引用使用 WeakMap 缓存（保留 1 次循环周期）
+ * 正确性优先：
+ *  - 不缓存可变对象引用，避免对象原地修改后继续返回旧序列化结果
  *  - 处理循环引用（避免堆栈溢出）
  *  - 处理 NaN/Infinity（JSON.stringify 默认输出 null，这里保持一致）
  */
-const _stringifyCache = new WeakMap();
 const _SEEN_DURING_CALL = new WeakSet();
 
 export function stableStringify(obj) {
     if (obj === null || obj === undefined) return 'null';
     if (typeof obj !== 'object') return JSON.stringify(obj);
-    // 缓存命中：同一对象引用未变化时直接返回（hashPreset 在同一 tick 多次调用时常见）
-    const cached = _stringifyCache.get(obj);
-    if (cached !== undefined) return cached;
-
-    const result = stableStringifyImpl(obj);
-    try { _stringifyCache.set(obj, result); } catch (_) { /* primitive - shouldn't happen */ }
-    return result;
+    return stableStringifyImpl(obj);
 }
 
 function stableStringifyImpl(obj) {
@@ -661,7 +658,11 @@ function trimListWithPinned(list, max) {
  * @param {string} trigger 触发类型
  * @returns {Promise<object|null>} 创建的快照（跳过时返回 null）
  */
-export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.AUTO) {
+export function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.AUTO) {
+    return _historyMutations.run(() => addSnapshotMutation(presetName, apiId, preset, trigger));
+}
+
+async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.AUTO) {
     await ensureStore();
 
     if (!presetName || !apiId || !preset) {
@@ -986,7 +987,11 @@ export async function filterSnapshots(filter = {}) {
  * 默认会拒绝删除 pinned 快照（返回 false 并打 warn）。
  * 如果 UI 想强删（例如先解锁再删），传 force=true。
  */
-export async function deleteSnapshot(snapshotId, options = {}) {
+export function deleteSnapshot(snapshotId, options = {}) {
+    return _historyMutations.run(() => deleteSnapshotMutation(snapshotId, options));
+}
+
+async function deleteSnapshotMutation(snapshotId, options = {}) {
     await ensureStore();
     const keys = await getKeys();
     const force = options && options.force === true;
@@ -1020,7 +1025,11 @@ export async function deleteSnapshot(snapshotId, options = {}) {
  * @param {string} newName 空字符串表示清除自定义名
  * @returns {Promise<boolean>}
  */
-export async function renameSnapshot(snapshotId, newName) {
+export function renameSnapshot(snapshotId, newName) {
+    return _historyMutations.run(() => renameSnapshotMutation(snapshotId, newName));
+}
+
+async function renameSnapshotMutation(snapshotId, newName) {
     await ensureStore();
     const keys = await getKeys();
     const trimmed = (newName || '').toString().trim().slice(0, 80);
@@ -1046,7 +1055,11 @@ export async function renameSnapshot(snapshotId, newName) {
  * @param {boolean} [pinned] 显式设置；省略则取反
  * @returns {Promise<boolean|null>} 切换后的 pinned 状态；找不到时返回 null
  */
-export async function togglePinSnapshot(snapshotId, pinned) {
+export function togglePinSnapshot(snapshotId, pinned) {
+    return _historyMutations.run(() => togglePinSnapshotMutation(snapshotId, pinned));
+}
+
+async function togglePinSnapshotMutation(snapshotId, pinned) {
     await ensureStore();
     const keys = await getKeys();
 
@@ -1069,7 +1082,11 @@ export async function togglePinSnapshot(snapshotId, pinned) {
 /**
  * 清空某预设的所有历史
  */
-export async function clearPresetHistory(apiId, presetName) {
+export function clearPresetHistory(apiId, presetName) {
+    return _historyMutations.run(() => clearPresetHistoryMutation(apiId, presetName));
+}
+
+async function clearPresetHistoryMutation(apiId, presetName) {
     await ensureStore();
     const key = makeKey(apiId, presetName);
     await _store.removeItem(key);
@@ -1080,7 +1097,11 @@ export async function clearPresetHistory(apiId, presetName) {
 /**
  * 清空所有历史
  */
-export async function clearAll() {
+export function clearAll() {
+    return _historyMutations.run(clearAllMutation);
+}
+
+async function clearAllMutation() {
     await ensureStore();
     const keys = await getKeys(true);
     for (const key of keys) {
@@ -1095,7 +1116,11 @@ export async function clearAll() {
  * 这些通常是早期 bug 留下的污染数据
  * @returns {Promise<{cleaned: number, scanned: number}>}
  */
-export async function cleanCorruptSnapshots() {
+export function cleanCorruptSnapshots() {
+    return _historyMutations.run(cleanCorruptSnapshotsMutation);
+}
+
+async function cleanCorruptSnapshotsMutation() {
     await ensureStore();
     const keys = await getKeys(true);
     let cleaned = 0;
@@ -1130,7 +1155,11 @@ export async function cleanCorruptSnapshots() {
 /**
  * 删除超过指定数量的旧快照（保留每预设最新的 N 条 + 所有 pinned）
  */
-export async function trimOldSnapshots(keepPerPreset = null) {
+export function trimOldSnapshots(keepPerPreset = null) {
+    return _historyMutations.run(() => trimOldSnapshotsMutation(keepPerPreset));
+}
+
+async function trimOldSnapshotsMutation(keepPerPreset = null) {
     await ensureStore();
     const keep = keepPerPreset ?? getSettings().maxHistoryPerPreset;
     const keys = await getKeys(true);
@@ -1156,7 +1185,11 @@ export async function trimOldSnapshots(keepPerPreset = null) {
 /**
  * 删除超过指定天数的旧快照（pinned 永久保留）
  */
-export async function trimByAge(maxDays) {
+export function trimByAge(maxDays) {
+    return _historyMutations.run(() => trimByAgeMutation(maxDays));
+}
+
+async function trimByAgeMutation(maxDays) {
     await ensureStore();
     if (!Number.isFinite(maxDays) || maxDays <= 0) return 0;
 
@@ -1250,7 +1283,11 @@ export async function exportAll() {
  * @param {object} payload exportAll() 的返回值
  * @param {'merge'|'replace'} mode 合并或替换
  */
-export async function importAll(payload, mode = 'merge') {
+export function importAll(payload, mode = 'merge') {
+    return _historyMutations.run(() => importAllMutation(payload, mode));
+}
+
+async function importAllMutation(payload, mode = 'merge') {
     await ensureStore();
     validateHistoryBackup(payload);
     const max = getSettings().maxHistoryPerPreset;

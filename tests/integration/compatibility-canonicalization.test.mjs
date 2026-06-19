@@ -16,6 +16,7 @@ globalThis.document = {
 const {
     ENV,
     initCompatibility,
+    getLivePresetSnapshot,
     sanitizePresetForExport,
     savePresetSafe,
 } = await import('../../modules/compatibility.js');
@@ -83,4 +84,24 @@ test('savePresetSafe propagates an official write failure', async () => {
         savePresetSafe('Broken preset', {}, { apiId: 'openai' }),
         error => error === expected,
     );
+});
+
+test('live capture ignores a select that already points at the next preset', () => {
+    globalThis.window.SillyTavern.getContext = () => ({
+        mainApi: 'textgenerationwebui',
+        getPresetManager: () => ({
+            async savePreset() {},
+            getPresetList: () => ({
+                settings: { temperature: 0.83, extensions: { probe: { enabled: false } } },
+            }),
+        }),
+        eventSource: { on() {} },
+        event_types: {},
+    });
+    initCompatibility();
+
+    assert.deepEqual(getLivePresetSnapshot('textgenerationwebui'), {
+        extensions: { probe: { enabled: false } },
+        temperature: 0.83,
+    });
 });

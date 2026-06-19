@@ -817,6 +817,22 @@ export async function savePresetSafe(presetName, settings = null, options = {}) 
 }
 
 /**
+ * Capture the active API's live settings without consulting the select's new value.
+ * This is used during the capture phase of a native preset change: the browser has
+ * already selected the next option, while SillyTavern still holds the old preset's
+ * unsaved live settings.
+ */
+export function getLivePresetSnapshot(apiId = null) {
+    const id = apiId || getCurrentApiId();
+    const pm = getPresetManager(id);
+    if (!pm || typeof pm.getPresetList !== 'function') return null;
+    const list = safeCall(() => pm.getPresetList(id), null, 'getPresetList-live-capture');
+    const live = list?.settings;
+    if (!live || typeof live !== 'object' || Object.keys(live).length === 0) return null;
+    return sanitizePresetForExport(cloneDeepSafe(live));
+}
+
+/**
  * 将预设数据同步到 ST 内存中的 presets[] 数组（不触发 UI 更新）。
  *
  * 背景：doSave 使用 skipUpdate:true 写磁盘以避免 PromptManager DOM 重建（性能），

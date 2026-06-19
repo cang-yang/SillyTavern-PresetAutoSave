@@ -5,6 +5,8 @@ export const CONNECTION_FIELDS = new Set([
     'proxy_password',
     'reverse_proxy',
     'chat_completion_source',
+    'group_models',
+    'sort_models',
     'api_url_scale',
     'custom_url',
     'custom_api_format',

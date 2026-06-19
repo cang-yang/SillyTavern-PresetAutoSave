@@ -23,6 +23,7 @@ import {
     getCurrentApiId,
     getSelectedPresetName,
     getPresetSnapshot,
+    getLivePresetSnapshot,
     getPresetManager,
     savePresetSafe,
     syncPresetToMemory,
@@ -35,6 +36,8 @@ import { SaveCoordinator, sameSaveTarget } from './core/save-coordinator.js';
 import { shouldAcceptUserMutation } from './core/input-gate.js';
 import { getDeferredSaveDelay } from './core/deferred-save.js';
 import { commitPresetSave, PresetSaveTransactionError } from './core/save-transaction.js';
+import { createJsonFingerprint } from './core/json-fingerprint.js';
+import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -91,6 +94,8 @@ let _ignoreInputTimer = null;      // 自动重置定时器，防止永久卡死
 let _isInternalSave = false;       // 内部保存中（防递归）
 let _saveCoordinator = null;       // 单写入者：串行化所有预设写入
 let _saveRevision = 0;             // 单调递增请求版本
+const _latestRevisionByTarget = new Map();
+const _retryAttemptsByTarget = new Map();
 let _restoreInProgress = false;    // AL-1: 原子恢复操作进行中（抑制所有事件副作用）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
@@ -108,10 +113,12 @@ let _currentPresetName = null;     // 当前跟踪的预设名
 let _containerListeners = new Map();  // HTMLElement -> { input, change }
 let _containerObserver = null;        // 监听容器出现 / 消失，自动重绑
 let _containerRebindTimer = null;     // 节流定时器
+let _switchCaptureBound = false;      // preset selects live outside several settings containers
 let _settingUnsubscribe = null;       // 设置变更订阅
 let _eventUnsubscribers = [];         // ST 事件订阅取消函数集合
 let _promptObserver = null;           // Prompt Manager 区域 MutationObserver
 let _pollingTimer = null;             // 兜底轮询计时器
+const _runtimeTimers = new RuntimeTimerRegistry(); // 生命周期相关的延迟回调
 
 // 诊断/统计
 const _stats = {
@@ -283,6 +290,14 @@ function bindDOMListeners() {
     if (_containerListeners.size > 0) return;
 
     rebindContainers();
+    if (!_switchCaptureBound) {
+        // Preset selects are toolbar controls and are not consistently nested
+        // inside WATCH_SELECTORS (notably Kobold). A single capture-phase
+        // change listener is cheap and guarantees the old live state is frozen
+        // before SillyTavern applies the next preset.
+        document.addEventListener('change', onPresetSelectChangeCapture, true);
+        _switchCaptureBound = true;
+    }
 
     // 容器观察器：监听 #form_sheld（设置面板根）下的子树变化
     // 当目标容器被插入/移除时增量更新绑定
@@ -347,6 +362,10 @@ function unbindDOMListeners() {
         } catch (_) {}
     }
     _containerListeners.clear();
+    if (_switchCaptureBound) {
+        document.removeEventListener('change', onPresetSelectChangeCapture, true);
+        _switchCaptureBound = false;
+    }
 
     if (_containerObserver) {
         try { _containerObserver.disconnect(); } catch (_) {}
@@ -602,7 +621,7 @@ function bindPromptManagerListeners() {
         };
         tryAttach();
         // PromptManager 可能后加载，再延迟尝试一次
-        setTimeout(tryAttach, 1500);
+        _runtimeTimers.schedule(tryAttach, 1500);
     } catch (e) {
         logger.warn('Failed to attach prompt manager observer:', e);
     }
@@ -644,6 +663,40 @@ function queueCompensationSave(reason) {
             scheduleAutoSave(null, `compensation:${reason}`, { preserveDuringSwitch: true });
         }
     }, waitMs);
+}
+
+function onPresetSelectChangeCapture(event) {
+    const select = event.target;
+    if (!select?.matches?.('select[data-preset-manager-for]')) return;
+    if (!_enabled || _restoreInProgress || _ignoreInput) return;
+    if (!_dirty && !_debounceTimer) return;
+    if (!_currentApiId || !_currentPresetName) return;
+
+    const preset = getLivePresetSnapshot(_currentApiId);
+    if (!preset) {
+        logger.warn(`Native switch guard could not capture live preset "${_currentPresetName}"`);
+        return;
+    }
+    const liveHash = hashPreset(preset);
+    if (_lastSavedHash && liveHash === _lastSavedHash) {
+        cancelPendingSave();
+        _dirty = false;
+        _stats.switchGuardSkipped++;
+        return;
+    }
+
+    const target = { apiId: _currentApiId, presetName: _currentPresetName };
+    const payload = _buildSavePayload('native-switch-capture', target, preset);
+    if (!payload) return;
+
+    cancelPendingSave();
+    _stats.switchGuardSaved++;
+    // Suppress the input storm produced synchronously by SillyTavern's target
+    // change handler. PRESET_CHANGED will extend the same guard window later.
+    setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
+    _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
+    submitSavePayload(payload, TRIGGER.SWITCH_GUARD, 'native-switch-capture')
+        .catch(error => logger.error('Native switch guard failed:', error));
 }
 
 export function scheduleAutoSave(delay = null, reason = 'unspecified', { preserveDuringSwitch = false } = {}) {
@@ -719,6 +772,12 @@ let _saveTimeoutId = null;
  * @returns {boolean} true = 可以继续保存, false = 应中止
  */
 function _validateSaveConditions(reason, explicitTarget) {
+    if (!_initialized || !_enabled || !getSettings().enabled) {
+        logger.debug(`doSave aborted: auto-save inactive (reason=${reason})`);
+        _stats.aborted++;
+        return false;
+    }
+
     // 入口防御：切换沉默期内只允许 explicitTarget 路径（switch-guard）
     if (!explicitTarget && (_ignoreInput || Date.now() < _suspendUntil)) {
         logger.debug(
@@ -738,7 +797,7 @@ function _validateSaveConditions(reason, explicitTarget) {
  * @returns {{ apiId: string, presetName: string, preset: object, newHash: string, fingerprint: string, fieldCount: number, promptCount: number, promptOrderCount: number } | null}
  *   返回 null 表示不需要保存（无变化/异常/切换中）
  */
-function _buildSavePayload(reason, explicitTarget) {
+function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
     // explicitTarget 用于切换前保护：明确指定要保存的预设名
     // 否则用当前选中的（可能在切换过程中已经变了）
     const apiId = explicitTarget?.apiId || getCurrentApiId();
@@ -768,15 +827,15 @@ function _buildSavePayload(reason, explicitTarget) {
     }
 
     // 性能优化：快速预检（避免昂贵的深拷贝 + 完整序列化 hash）
-    // 直接从 ST 内存的 live 引用计算轻量级指纹（JSON.stringify 长度 + 关键标量字段），
-    // 与上次保存时的指纹比较。如果完全一致则大概率没有变化，
+    // 直接从 ST 内存的 live 引用计算完整 JSON 指纹，
+    // 与上次保存时的指纹比较。如果完全一致则确定没有 JSON 内容变化，
     // 可以跳过 getPresetSnapshot()（structuredClone ~94KB）和 hashPreset()（递归序列化）。
     //
     // ⚠️ 仅对 settings_updated 触发生效。
     //    prompt-mutation / prompt-action 等由用户操作触发的保存始终走完整路径，
-    //    因为快速指纹无法覆盖所有可能的变化（如修改 prompt 名称时 JSON 长度不变的边界情况）。
+    //    以便生成完整语义诊断。
     //    settings_updated 是"高频无变化重复触发"的主要来源（ST 内部大量操作都会触发），
-    //    快速预检在此场景下收益最高、漏检风险最低。
+    //    快速预检在此场景下收益最高，且完整字符串比较不会采样漏检。
     const isSettingsUpdated = reason === 'settings_updated';
     if (!explicitTarget && isSettingsUpdated && _lastSavedHash && _lastQuickFingerprint) {
         const qfp = _computeQuickFingerprint(apiId);
@@ -794,7 +853,7 @@ function _buildSavePayload(reason, explicitTarget) {
         }
     }
 
-    const preset = getPresetSnapshot(presetName);
+    const preset = presetOverride || getPresetSnapshot(presetName);
     if (!preset) {
         logger.warn('Cannot read current preset:', presetName);
         _setStatus('error');
@@ -850,6 +909,41 @@ function ensureSaveCoordinator() {
     return _saveCoordinator;
 }
 
+function saveTargetKey(target) {
+    return `${target.apiId || ''}\u0000${target.presetName || ''}`;
+}
+
+const SAVE_RETRY_DELAYS_MS = [1000, 3000, 8000];
+
+function scheduleFailedSaveRetry(request) {
+    if (!_enabled || !_initialized) return;
+    const key = saveTargetKey(request);
+    const attempt = _retryAttemptsByTarget.get(key) || 0;
+    if (attempt >= SAVE_RETRY_DELAYS_MS.length) {
+        logger.error(`Save retry limit reached for [${request.apiId}] ${request.presetName}`);
+        return;
+    }
+    _retryAttemptsByTarget.set(key, attempt + 1);
+    const delay = SAVE_RETRY_DELAYS_MS[attempt];
+    logger.warn(`Save retry ${attempt + 1}/${SAVE_RETRY_DELAYS_MS.length} scheduled in ${delay}ms for "${request.presetName}"`);
+
+    _runtimeTimers.schedule(() => {
+        if (!_enabled || !_initialized) return;
+        if (_latestRevisionByTarget.get(key) !== request.revision) return;
+
+        if (sameSaveTarget(request, { apiId: _currentApiId, presetName: _currentPresetName })) {
+            _dirty = true;
+            scheduleAutoSave(0, `retry:${request.reason || 'save'}`, { preserveDuringSwitch: true });
+            return;
+        }
+
+        // The user has switched away, so the old live UI is no longer capturable.
+        // Retry the immutable request only if no newer revision for that target exists.
+        submitSavePayload(request, request.trigger, `retry:${request.reason || 'save'}`)
+            .catch(error => logger.error('Background save retry failed:', error));
+    }, delay);
+}
+
 async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null) {
     if (!_validateSaveConditions(reason, explicitTarget)) {
         return null;
@@ -858,22 +952,38 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
     // 在进入队列前冻结目标和数据。即使等待期间用户切换预设，
     // worker 也不会重新读取全局 UI 并把数据写到错误名称下。
     await new Promise(resolve => setTimeout(resolve, 0));
+    // teardown/disable may run while the capture deferral yields to the event loop.
+    // Revalidate here so an old callback cannot create a fresh coordinator afterwards.
+    if (!_validateSaveConditions(reason, explicitTarget)) return null;
     const payload = _buildSavePayload(reason, explicitTarget);
     if (!payload) return null;
+    return await submitSavePayload(payload, trigger, reason);
+}
+
+async function submitSavePayload(payload, trigger, reason) {
+    const key = saveTargetKey(payload);
+    if (!String(reason).startsWith('retry:')) _retryAttemptsByTarget.delete(key);
+    const revision = ++_saveRevision;
+    _latestRevisionByTarget.set(key, revision);
     const result = await ensureSaveCoordinator().enqueue({
         ...payload,
         trigger,
         reason,
-        revision: ++_saveRevision,
+        revision,
     });
     if (result.status === 'failed') {
         logger.error('Save coordinator worker failed:', result.error);
         if (sameSaveTarget(payload, { apiId: _currentApiId, presetName: _currentPresetName })) {
             _setStatus('error');
         }
+        scheduleFailedSaveRetry(result.request);
         return null;
     }
-    return result.status === 'committed' ? result.value : null;
+    if (result.status === 'committed') {
+        _retryAttemptsByTarget.delete(key);
+        return result.value;
+    }
+    return null;
 }
 
 async function executeSaveRequest(request) {
@@ -954,7 +1064,7 @@ async function executeSaveRequest(request) {
         }
         if (isCurrentTarget()) _setStatus('error');
         toast.error(t('Save Failed Toast', { message: e?.message || String(e) }));
-        return null;
+        throw e;
     } finally {
         _isInternalSave = false;
         _saveStartedAt = 0;
@@ -1026,17 +1136,9 @@ function computeFingerprint(preset) {
 }
 
 /**
- * 快速预检指纹：直接从 ST 内存的 live 引用（不深拷贝）读取关键属性，
- * 构建一个轻量级字符串。用于 _buildSavePayload 中在昂贵的 getPresetSnapshot + hashPreset
- * 之前快速判断"是否大概率没有变化"。
- *
- * 覆盖范围：
- *   - 标量字段（temperature、top_p 等用户常改的参数）
- *   - prompts 数组长度 + 每个 prompt 的 enabled/marker 状态
- *   - prompt_order 数组长度 + 每个 order entry 的 enabled 状态
- *
- * 开销：仅遍历 live 对象的顶层属性 + prompts/prompt_order 的长度和少量字段，
- * 不做深拷贝、不做递归序列化。约为 getPresetSnapshot + hashPreset 的 1/100。
+ * 快速预检指纹：直接序列化 ST 内存中的 live 引用，不深拷贝、不排序、
+ * 不执行 canonical 规范化。缓存完整字符串并做精确比较，既比完整捕获便宜，
+ * 又覆盖任意嵌套字段和同长度值变化。
  *
  * @param {string} apiId
  * @returns {string|null} 指纹字符串，null 表示无法计算（应 fallback 到完整检查）
@@ -1049,37 +1151,14 @@ function _computeQuickFingerprint(apiId) {
         const live = list?.settings;
         if (!live || typeof live !== 'object') return null;
 
-        // 使用 JSON.stringify 的长度作为全局变化感知器。
-        // JSON.stringify 比 structuredClone + stableStringify + fnv1aHash 轻量得多：
+        // 保留完整 JSON 序列化结果作为精确的快速指纹。
+        // JSON.stringify 比 structuredClone + stableStringify + canonical hash 轻量：
         //   - 不做深拷贝（直接序列化 live 引用）
         //   - 不做递归键排序（stableStringify 需要 Object.keys().sort()）
-        //   - 不做 sanitize/normalize
-        //   - 仅取 .length，不遍历字符串
-        // 对 ~94KB 预设：JSON.stringify ≈ 2-5ms，vs structuredClone+stableStringify+hash ≈ 15-30ms。
-        //
-        // 长度相同但内容不同的假阴性概率极低（需要恰好删减和增加同样多字节）。
-        // 即使发生，下一次 trigger 会再次检测，不会永久漏掉。
-        const jsonLen = JSON.stringify(live).length;
-
-        // 加上几个最常变化的标量字段值，进一步降低假阴性
-        const parts = [
-            'L' + jsonLen,
-            'T' + live.temperature,
-            'P' + live.top_p,
-            'K' + live.top_k,
-            'MT' + live.openai_max_tokens,
-            'MC' + live.openai_max_context,
-        ];
-
-        // prompts 数量 + prompt_order 数量（结构性变化快速感知）
-        if (Array.isArray(live.prompts)) {
-            parts.push('p#' + live.prompts.length);
-        }
-        if (Array.isArray(live.prompt_order) && live.prompt_order[0]?.order) {
-            parts.push('o#' + live.prompt_order[0].order.length);
-        }
-
-        return parts.join('|');
+        //   - 不做 sanitize/normalize。
+        // 不能只比较长度或少数字段：同长度 toggle/扩展字段会永久漏检。
+        // 缓存约 100KB 字符串的内存成本很小，换取零采样假阴性。
+        return createJsonFingerprint(live);
     } catch (e) {
         return null;
     }
@@ -1208,11 +1287,11 @@ function bindPresetEvents() {
         cancelPendingSave();
         setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
         // 1) 早一点把"跟踪状态"指向新预设（避免下一次 doSave 比较错对象）
-        setTimeout(() => {
+        _runtimeTimers.schedule(() => {
             updateTrackingAfterSwitch();
         }, 200);
         // 2) 晚一点解锁 ignoreInput，避免切换尾部的 mutation 被当成用户输入
-        setTimeout(() => {
+        _runtimeTimers.schedule(() => {
             setIgnoreInput(false);
         }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
@@ -1230,10 +1309,10 @@ function bindPresetEvents() {
             if (data.name) _currentPresetName = data.name;
         }
 
-        setTimeout(() => {
+        _runtimeTimers.schedule(() => {
             updateTrackingAfterSwitch();
         }, 250);
-        setTimeout(() => {
+        _runtimeTimers.schedule(() => {
             setIgnoreInput(false);
         }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
@@ -1246,10 +1325,10 @@ function bindPresetEvents() {
         setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
         _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
 
-        setTimeout(() => {
+        _runtimeTimers.schedule(() => {
             updateTrackingAfterSwitch();
         }, 250);
-        setTimeout(() => {
+        _runtimeTimers.schedule(() => {
             setIgnoreInput(false);
         }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
@@ -1418,7 +1497,7 @@ export function endAtomicRestore(hash, tracking = null) {
     const POST_RESTORE_SUSPEND_MS = 2000;
     _suspendUntil = Date.now() + POST_RESTORE_SUSPEND_MS;
     setIgnoreInput(true, POST_RESTORE_SUSPEND_MS + 500);
-    setTimeout(() => {
+    _runtimeTimers.schedule(() => {
         setIgnoreInput(false);
     }, POST_RESTORE_SUSPEND_MS);
 
@@ -1433,6 +1512,7 @@ export function endAtomicRestore(hash, tracking = null) {
 export async function teardown() {
     cancelPendingSave();
     _enabled = false;
+    _runtimeTimers.clearAll();
 
     // Stop every source of new work before waiting for the current disk write.
     // SaveCoordinator.close() cancels queued requests but intentionally lets the
@@ -1465,6 +1545,8 @@ export async function teardown() {
     _dirty = false;
     _isInternalSave = false;
     _saveRevision = 0;
+    _latestRevisionByTarget.clear();
+    _retryAttemptsByTarget.clear();
     _restoreInProgress = false;
     if (_restoreAutoResetTimer) {
         clearTimeout(_restoreAutoResetTimer);

@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 import { HistoryRepository, migrationMarkerKey } from '../../modules/core/history-repository.js';
 
 class MemoryStore {
-    constructor(entries = {}, { failSet = false } = {}) {
+    constructor(entries = {}, { failSet = false, failRemove = false } = {}) {
         this.map = new Map(Object.entries(structuredClone(entries)));
         this.failSet = failSet;
+        this.failRemove = failRemove;
     }
     async getItem(key) { return structuredClone(this.map.get(key) ?? null); }
     async setItem(key, value) {
@@ -14,7 +15,10 @@ class MemoryStore {
         this.map.set(key, structuredClone(value));
         return value;
     }
-    async removeItem(key) { this.map.delete(key); }
+    async removeItem(key) {
+        if (this.failRemove) throw new Error('remove failed');
+        this.map.delete(key);
+    }
     async keys() { return [...this.map.keys()]; }
     async clear() { this.map.clear(); }
 }
@@ -100,6 +104,18 @@ test('clear tombstones every visible key without deleting legacy rollback data',
     assert.deepEqual(await repository.keys(), []);
     assert.notEqual(await legacy.getItem('openai::A'), null);
     assert.equal((await v2.getItem(migrationMarkerKey('openai::A'))).status, 'deleted');
+});
+
+test('a failed physical delete cannot resurrect legacy history', async () => {
+    const key = 'openai::Demo';
+    const legacy = new MemoryStore({ [key]: [legacySnapshot()] });
+    const v2 = new MemoryStore({ [key]: [legacySnapshot()] }, { failRemove: true });
+    const repository = new HistoryRepository({ legacyStore: legacy, v2Store: v2 });
+
+    await assert.rejects(repository.removeItem(key), /remove failed/);
+    assert.equal((await v2.getItem(migrationMarkerKey(key))).status, 'deleted');
+    assert.equal(await repository.getItem(key), null);
+    assert.deepEqual(await repository.keys(), []);
 });
 
 test('reports repository marker state and migration counters', async () => {

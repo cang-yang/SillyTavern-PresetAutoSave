@@ -22,11 +22,11 @@ export class HistoryRepository {
     }
 
     async getItem(key) {
-        const current = await this.v2Store.getItem(key);
-        if (Array.isArray(current)) return current;
-
         const marker = await this.v2Store.getItem(migrationMarkerKey(key));
         if (marker?.status === 'deleted') return null;
+
+        const current = await this.v2Store.getItem(key);
+        if (Array.isArray(current)) return current;
 
         const legacy = await this.legacyStore.getItem(key);
         if (!Array.isArray(legacy)) return null;
@@ -81,12 +81,20 @@ export class HistoryRepository {
     }
 
     async removeItem(key) {
-        await this.v2Store.removeItem(key);
-        await this.v2Store.setItem(migrationMarkerKey(key), {
+        const markerKey = migrationMarkerKey(key);
+        const tombstone = {
             status: 'deleted',
             schemaVersion: HISTORY_SCHEMA_VERSION,
             deletedAt: this.now(),
-        });
+        };
+        // Publish and verify the tombstone first. If the following physical
+        // cleanup fails, readers must still never fall back to legacy data.
+        await this.v2Store.setItem(markerKey, tombstone);
+        const storedMarker = await this.v2Store.getItem(markerKey);
+        if (storedMarker?.status !== 'deleted') {
+            throw new Error(`History v2 tombstone verification failed for ${key}`);
+        }
+        await this.v2Store.removeItem(key);
     }
 
     async keys() {

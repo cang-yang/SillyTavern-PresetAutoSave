@@ -9,7 +9,16 @@ globalThis.window = {
 };
 globalThis.SillyTavern = globalThis.window.SillyTavern;
 
-const { computeChangeSummary, hashPreset } = await import('../../modules/history-store.js');
+const { computeChangeSummary, hashPreset, stableStringify } = await import('../../modules/history-store.js');
+
+test('stable history serialization observes in-place object mutations', () => {
+    const value = { extensions: { sample: { enabled: false } } };
+    const before = stableStringify(value);
+    value.extensions.sample.enabled = true;
+    const after = stableStringify(value);
+
+    assert.notEqual(before, after);
+});
 
 test('history hashing preserves unknown nested value types', () => {
     assert.notEqual(

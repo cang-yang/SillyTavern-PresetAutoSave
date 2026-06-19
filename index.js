@@ -35,6 +35,7 @@ import { clearAllArchived } from './modules/archive-store.js';
 import { runGroupingSelfTest, parsePresetName, groupNamesBySeries } from './modules/preset-grouping.js';
 import { initThemeDetector, teardownThemeDetector } from './modules/theme-detector.js';
 import { runDeleteRecovery } from './modules/core/lifecycle-recovery.js';
+import { RuntimeTimerRegistry } from './modules/core/runtime-timers.js';
 
 const VERSION = '1.0.0';
 
@@ -46,8 +47,15 @@ let _takeoverDone = false;
 let _phase2Done = false;
 let _mainEventsBound = false;       // 防止 main() 中事件重复订阅
 let _mainEventUnsubscribers = [];   // main() 中订阅的事件取消函数
+const _runtimeTimers = new RuntimeTimerRegistry();
+let _domReadyHandler = null;
 
 function resetLifecycleState() {
+    _runtimeTimers.clearAll();
+    if (_domReadyHandler && typeof document !== 'undefined') {
+        document.removeEventListener('DOMContentLoaded', _domReadyHandler);
+        _domReadyHandler = null;
+    }
     _phase1Done = false;
     _takeoverDone = false;
     _phase2Done = false;
@@ -80,6 +88,10 @@ async function runPhase1() {
 // =====================================================
 async function runTakeoverPhase() {
     if (_takeoverDone) return;
+    if (!_phase1Done) {
+        logger.warn('Takeover phase deferred because Phase 1 is not ready');
+        return;
+    }
     _takeoverDone = true;
     try {
         logger.debug('--- Phase 1.5: Preset takeover ---');
@@ -96,6 +108,10 @@ async function runTakeoverPhase() {
 // =====================================================
 async function runPhase2() {
     if (_phase2Done) return;
+    if (!_phase1Done || !_takeoverDone) {
+        logger.warn('Auto-save phase deferred because its storage/takeover dependencies are not ready');
+        return;
+    }
     _phase2Done = true;
     try {
         logger.debug('--- Phase 2: Auto save + grouping wizard ---');
@@ -113,7 +129,7 @@ async function runPhase2() {
         try {
             const s = getSettings();
             if (s.groupingEnabled && !s.groupingFirstScanDone) {
-                setTimeout(() => {
+                _runtimeTimers.schedule(() => {
                     showGroupingFirstScanWizard().catch(e =>
                         logger.warn('Grouping first-scan wizard failed:', e)
                     );
@@ -153,7 +169,7 @@ export async function onDelete() {
     } catch (e) {
         logger.error('onDelete: could not quiesce auto-save; recovery data will be preserved', e);
     }
-    try { teardownTakeover(); } catch (e) { logger.warn('teardownTakeover:', e); }
+    try { await teardownTakeover(); } catch (e) { logger.warn('teardownTakeover:', e); }
 
     const recovery = saveQuiesced
         ? await runDeleteRecovery({
@@ -357,7 +373,7 @@ export async function onDisable() {
     } catch (e) {
         logger.error('onDisable: could not quiesce auto-save; preset recovery skipped', e);
     }
-    try { teardownTakeover(); } catch (e) { logger.warn('teardownTakeover:', e); }
+    try { await teardownTakeover(); } catch (e) { logger.warn('teardownTakeover:', e); }
 
     let archive = { restored: 0, failed: 1, cleanupFailed: 0 };
     let snapshots = { written: 0, skipped: 0, failed: 1 };
@@ -469,17 +485,19 @@ export async function onDisable() {
     if (!bootstrapIfReady()) {
         // ST 还没就绪，监听 DOM 加载和定时检查
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => {
-                setTimeout(bootstrapIfReady, 500);
-            });
+            _domReadyHandler = () => {
+                _domReadyHandler = null;
+                _runtimeTimers.schedule(bootstrapIfReady, 500);
+            };
+            document.addEventListener('DOMContentLoaded', _domReadyHandler, { once: true });
         }
 
         // 兜底：每 1 秒检查一次，最多 30 秒
         let retries = 0;
-        const fallbackTimer = setInterval(() => {
+        const fallbackTimer = _runtimeTimers.repeat(() => {
             retries++;
             if (_phase1Done || retries > 30) {
-                clearInterval(fallbackTimer);
+                _runtimeTimers.cancel(fallbackTimer);
                 if (!_phase1Done && retries > 30) {
                     logger.warn('Initialization timeout - ST DOM never appeared. Phase1 not started.');
                 }
@@ -540,11 +558,22 @@ export async function onDisable() {
                 // ⭐ 一键清空所有插件数据并重新种子（用户报告残留数据时使用）
                 fullReset: async () => {
                     logger.warn('[fullReset] clearing all snapshots + archives, then re-seeding...');
-                    try { await clearAllSnapshots(); } catch (e) { logger.error('clear snapshots failed:', e); }
-                    try { await clearAllArchived(); } catch (e) { logger.error('clear archives failed:', e); }
+                    try {
+                        await clearAllSnapshots();
+                        const archivesCleared = await clearAllArchived();
+                        if (!archivesCleared) throw new Error('Archive store did not confirm clear');
+                    } catch (e) {
+                        logger.error('[fullReset] clear failed; reseed aborted to avoid mixed old/new state:', e);
+                        return { ok: false, error: e?.message || String(e) };
+                    }
                     logger.info('[fullReset] data cleared, refreshing takeover and reseeding...');
-                    try { refreshTakeover(); } catch (e) { logger.error('refreshTakeover failed:', e); }
-                    try { await forceReseedSnapshots(); } catch (e) { logger.error('reseed failed:', e); }
+                    try {
+                        refreshTakeover();
+                        await forceReseedSnapshots();
+                    } catch (e) {
+                        logger.error('[fullReset] reseed failed:', e);
+                        return { ok: false, error: e?.message || String(e), cleared: true };
+                    }
                     logger.success('[fullReset] complete · 请刷新页面或重新打开历史面板');
                     return { ok: true };
                 },
