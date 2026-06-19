@@ -23,5 +23,6 @@ build/
 
 # Cache
 .cache/
+.worktrees/
 
 SillyTavern-release/
