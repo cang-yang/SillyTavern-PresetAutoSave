@@ -29,11 +29,12 @@ import {
     toast,
     t,
 } from './compatibility.js';
-import { addSnapshot, deleteSnapshot, TRIGGER, hashPreset } from './history-store.js';
+import { addSnapshot, TRIGGER, hashPreset } from './history-store.js';
 import { seedSnapshotForPreset } from './preset-takeover.js';
 import { SaveCoordinator, sameSaveTarget } from './core/save-coordinator.js';
 import { shouldAcceptUserMutation } from './core/input-gate.js';
 import { getDeferredSaveDelay } from './core/deferred-save.js';
+import { commitPresetSave, PresetSaveTransactionError } from './core/save-transaction.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -904,40 +905,27 @@ async function executeSaveRequest(request) {
 
     try {
         logger.debug(
-            `[doSave] Snapshotting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
+            `[doSave] Persisting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
         );
 
-        // 创建历史快照（store 会自己再判断一次去重 + 合并窗口）
-        const snapshot = await addSnapshot(presetName, apiId, preset, trigger);
+        const transaction = await commitPresetSave(request, {
+            persistPreset: () => savePresetSafe(presetName, preset, { skipUpdate: true, apiId }),
+            syncMemory: () => syncPresetToMemory(presetName, preset, apiId),
+            commitHistory: () => addSnapshot(presetName, apiId, preset, trigger),
+        });
+        const snapshot = transaction.snapshot;
 
         if (!snapshot) {
-            // store 判断未变化（可能在合并窗口内）
+            // 预设已成功落盘；history store 判断无需新增记录。
             if (isCurrentTarget()) {
+                _lastSavedHash = newHash;
+                _lastQuickFingerprint = _computeQuickFingerprint(apiId);
                 _dirty = false;
-                _setStatus('idle');
+                _setStatus('saved');
             }
             _stats.skippedUnchanged++;
             return null;
         }
-
-        // 写入磁盘（skipUpdate:true — 不触发 ST UI 重载，避免 PromptManager DOM 重建导致的性能开销）
-        try {
-            await savePresetSafe(presetName, preset, { skipUpdate: true, apiId });
-        } catch (diskErr) {
-            logger.error('[doSave] savePresetSafe failed, rolling back snapshot:', diskErr);
-            try {
-                await deleteSnapshot(snapshot.id, { force: true });
-                logger.info(`[doSave] Rolled back snapshot ${snapshot.id} after disk write failure`);
-            } catch (rollbackErr) {
-                logger.error('[doSave] Snapshot rollback also failed:', rollbackErr);
-            }
-            throw diskErr; // 重新抛出，让外层 catch 处理状态 & toast
-        }
-
-        // 同步 ST 内存中的 presets[] 数组（零开销 — 仅对象属性赋值，无 DOM/事件触发）。
-        // 这确保用户通过原生列表或托管列表切换预设时，ST 从 presets[] 加载的是最新保存的版本，
-        // 而非初始导入时的旧版本。不同步的话切换预设会导致用户修改丢失。
-        syncPresetToMemory(presetName, preset, apiId);
 
         if (isCurrentTarget()) {
             _lastSavedHash = snapshot.hash;
@@ -959,7 +947,11 @@ async function executeSaveRequest(request) {
         );
         return snapshot;
     } catch (e) {
-        logger.error('Save failed:', e);
+        if (e instanceof PresetSaveTransactionError) {
+            logger.error(`Save partially committed at ${e.stage}:`, e.cause || e);
+        } else {
+            logger.error('Save failed:', e);
+        }
         if (isCurrentTarget()) _setStatus('error');
         toast.error(t('Save Failed Toast', { message: e?.message || String(e) }));
         return null;

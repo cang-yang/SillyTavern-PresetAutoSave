@@ -26,9 +26,11 @@ import { getSettings } from './settings.js';
 import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, extractCanonicalForDiff, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 import { createChangeSet, assertExplainableChange } from './core/change-set.js';
 import { canonicalizePreset } from './core/preset-schema.js';
+import { HistoryRepository } from './core/history-repository.js';
 
 const STORAGE_NAME = 'PresetAutoSave';
 const STORE_NAME = 'history';
+const V2_STORE_NAME = 'history_v2';
 const KEY_DELIMITER = '::';
 
 // =====================================================
@@ -63,14 +65,16 @@ const KEYS_CACHE_TTL = 5000;  // 5秒
 // =====================================================
 export async function initHistoryStore() {
     try {
-        _store = createStorage(STORAGE_NAME, STORE_NAME);
+        const legacyStore = createStorage(STORAGE_NAME, STORE_NAME);
+        const v2Store = createStorage(STORAGE_NAME, V2_STORE_NAME);
+        _store = new HistoryRepository({
+            legacyStore,
+            v2Store,
+            onError: (error, context) => logger.warn('History v2 migration deferred:', context, error),
+        });
         _initialized = true;
-
-        const stats = await getStats();
-        logger.success(
-            `History store ready: ${stats.snapshotCount} snapshots, ` +
-            `${stats.presetCount} presets, ${stats.totalSizeFormatted}`
-        );
+        const presetCount = (await _store.keys()).length;
+        logger.success(`History repository v2 ready: ${presetCount} preset histories (lazy migration enabled)`);
     } catch (e) {
         logger.error('Failed to init history store:', e);
         _initialized = false;
