@@ -34,6 +34,7 @@ import {
 import { clearAllArchived } from './modules/archive-store.js';
 import { runGroupingSelfTest, parsePresetName, groupNamesBySeries } from './modules/preset-grouping.js';
 import { initThemeDetector, teardownThemeDetector } from './modules/theme-detector.js';
+import { runDeleteRecovery } from './modules/core/lifecycle-recovery.js';
 
 const VERSION = '1.0.0';
 
@@ -45,6 +46,14 @@ let _takeoverDone = false;
 let _phase2Done = false;
 let _mainEventsBound = false;       // 防止 main() 中事件重复订阅
 let _mainEventUnsubscribers = [];   // main() 中订阅的事件取消函数
+
+function resetLifecycleState() {
+    _phase1Done = false;
+    _takeoverDone = false;
+    _phase2Done = false;
+    _mainEventsBound = false;
+    _mainEventUnsubscribers = [];
+}
 
 // =====================================================
 // 阶段 1: UI 基础设施初始化（settings / store / 注入按钮 / 历史面板）
@@ -135,72 +144,78 @@ export async function onActivate() {
 }
 
 export async function onDelete() {
-    logger.info('Uninstalling: restoring presets → clearing all plugin data');
+    logger.info('Uninstalling: quiescing saves → restoring presets → clearing verified recovery data');
 
-    // ── Step 1: 同步 DOM 还原（瞬时，把被 detach 的 option 放回 select） ──
+    let saveQuiesced = false;
+    try {
+        await teardownAutoSave();
+        saveQuiesced = true;
+    } catch (e) {
+        logger.error('onDelete: could not quiesce auto-save; recovery data will be preserved', e);
+    }
     try { teardownTakeover(); } catch (e) { logger.warn('teardownTakeover:', e); }
 
-    // ── Step 2: 异步数据恢复 + 存储清理（带 4s 超时保护，防止超出 ST ~5s 限制） ──
-    const dataOps = async () => {
-        // 2a. 顺序执行：先恢复归档 → 再用快照补缺（有依赖关系）
-        await restoreAllFromArchive().catch(e =>
-            logger.error('Archive restore on onDelete failed:', e)
-        );
-        const r = await _writeBackLatestSnapshots({ skipExisting: true, filterGhosts: true });
-        logger.success(`onDelete: snapshot writeback · ${r.written || 0} restored · ${r.skipped || 0} skipped`);
+    const recovery = saveQuiesced
+        ? await runDeleteRecovery({
+            restoreArchives: restoreAllFromArchive,
+            writeBackSnapshots: () => _writeBackLatestSnapshots({ skipExisting: true, filterGhosts: true }),
+            clearSnapshots: clearAllSnapshots,
+            clearArchives: clearAllArchived,
+        })
+        : {
+            complete: false,
+            archive: { failed: 1 },
+            snapshots: { failed: 1 },
+            snapshotsCleared: false,
+            archivesCleared: false,
+            errors: { snapshots: 'Auto-save did not quiesce', archives: 'Auto-save did not quiesce' },
+        };
 
-        // 2b. 并行执行：清空两个存储（互不依赖）
-        const [snapResult, archiveResult] = await Promise.allSettled([
-            clearAllSnapshots(),
-            clearAllArchived(),
-        ]);
-        if (snapResult.status === 'rejected') logger.error('Clear snapshots failed:', snapResult.reason);
-        if (archiveResult.status === 'rejected') logger.error('Clear archives failed:', archiveResult.reason);
-    };
+    logger.info(
+        `onDelete recovery: archives=${recovery.archive?.restored || 0} restored/` +
+        `${recovery.archive?.failed || 0} failed, snapshots=${recovery.snapshots?.written || 0} written/` +
+        `${recovery.snapshots?.failed || 0} failed`
+    );
+    if (recovery.errors?.snapshots) logger.warn('Snapshot recovery data preserved:', recovery.errors.snapshots);
+    if (recovery.errors?.archives) logger.warn('Archive recovery data preserved:', recovery.errors.archives);
 
-    let dataCleanupSuccess = false;
-    try {
-        await Promise.race([
-            dataOps(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('onDelete timeout (4s)')), 4000)),
-        ]);
-        dataCleanupSuccess = true;
-    } catch (e) {
-        logger.warn('onDelete: data ops incomplete:', e.message || e);
-    }
-
-    // ── Step 3: 重置扩展设置（仅在数据清理成功时执行，避免残留数据但无设置的不一致状态） ──
-    if (!dataCleanupSuccess) {
-        logger.warn('onDelete: skipping resetSettings because data cleanup did not complete');
-    }
-    if (dataCleanupSuccess) {
+    let settingsCleared = false;
+    if (recovery.complete) {
         try {
             resetSettings();
             const ctx = SillyTavern.getContext();
             if (ctx.extensionSettings) {
                 delete ctx.extensionSettings['preset_auto_save'];
-                if (typeof ctx.saveSettingsDebounced === 'function') {
-                    ctx.saveSettingsDebounced();
-                }
-                logger.debug('onDelete: extensionSettings.preset_auto_save cleared');
+                if (typeof ctx.saveSettingsDebounced === 'function') ctx.saveSettingsDebounced();
             }
+            settingsCleared = true;
         } catch (e) {
-            logger.warn('onDelete: failed to clear extensionSettings:', e);
+            logger.warn('onDelete: failed to clear extension settings:', e);
         }
+    } else {
+        logger.warn('onDelete: recovery was incomplete; settings and remaining recovery data were preserved');
     }
 
-    // ── Step 4: 同步模块拆除（始终执行，即使上面超时） ──
     try { teardownThemeDetector(); } catch (_) { /* best-effort */ }
-    try { teardownAutoSave(); } catch (_) { /* best-effort */ }
     try { teardownUI(); } catch (_) { /* best-effort */ }
     try { teardownHistoryPanel(); } catch (_) { /* best-effort */ }
     try { offAll(); } catch (_) { /* best-effort */ }
+    resetLifecycleState();
 
-    logger.success('onDelete: cleanup complete — all plugin data cleared');
+    if (recovery.complete && settingsCleared) logger.success('onDelete: verified recovery and cleanup complete');
+    else logger.warn('onDelete: partial cleanup completed; no unverified recovery data was deleted');
+    return { ...recovery, settingsCleared };
 }
 
-export function onEnable() {
-    logger.info('Enabled');
+export async function onEnable() {
+    logger.info('Enabled - initializing extension runtime');
+    initCompatibility();
+    await runPhase1();
+    await runTakeoverPhase();
+    await runPhase2();
+    const ready = _phase1Done && _takeoverDone && _phase2Done;
+    if (!ready) logger.warn('Enable completed with one or more initialization phases unavailable');
+    return { ready };
 }
 
 /**
@@ -225,12 +240,19 @@ async function _writeBackLatestSnapshots(opts = {}) {
     const { skipExisting = false, filterGhosts = false } = opts;
     try {
         const allSnaps = await getAllSnapshots();
-        if (!Array.isArray(allSnaps) || allSnaps.length === 0) return { written: 0, skipped: 0 };
+        if (!Array.isArray(allSnaps) || allSnaps.length === 0) {
+            return { written: 0, skipped: 0, failed: 0 };
+        }
 
         // 1. 按 (apiId, presetName) 分组，取每组中 timestamp 最大的快照
         const latestMap = new Map();
+        let failed = 0;
+        let skipped = 0;
         for (const s of allSnaps) {
-            if (!s || !s.presetName || !s.apiId) continue;
+            if (!s || !s.presetName || !s.apiId) {
+                failed++;
+                continue;
+            }
             const k = `${s.apiId}::${s.presetName}`;
             const cur = latestMap.get(k);
             if (!cur || (s.timestamp || 0) > (cur.timestamp || 0)) {
@@ -259,6 +281,7 @@ async function _writeBackLatestSnapshots(opts = {}) {
                         const members = seriesMembers.get(series);
                         if (members && members.size > 1) {
                             latestMap.delete(key);
+                            skipped++;
                             logger.debug(`writeBack: filtered ghost snapshot "${snap.presetName}" (series has ${members.size} real versions)`);
                         }
                     }
@@ -267,82 +290,98 @@ async function _writeBackLatestSnapshots(opts = {}) {
         }
 
         // 3. 逐个写回 ST
-        let written = 0, skipped = 0;
+        let written = 0;
         for (const snap of latestMap.values()) {
-            if (!snap.preset || typeof snap.preset !== 'object') {
-                skipped++;
+            if (!snap.preset || typeof snap.preset !== 'object' || Array.isArray(snap.preset)) {
+                failed++;
                 continue;
             }
             try {
                 const pm = getPresetManager(snap.apiId);
+                if (!pm) throw new Error(`PresetManager unavailable for ${snap.apiId}`);
 
                 if (skipExisting) {
                     // onDelete 语义：只恢复 ST 中不存在的预设（不覆盖已有的）
                     let exists = false;
+                    let existenceKnown = false;
                     if (pm && typeof pm.getPresetList === 'function') {
                         try {
                             const { preset_names } = pm.getPresetList(snap.apiId);
                             if (Array.isArray(preset_names)) {
                                 exists = preset_names.includes(snap.presetName);
+                                existenceKnown = true;
                             } else if (preset_names && typeof preset_names === 'object') {
                                 exists = Object.hasOwn(preset_names, snap.presetName);
+                                existenceKnown = true;
                             }
                         } catch (_) {}
                     }
                     // 兜底：findPreset 检查
-                    if (!exists && pm && typeof pm.findPreset === 'function') {
-                        exists = pm.findPreset(snap.presetName) !== undefined;
+                    if (!exists && typeof pm.findPreset === 'function') {
+                        try {
+                            exists = pm.findPreset(snap.presetName) !== undefined;
+                            existenceKnown = true;
+                        } catch (_) {}
                     }
+                    if (!existenceKnown) throw new Error(`Could not verify whether preset exists: ${snap.presetName}`);
                     if (exists) { skipped++; continue; }
                 } else {
                     // onDisable 语义（旧行为）：只覆盖已存在的预设
-                    if (pm && typeof pm.findPreset === 'function') {
-                        const found = pm.findPreset(snap.presetName);
-                        if (found === undefined) { skipped++; continue; }
+                    if (typeof pm.findPreset !== 'function') {
+                        throw new Error(`Could not verify existing preset: ${snap.presetName}`);
                     }
+                    const found = pm.findPreset(snap.presetName);
+                    if (found === undefined) { skipped++; continue; }
                 }
 
                 await savePresetSafe(snap.presetName, snap.preset, { apiId: snap.apiId, skipUpdate: true });
                 written++;
             } catch (e) {
                 logger.debug(`writeback failed for ${snap.presetName}:`, e);
-                skipped++;
+                failed++;
             }
         }
-        return { written, skipped };
+        return { written, skipped, failed };
     } catch (e) {
         logger.warn('writeBackLatestSnapshots step failed:', e);
-        return { written: 0, skipped: 0, error: String(e) };
+        return { written: 0, skipped: 0, failed: 1, error: String(e) };
     }
 }
 
-export function onDisable() {
+export async function onDisable() {
     logger.info('Disabled - restoring presets to ST (snapshots + archives)');
-    // onDisable 是同步钩子，但还原必须异步
-    // 这里 fire-and-forget：先归档恢复，再快照写回
-    (async () => {
-        try {
-            await restoreAllFromArchive();
-        } catch (e) {
-            logger.error('Archive restore on onDisable failed:', e);
-        }
-        try {
-            const r = await _writeBackLatestSnapshots();
-            logger.info(`onDisable writeback: ${r.written || 0} written, ${r.skipped || 0} skipped`);
-        } catch (e) {
-            logger.error('Snapshot writeback on onDisable failed:', e);
-        }
-    })();
+    let saveQuiesced = false;
     try {
-        teardownThemeDetector();
-        teardownTakeover();
-        teardownAutoSave();
-        teardownUI();
-        teardownHistoryPanel();
-        offAll();
+        await teardownAutoSave();
+        saveQuiesced = true;
     } catch (e) {
-        logger.error('onDisable cleanup error:', e);
+        logger.error('onDisable: could not quiesce auto-save; preset recovery skipped', e);
     }
+    try { teardownTakeover(); } catch (e) { logger.warn('teardownTakeover:', e); }
+
+    let archive = { restored: 0, failed: 1, cleanupFailed: 0 };
+    let snapshots = { written: 0, skipped: 0, failed: 1 };
+    if (saveQuiesced) {
+        archive = await restoreAllFromArchive();
+        snapshots = await _writeBackLatestSnapshots();
+    }
+
+    try { teardownThemeDetector(); } catch (_) { /* best-effort */ }
+    try { teardownUI(); } catch (_) { /* best-effort */ }
+    try { teardownHistoryPanel(); } catch (_) { /* best-effort */ }
+    try { offAll(); } catch (_) { /* best-effort */ }
+    resetLifecycleState();
+
+    const complete = saveQuiesced
+        && Number(archive.failed || 0) === 0
+        && Number(archive.cleanupFailed || 0) === 0
+        && Number(snapshots.failed || 0) === 0;
+    logger.info(
+        `onDisable recovery: ${archive.restored || 0} archives restored, ` +
+        `${snapshots.written || 0} snapshots written, ${snapshots.skipped || 0} skipped, ` +
+        `${(archive.failed || 0) + (archive.cleanupFailed || 0) + (snapshots.failed || 0)} failed`
+    );
+    return { complete, archive, snapshots };
 }
 
 // =====================================================

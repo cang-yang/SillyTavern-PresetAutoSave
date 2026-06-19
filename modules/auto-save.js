@@ -1430,12 +1430,15 @@ export function endAtomicRestore(hash, tracking = null) {
 // =====================================================
 // 卸载（供 onDelete hook 使用）
 // =====================================================
-export function teardown() {
+export async function teardown() {
     cancelPendingSave();
-    if (_saveCoordinator) {
-        _saveCoordinator.close();
-        _saveCoordinator = null;
-    }
+    _enabled = false;
+
+    // Stop every source of new work before waiting for the current disk write.
+    // SaveCoordinator.close() cancels queued requests but intentionally lets the
+    // active request finish, so recovery can never race an in-flight save.
+    const coordinator = _saveCoordinator;
+    if (coordinator) coordinator.close();
     unbindDOMListeners();
     unbindPromptManagerListeners();
     stopPolling();
@@ -1453,8 +1456,11 @@ export function teardown() {
         clearTimeout(_ignoreInputTimer);
         _ignoreInputTimer = null;
     }
+    if (coordinator) {
+        await coordinator.whenIdle();
+        if (_saveCoordinator === coordinator) _saveCoordinator = null;
+    }
     _initialized = false;
-    _enabled = false;
     _ignoreInput = false;
     _dirty = false;
     _isInternalSave = false;
