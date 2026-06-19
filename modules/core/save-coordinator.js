@@ -1,3 +1,9 @@
+export function sameSaveTarget(left, right) {
+    return !!left?.apiId && !!left?.presetName
+        && left.apiId === right?.apiId
+        && left.presetName === right?.presetName;
+}
+
 export class SaveCoordinator {
     constructor({ worker, onStateChange = () => {}, now = () => Date.now() } = {}) {
         if (typeof worker !== 'function') throw new TypeError('SaveCoordinator requires a worker');

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SaveCoordinator } from '../../modules/core/save-coordinator.js';
+import { SaveCoordinator, sameSaveTarget } from '../../modules/core/save-coordinator.js';
 
 function deferred() {
     let resolve;
@@ -130,4 +130,15 @@ test('rejects requests without a stable target identity', async () => {
     await assert.rejects(coordinator.enqueue({ presetName: 'A' }), /apiId/);
     await assert.rejects(coordinator.enqueue({ apiId: 'openai' }), /presetName/);
     assert.equal(coordinator.getState().status, 'idle');
+});
+
+test('matches completion state only to the request target', () => {
+    assert.equal(sameSaveTarget(
+        { apiId: 'openai', presetName: 'A' },
+        { apiId: 'openai', presetName: 'A' },
+    ), true);
+    assert.equal(sameSaveTarget(
+        { apiId: 'openai', presetName: 'A' },
+        { apiId: 'openai', presetName: 'B' },
+    ), false);
 });

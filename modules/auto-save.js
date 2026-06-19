@@ -31,6 +31,9 @@ import {
 } from './compatibility.js';
 import { addSnapshot, deleteSnapshot, TRIGGER, hashPreset } from './history-store.js';
 import { seedSnapshotForPreset } from './preset-takeover.js';
+import { SaveCoordinator, sameSaveTarget } from './core/save-coordinator.js';
+import { shouldAcceptUserMutation } from './core/input-gate.js';
+import { getDeferredSaveDelay } from './core/deferred-save.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -85,6 +88,8 @@ let _debounceTimer = null;
 let _ignoreInput = false;          // 切换期间忽略输入事件
 let _ignoreInputTimer = null;      // 自动重置定时器，防止永久卡死
 let _isInternalSave = false;       // 内部保存中（防递归）
+let _saveCoordinator = null;       // 单写入者：串行化所有预设写入
+let _saveRevision = 0;             // 单调递增请求版本
 let _restoreInProgress = false;    // AL-1: 原子恢复操作进行中（抑制所有事件副作用）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
@@ -411,11 +416,12 @@ function describeElement(el) {
 }
 
 function onElementInput(event) {
-    if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
+    if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress, userInitiated: event.isTrusted })) return;
     if (!isElementWatchable(event.target)) return;
 
     const el = event.target;
     const settings = getSettings();
+    const scheduleUserSave = (delay, reason) => scheduleAutoSave(delay, reason, { preserveDuringSwitch: event.isTrusted });
 
     markUserActive();
     _stats.triggeredByDOM++;
@@ -431,26 +437,27 @@ function onElementInput(event) {
 
     // 文本框/textarea: 长防抖
     if (el.tagName === 'TEXTAREA' || el.type === 'text' || el.type === 'search') {
-        scheduleAutoSave(settings.textInputDebounce);
+        scheduleUserSave(settings.textInputDebounce);
         return;
     }
 
     // 数字输入框: 通用防抖
     if (el.type === 'number') {
-        scheduleAutoSave(settings.debounceMs);
+        scheduleUserSave(settings.debounceMs);
         return;
     }
 
     // 默认
-    scheduleAutoSave(settings.debounceMs);
+    scheduleUserSave(settings.debounceMs);
 }
 
 function onElementChange(event) {
-    if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
+    if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress, userInitiated: event.isTrusted })) return;
     if (!isElementWatchable(event.target)) return;
 
     const el = event.target;
     const settings = getSettings();
+    const scheduleUserSave = (delay, reason) => scheduleAutoSave(delay, reason, { preserveDuringSwitch: event.isTrusted });
 
     markUserActive();
     _stats.triggeredByDOM++;
@@ -459,18 +466,18 @@ function onElementChange(event) {
     // 滑块: change 触发保存（用户松开了），sliderReleaseSave 关闭时使用更短的延迟
     if (el.type === 'range') {
         const delay = settings.sliderReleaseSave ? settings.debounceMs : 0;
-        scheduleAutoSave(delay);
+        scheduleUserSave(delay);
         return;
     }
 
     // 复选框/单选/select: change 立即触发
     if (el.type === 'checkbox' || el.type === 'radio' || el.tagName === 'SELECT') {
-        scheduleAutoSave(settings.debounceMs);
+        scheduleUserSave(settings.debounceMs);
         return;
     }
 
     // 其他: blur 时的 change（如失焦后值改变）
-    scheduleAutoSave(settings.debounceMs);
+    scheduleUserSave(settings.debounceMs);
 }
 
 // =====================================================
@@ -495,7 +502,7 @@ function bindPromptManagerListeners() {
      * 仅保留 childList observer 来捕获 SortableJS 拖拽排序这种纯 DOM 操作。
      */
     const handler = (event) => {
-        if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
+        if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress, userInitiated: event.isTrusted })) return;
 
         const target = event.target;
         if (!target || !target.closest) return;
@@ -506,7 +513,7 @@ function bindPromptManagerListeners() {
             logger.debug('[PromptManager] entry form save clicked');
             // 点击后，PromptManager 会在内部 mutate oai_settings 然后保存。
             // 给它足够的延迟以同步到内存
-            scheduleAutoSave(getSettings().debounceMs, 'prompt-edit-save');
+            scheduleAutoSave(getSettings().debounceMs, 'prompt-edit-save', { preserveDuringSwitch: event.isTrusted });
             return;
         }
 
@@ -516,7 +523,7 @@ function bindPromptManagerListeners() {
             if (target.closest('.prompt-manager-toggle-action, .prompt-manager-detach-action, .prompt-manager-edit-action, [data-pm-action]')) {
                 _stats.triggeredByPrompt++;
                 logger.debug('[PromptManager] action button clicked');
-                scheduleAutoSave(getSettings().debounceMs, 'prompt-action');
+                scheduleAutoSave(getSettings().debounceMs, 'prompt-action', { preserveDuringSwitch: event.isTrusted });
             }
         }
 
@@ -524,7 +531,7 @@ function bindPromptManagerListeners() {
         if (target.closest('#completion_prompt_manager_footer_append_prompt') || target.closest('#completion_prompt_manager_new_prompt')) {
             _stats.triggeredByPrompt++;
             logger.debug('[PromptManager] add prompt clicked');
-            scheduleAutoSave(getSettings().debounceMs, 'prompt-add');
+            scheduleAutoSave(getSettings().debounceMs, 'prompt-add', { preserveDuringSwitch: event.isTrusted });
         }
     };
 
@@ -550,7 +557,7 @@ function bindPromptManagerListeners() {
     const PM_MUTATION_THROTTLE_MS = 500;
     try {
         _promptObserver = new MutationObserver((mutations) => {
-            if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
+            if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress })) return;
             if (_pmMutationPending) return;
 
             // 快速过滤：只关心新增/删除节点
@@ -572,7 +579,7 @@ function bindPromptManagerListeners() {
             _pmMutationPending = true;
             queueMicrotask(() => {
                 _pmMutationPending = false;
-                if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
+                if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress })) return;
                 _stats.triggeredByPrompt++;
                 logger.debug('[PromptManager] DOM childList mutation');
                 scheduleAutoSave(getSettings().debounceMs, 'prompt-mutation');
@@ -620,19 +627,32 @@ function unbindPromptManagerListeners() {
  * @param {number} [delay] 自定义延迟，默认使用 settings.debounceMs
  * @param {string} [reason] 触发原因（用于日志诊断）
  */
-export function scheduleAutoSave(delay = null, reason = 'unspecified') {
+function queueCompensationSave(reason) {
+    _dirty = true;
+    _setStatus('pending');
+    if (_suspendCompensationTimer) return;
+
+    const waitMs = getDeferredSaveDelay({
+        suspendUntil: _suspendUntil,
+        ignoreInput: _ignoreInput,
+        ignoreFallbackMs: IGNORE_INPUT_AFTER_SWITCH_MS,
+    });
+    _suspendCompensationTimer = setTimeout(() => {
+        _suspendCompensationTimer = null;
+        if (_dirty) {
+            scheduleAutoSave(null, `compensation:${reason}`, { preserveDuringSwitch: true });
+        }
+    }, waitMs);
+}
+
+export function scheduleAutoSave(delay = null, reason = 'unspecified', { preserveDuringSwitch = false } = {}) {
     // 切换中 / 内部保存中 / 未启用 / 原子恢复中 -> 静默忽略
     if (!_enabled) return;
     if (_restoreInProgress) return;
     if (_ignoreInput) {
-        // 静默忽略：切换期间这条会爆量，没有诊断价值
+        if (preserveDuringSwitch) queueCompensationSave(reason);
         return;
     }
-    if (_isInternalSave) {
-        // 静默忽略：保存进行中
-        return;
-    }
-
     const settings = getSettings();
     if (!settings.enabled) return;
 
@@ -642,16 +662,7 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified') {
             _suspendNoticeShown = true;
             logger.debug(`scheduleAutoSave suspended (reason=${reason}, ${_suspendUntil - Date.now()}ms)`);
         }
-        // A6-fix: 挂起窗口内安排补偿定时器，到期后重新触发保存检查，避免修改丢失
-        if (!_suspendCompensationTimer) {
-            const remaining = _suspendUntil - Date.now() + 50; // 加 50ms 缓冲确保窗口已过
-            _suspendCompensationTimer = setTimeout(() => {
-                _suspendCompensationTimer = null;
-                if (_dirty) {
-                    scheduleAutoSave(null, 'compensation');
-                }
-            }, remaining);
-        }
+        queueCompensationSave(reason);
         return;
     }
     // 离开挂起窗口后重置
@@ -668,8 +679,7 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified') {
         // 二次防御：debounce 等待期间可能进入了切换状态
         if (_ignoreInput || Date.now() < _suspendUntil) {
             logger.debug(`Scheduled save aborted at fire-time (reason=${reason}, ignoreInput=${_ignoreInput}, suspended=${Date.now() < _suspendUntil})`);
-            _dirty = false;
-            _setStatus('idle');
+            queueCompensationSave(reason);
             return;
         }
         doSave(TRIGGER.AUTO, reason).catch(e => logger.error('Scheduled save failed:', e));
@@ -708,28 +718,6 @@ let _saveTimeoutId = null;
  * @returns {boolean} true = 可以继续保存, false = 应中止
  */
 function _validateSaveConditions(reason, explicitTarget) {
-    if (_isInternalSave) {
-        // 自愈：检测是否长时间被卡住
-        const stuck = _saveStartedAt && (Date.now() - _saveStartedAt > SAVE_TIMEOUT_MS);
-        if (stuck) {
-            logger.warn(
-                `Save lock stuck for ${Date.now() - _saveStartedAt}ms, forcibly releasing`
-            );
-            _isInternalSave = false;
-            _saveStartedAt = 0;
-            if (_saveTimeoutId) {
-                clearTimeout(_saveTimeoutId);
-                _saveTimeoutId = null;
-            }
-            // 让本次也跳过；下次调度会重新触发
-            _stats.aborted++;
-            return false;
-        }
-        logger.debug('Save skipped (internal save in progress)');
-        _stats.aborted++;
-        return false;
-    }
-
     // 入口防御：切换沉默期内只允许 explicitTarget 路径（switch-guard）
     if (!explicitTarget && (_ignoreInput || Date.now() < _suspendUntil)) {
         logger.debug(
@@ -854,14 +842,52 @@ function _buildSavePayload(reason, explicitTarget) {
     return { apiId, presetName, preset, newHash, fingerprint, fieldCount, promptCount, promptOrderCount };
 }
 
+function ensureSaveCoordinator() {
+    if (!_saveCoordinator || _saveCoordinator.getState().status === 'closed') {
+        _saveCoordinator = new SaveCoordinator({ worker: executeSaveRequest });
+    }
+    return _saveCoordinator;
+}
+
 async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null) {
     if (!_validateSaveConditions(reason, explicitTarget)) {
         return null;
     }
 
+    // 在进入队列前冻结目标和数据。即使等待期间用户切换预设，
+    // worker 也不会重新读取全局 UI 并把数据写到错误名称下。
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const payload = _buildSavePayload(reason, explicitTarget);
+    if (!payload) return null;
+    const result = await ensureSaveCoordinator().enqueue({
+        ...payload,
+        trigger,
+        reason,
+        revision: ++_saveRevision,
+    });
+    if (result.status === 'failed') {
+        logger.error('Save coordinator worker failed:', result.error);
+        if (sameSaveTarget(payload, { apiId: _currentApiId, presetName: _currentPresetName })) {
+            _setStatus('error');
+        }
+        return null;
+    }
+    return result.status === 'committed' ? result.value : null;
+}
+
+async function executeSaveRequest(request) {
+    const {
+        trigger, reason, apiId, presetName, preset, newHash, fingerprint,
+        fieldCount, promptCount, promptOrderCount,
+    } = request;
+    const isCurrentTarget = () => sameSaveTarget(
+        { apiId, presetName },
+        { apiId: _currentApiId, presetName: _currentPresetName },
+    );
+
     _isInternalSave = true;
     _saveStartedAt = Date.now();
-    _setStatus('saving');
+    if (isCurrentTarget()) _setStatus('saving');
 
     // 超时保护：如果 15 秒内还没完成，强制重置锁防止永久卡死
     _saveTimeoutId = setTimeout(() => {
@@ -871,20 +897,12 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
             );
             _isInternalSave = false;
             _saveStartedAt = 0;
-            _setStatus('error');
+            if (isCurrentTarget()) _setStatus('error');
             _stats.aborted++;
         }
     }, SAVE_TIMEOUT_MS);
 
     try {
-        // 让出一个微任务，确保上层（PromptManager / oai_settings 同步）已完成
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        const payload = _buildSavePayload(reason, explicitTarget);
-        if (!payload) return null;
-
-        const { apiId, presetName, preset, newHash, fingerprint, fieldCount, promptCount, promptOrderCount } = payload;
-
         logger.debug(
             `[doSave] Snapshotting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
         );
@@ -894,8 +912,10 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
 
         if (!snapshot) {
             // store 判断未变化（可能在合并窗口内）
-            _dirty = false;
-            _setStatus('idle');
+            if (isCurrentTarget()) {
+                _dirty = false;
+                _setStatus('idle');
+            }
             _stats.skippedUnchanged++;
             return null;
         }
@@ -919,10 +939,14 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
         // 而非初始导入时的旧版本。不同步的话切换预设会导致用户修改丢失。
         syncPresetToMemory(presetName, preset, apiId);
 
-        _lastSavedHash = snapshot.hash;
-        _lastQuickFingerprint = _computeQuickFingerprint(apiId);
-        _dirty = false;
-        _setStatus('saved');
+        if (isCurrentTarget()) {
+            _lastSavedHash = snapshot.hash;
+            _lastQuickFingerprint = _computeQuickFingerprint(apiId);
+            _dirty = false;
+            _setStatus('saved');
+        } else {
+            logger.debug(`[Saved] completion belongs to inactive target [${apiId}] ${presetName}; tracking state unchanged`);
+        }
         _stats.saved++;
 
         const settings = getSettings();
@@ -936,7 +960,7 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
         return snapshot;
     } catch (e) {
         logger.error('Save failed:', e);
-        _setStatus('error');
+        if (isCurrentTarget()) _setStatus('error');
         toast.error(t('Save Failed Toast', { message: e?.message || String(e) }));
         return null;
     } finally {
@@ -1416,6 +1440,10 @@ export function endAtomicRestore(hash, tracking = null) {
 // =====================================================
 export function teardown() {
     cancelPendingSave();
+    if (_saveCoordinator) {
+        _saveCoordinator.close();
+        _saveCoordinator = null;
+    }
     unbindDOMListeners();
     unbindPromptManagerListeners();
     stopPolling();
@@ -1438,6 +1466,7 @@ export function teardown() {
     _ignoreInput = false;
     _dirty = false;
     _isInternalSave = false;
+    _saveRevision = 0;
     _restoreInProgress = false;
     if (_restoreAutoResetTimer) {
         clearTimeout(_restoreAutoResetTimer);
