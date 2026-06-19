@@ -225,6 +225,8 @@ export function renderSummary(summary, opts = {}) {
 
     const sections = Array.isArray(summary.sections) ? summary.sections : [];
     if (sections.length === 0) {
+        const rawFallback = renderRawChangedPaths(summary.rawChangedPaths, compact);
+        if (rawFallback) return rawFallback;
         return `<div class="pas-card-summary pas-summary-empty">
             <i class="fa-solid fa-circle-dot"></i>
             <span>${escapeHtml(t('Summary Minor'))}</span>
@@ -239,6 +241,8 @@ export function renderSummary(summary, opts = {}) {
     }
 
     if (lines.length === 0) {
+        const rawFallback = renderRawChangedPaths(summary.rawChangedPaths, compact);
+        if (rawFallback) return rawFallback;
         return `<div class="pas-card-summary pas-summary-empty">
             <i class="fa-solid fa-circle-dot"></i>
             <span>${escapeHtml(t('Summary Minor'))}</span>
@@ -260,6 +264,23 @@ export function renderSummary(summary, opts = {}) {
         : '';
 
     return `<div class="pas-card-summary">${linesHtml}${moreHtml}</div>`;
+}
+
+function renderRawChangedPaths(paths, compact) {
+    if (!Array.isArray(paths) || paths.length === 0) return '';
+    const unique = [...new Set(paths.filter(path => typeof path === 'string' && path))];
+    if (unique.length === 0) return '';
+    const limit = compact ? 4 : unique.length;
+    const visible = unique.slice(0, limit);
+    const rows = visible.map(path => `<div class="pas-summary-line pas-summary-line-field">
+        <i class="fa-solid fa-code-branch pas-summary-line-icon"></i>
+        <span class="pas-summary-line-text"><span class="pas-summary-field-name">${escapeHtml(path)}</span></span>
+    </div>`).join('');
+    const hidden = unique.length - visible.length;
+    const more = hidden > 0
+        ? `<div class="pas-summary-more-line">${escapeHtml(t('Summary More', { count: hidden }))}</div>`
+        : '';
+    return `<div class="pas-card-summary">${rows}${more}</div>`;
 }
 
 /**

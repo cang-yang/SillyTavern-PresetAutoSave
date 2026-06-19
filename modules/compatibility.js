@@ -10,6 +10,7 @@
  */
 
 import { logger } from './logger.js';
+import { canonicalizePreset, CONNECTION_FIELDS } from './core/preset-schema.js';
 export { escapeHtml, escapeAttr } from './key-utils.js';
 export { formatTime } from './time-utils.js';
 
@@ -467,6 +468,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // 比 HASH_EXCLUDED_FIELDS 更全面，覆盖所有 provider-specific 配置。
 // =====================================================
 export const EXPORT_EXCLUDED_FIELDS = new Set([
+    ...CONNECTION_FIELDS,
     // ---- 安全：绝对不能导出 ----
     'api_key_openai', 'proxy_password',
 
@@ -509,7 +511,6 @@ export const EXPORT_EXCLUDED_FIELDS = new Set([
     'show_external_models', 'bypass_status_check',
     'bind_preset_to_connection',
     'preset_settings_openai',
-    'tool_reasoning_mode',  // ST preset includes this (is_connection=false), but we exclude it as it's a UI-level setting not typically user-tuned
 ]);
 
 // =====================================================
@@ -555,17 +556,14 @@ export function sanitizePresetForExport(preset) {
     for (const field of EXPORT_EXCLUDED_FIELDS) {
         delete cleaned[field];
     }
-    // 3. AU-0: 规范化标量值类型
-    //    ST 内部 oai_settings 中的数值字段（如 openai_max_context）
-    //    会在"数字"和"字符串"之间反复切换（DOM input.value 是字符串，
-    //    ST 内部处理后又转成数字），导致 hash 不稳定、产生虚假变更。
-    //    在这里统一把"看起来像数字的字符串"转为真正的数字。
-    normalizeScalarTypes(cleaned);
-    // 4. 过滤 prompts 数组中被扩展动态注入的非用户 prompt
+    // 3. 过滤 prompts 数组中被扩展动态注入的非用户 prompt
     if (Array.isArray(cleaned.prompts)) {
         cleaned.prompts = filterExtensionPrompts(cleaned.prompts, cleaned.prompt_order);
     }
-    return cleaned;
+    // 所有哈希、摘要与保存路径必须共享同一份 canonical 数据。
+    // canonicalizePreset 只对已知数值/布尔控件做字段感知的类型规范化；
+    // Prompt、extensions 和文本框内容保持原类型，避免篡改用户文本。
+    return canonicalizePreset(cleaned, { apiId: 'openai' }).canonical;
 }
 
 /**
@@ -610,47 +608,6 @@ export function filterExtensionPrompts(prompts, promptOrder) {
         if (UUID_RE.test(p.identifier)) return true;
         return false;
     });
-}
-
-/**
- * AU-0: 规范化预设中的标量值类型。
- *
- * 问题背景：
- *   ST 内部 oai_settings 的数值字段（如 openai_max_context, openai_max_tokens）
- *   会在"数字"和"纯数字字符串"之间反复波动：
- *     - 用户拖滑块 → input.value 是字符串 "2000000"
- *     - ST SETTINGS_UPDATED 处理后 → 变为数字 2000000
- *   这种波动导致 stableStringify 序列化结果不同，hash 不稳定，
- *   产生虚假的自动保存、错误的变更摘要（"从2万变2万"）。
- *
- * 规则：
- *   - 对象/数组类型的值不处理（prompts, prompt_order 等）
- *   - 纯数字字符串（如 "2000000"）→ 转为 Number
- *   - 布尔字符串 "true"/"false" → 转为 Boolean
- *   - 空字符串 "" → 保持不变（语义上与 0/null 不同）
- *   - 其他字符串 → 保持不变
- *
- * @param {object} obj - 要原地修改的预设对象
- */
-function normalizeScalarTypes(obj) {
-    if (!obj || typeof obj !== 'object') return;
-    for (const key of Object.keys(obj)) {
-        const v = obj[key];
-        if (typeof v !== 'string') continue;
-        // 跳过空字符串
-        if (v === '') continue;
-        // 布尔字符串
-        if (v === 'true') { obj[key] = true; continue; }
-        if (v === 'false') { obj[key] = false; continue; }
-        // 纯数字字符串（整数或小数，含负数）
-        // 注意：不处理 "NaN"、"Infinity" 等
-        if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(v)) {
-            const n = Number(v);
-            if (Number.isFinite(n)) {
-                obj[key] = n;
-            }
-        }
-    }
 }
 
 /**

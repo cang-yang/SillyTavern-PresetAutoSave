@@ -30,6 +30,9 @@ const ALL_FILES = [
   'modules/archive-store.js',
   'modules/logger.js',
   'modules/theme-detector.js',
+  'modules/core/value-utils.js',
+  'modules/core/preset-schema.js',
+  'modules/core/change-set.js',
 ];
 
 let issues = [];

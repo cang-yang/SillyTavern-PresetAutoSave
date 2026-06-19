@@ -24,6 +24,8 @@
 import { logger } from './logger.js';
 import { getSettings } from './settings.js';
 import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, extractCanonicalForDiff, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
+import { createChangeSet, assertExplainableChange } from './core/change-set.js';
+import { canonicalizePreset } from './core/preset-schema.js';
 
 const STORAGE_NAME = 'PresetAutoSave';
 const STORE_NAME = 'history';
@@ -166,7 +168,8 @@ function fnv1aHash(str) {
  */
 export function hashPreset(obj) {
     if (!obj || typeof obj !== 'object') return '';
-    return fnv1aHash(stableStringify(obj));
+    const { canonical } = canonicalizePreset(obj);
+    return fnv1aHash(stableStringify(canonical));
 }
 
 // S-1: FIELD_SYNONYMS, normalizePresetFields, sanitizePresetForExport, EXPORT_EXCLUDED_FIELDS
@@ -225,6 +228,11 @@ export function computeChangeSummary(prev, curr) {
         return result;
     }
 
+    const changeSet = createChangeSet(prev, curr);
+    assertExplainableChange(prev, curr, changeSet);
+    result.rawChangedPaths = changeSet.changed.map(item => item.path);
+    result.ignoredPaths = [];
+
     // 对比前过滤扩展注入的 prompt（确保新旧快照使用相同标准，
     // 避免旧快照包含而新快照不包含时产生虚假的"删除"摘要）
     const prevPrompts = filterExtensionPrompts(
@@ -273,6 +281,19 @@ export function computeChangeSummary(prev, curr) {
 
     // 4. 标量字段
     const scalarDiff = compareScalars(prev, curr);
+    const representedKeys = new Set(scalarDiff.map(item => item.key));
+    for (const item of changeSet.changed) {
+        if (item.path === 'prompts' || item.path.startsWith('prompts[')) continue;
+        if (item.path === 'prompt_order' || item.path.startsWith('prompt_order[')) continue;
+        if (representedKeys.has(item.path)) continue;
+        scalarDiff.push({
+            key: item.path,
+            kind: 'scalar',
+            from: item.before,
+            to: item.after,
+        });
+        representedKeys.add(item.path);
+    }
     if (scalarDiff.length > 0) {
         // 留 12 项给 UI 决定显示几条（默认显示 5）
         result.sections.push({ kind: 'field', items: scalarDiff.slice(0, 12) });
@@ -642,7 +663,8 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
         logger.warn(`addSnapshot: preset is not a plain object, type=${typeof preset}`);
         return null;
     }
-    const presetKeys = Object.keys(preset);
+    const { canonical: canonicalPreset } = canonicalizePreset(preset, { apiId });
+    const presetKeys = Object.keys(canonicalPreset);
     if (presetKeys.length < 5) {
         logger.warn(
             `addSnapshot: rejecting preset with only ${presetKeys.length} fields ` +
@@ -655,7 +677,7 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
     const list = (await _store.getItem(key)) || [];
     const settings = getSettings();
     const now = Date.now();
-    const presetStr = stableStringify(preset);
+    const presetStr = stableStringify(canonicalPreset);
     const hash = computeHashFromString(presetStr);
     const size = presetStr.length;
 
@@ -675,7 +697,7 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
 
     // 计算修改摘要（对比上一条快照）
     const previousSnapshot = list.length > 0 ? list[0] : null;
-    const summary = computeChangeSummary(previousSnapshot?.preset, preset);
+    const summary = computeChangeSummary(previousSnapshot?.preset, canonicalPreset);
 
     // 2. 合并窗口: 在窗口期内且触发类型相同 -> 替换最新
     //    注意: 锁定（pinned）的快照永远不会被合并覆盖
@@ -685,11 +707,11 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
         if (elapsed < mergeWindowMs) {
             // 合并时摘要应基于"被合并条之前的那一条"
             const baseSnapshot = list.length > 1 ? list[1] : null;
-            const mergedSummary = computeChangeSummary(baseSnapshot?.preset, preset);
+            const mergedSummary = computeChangeSummary(baseSnapshot?.preset, canonicalPreset);
             const merged = {
                 ...list[0],
                 timestamp: now,
-                preset: structuredClone(preset),
+                preset: structuredClone(canonicalPreset),
                 hash,
                 size,
                 summary: mergedSummary,
@@ -708,7 +730,7 @@ export async function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.A
         apiId,
         timestamp: now,
         trigger,
-        preset: structuredClone(preset),
+        preset: structuredClone(canonicalPreset),
         hash,
         size,
         summary,

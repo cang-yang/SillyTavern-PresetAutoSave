@@ -38,6 +38,8 @@
 
 OpenAI/Chat Completion 使用官方 `settingsToUpdate` 的 `isConnection=false` 字段，加上结构化处理的 `prompts`、`prompt_order` 和经过策略登记的 `extensions`。其他 API 由独立 adapter 处理，不能假定与 OpenAI 相同。
 
+类型规范化必须按字段语义执行：只转换已知数值/布尔控件。Prompt、扩展数据和文本模板中即使出现 `"true"`、`"0.5"` 等内容也必须保持字符串，不能递归猜测类型。
+
 ### 2. Semantic Diff Engine
 
 唯一的变化判断入口。输出机器可读 `ChangeSet`：
