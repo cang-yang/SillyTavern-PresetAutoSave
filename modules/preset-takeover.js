@@ -41,6 +41,7 @@ import {
     removeArchivedPreset,
 } from './archive-store.js';
 import { getSnapshots, addSnapshot, TRIGGER } from './history-store.js';
+import { restoreArchiveEntries } from './core/archive-recovery.js';
 // =====================================================
 // 常量
 // =====================================================
@@ -1351,69 +1352,37 @@ export async function forceReseedSnapshots() {
  */
 export async function restoreAllFromArchive() {
     try {
-        const archives = await listArchivedPresets();
+        const archives = await listArchivedPresets({ strict: true });
         if (!archives || archives.length === 0) {
             logger.debug('[Takeover-Data] no archives to restore');
-            return { restored: 0, failed: 0, fromSnapshot: 0, fromArchive: 0 };
+            return { restored: 0, failed: 0, cleanupFailed: 0, fromSnapshot: 0, fromArchive: 0 };
         }
-        let restored = 0;
-        let failed = 0;
-        let fromSnapshot = 0;
-        let fromArchive = 0;
-        for (const entry of archives) {
-            try {
-                if (!entry || !entry.apiId || !entry.presetName) {
-                    failed++;
-                    continue;
-                }
-                let dataToRestore = null;
-                let sourceLabel = 'archive';
-                try {
-                    const snapshots = await getSnapshots(entry.apiId, entry.presetName);
-                    if (Array.isArray(snapshots) && snapshots.length > 0) {
-                        const latestSnap = snapshots[0];
-                        if (latestSnap && latestSnap.preset && typeof latestSnap.preset === 'object') {
-                            dataToRestore = latestSnap.preset;
-                            sourceLabel = `snapshot(${latestSnap.id?.slice(0, 6) || '?'}, ts=${latestSnap.timestamp})`;
-                            fromSnapshot++;
-                        }
-                    }
-                } catch (e) {
-                    logger.debug(`[Takeover-Data] snapshot lookup failed for "${entry.presetName}":`, e);
-                }
-                if (!dataToRestore) {
-                    if (!entry.data || typeof entry.data !== 'object') {
-                        logger.warn(`[Takeover-Data] no data available for "${entry.presetName}"`);
-                        failed++;
-                        continue;
-                    }
-                    dataToRestore = entry.data;
-                    sourceLabel = 'archive';
-                    fromArchive++;
-                }
-                const ok = await savePresetSafe(entry.presetName, dataToRestore, { apiId: entry.apiId });
-                if (ok) {
-                    await removeArchivedPreset(entry.apiId, entry.presetName);
-                    restored++;
-                    logger.debug(`[Takeover-Data] restored "${entry.presetName}" from ${sourceLabel}`);
-                } else {
-                    logger.warn(`[Takeover-Data] savePreset failed for "${entry.presetName}"`);
-                    failed++;
-                }
-            } catch (e) {
-                logger.error(`[Takeover-Data] restore error for "${entry?.presetName}":`, e);
-                failed++;
-            }
-        }
+        const result = await restoreArchiveEntries(archives, {
+            getSnapshots,
+            persistPreset: async (entry, preset, context) => {
+                await savePresetSafe(entry.presetName, preset, { apiId: entry.apiId });
+                const sourceLabel = context.source === 'snapshot'
+                    ? `snapshot(${context.snapshot?.id?.slice(0, 6) || '?'}, ts=${context.snapshot?.timestamp})`
+                    : 'archive';
+                logger.debug(`[Takeover-Data] restored "${entry.presetName}" from ${sourceLabel}`);
+            },
+            removeArchive: entry => removeArchivedPreset(entry.apiId, entry.presetName),
+            onError: ({ phase, archive, error }) => {
+                const message = `[Takeover-Data] ${phase} failed for "${archive?.presetName || '?'}"`;
+                if (phase === 'snapshot') logger.debug(message, error);
+                else logger.warn(message, error);
+            },
+        });
         logger.success(
-            `[Takeover-Data] restore complete: ${restored} restored ` +
-            `(${fromSnapshot} from latest snapshot · ${fromArchive} from archive)` +
-            (failed > 0 ? ` · ${failed} failed` : '')
+            `[Takeover-Data] restore complete: ${result.restored} restored ` +
+            `(${result.fromSnapshot} from latest snapshot · ${result.fromArchive} from archive)` +
+            (result.failed > 0 ? ` · ${result.failed} failed` : '') +
+            (result.cleanupFailed > 0 ? ` · ${result.cleanupFailed} archive cleanup failed` : '')
         );
-        return { restored, failed, fromSnapshot, fromArchive };
+        return result;
     } catch (e) {
         logger.error('[Takeover-Data] restoreAllFromArchive failed:', e);
-        return { restored: 0, failed: -1, fromSnapshot: 0, fromArchive: 0 };
+        return { restored: 0, failed: 1, cleanupFailed: 0, fromSnapshot: 0, fromArchive: 0, error: String(e) };
     }
 }
 /**

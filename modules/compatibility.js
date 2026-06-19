@@ -808,9 +808,12 @@ export async function savePresetSafe(presetName, settings = null, options = {}) 
         throw new Error('PresetManager.savePreset not available');
     }
 
-    return await pm.savePreset(presetName, settings, {
+    await pm.savePreset(presetName, settings, {
         skipUpdate: options.skipUpdate ?? true,
     });
+    // SillyTavern's PresetManager.savePreset resolves with undefined on success.
+    // A resolved call is the success signal; callers must not coerce its value.
+    return true;
 }
 
 /**

@@ -112,9 +112,12 @@ export async function getArchivedPreset(apiId, presetName) {
     }
 }
 
-export async function listArchivedPresets() {
+export async function listArchivedPresets({ strict = false } = {}) {
     const store = await ensureStore();
-    if (!store) return [];
+    if (!store) {
+        if (strict) throw new Error('Archive store is unavailable');
+        return [];
+    }
     try {
         const keys = await store.keys();
         if (!keys || keys.length === 0) return [];
@@ -122,6 +125,7 @@ export async function listArchivedPresets() {
         return items.filter(x => x && x.apiId && x.presetName);
     } catch (e) {
         logger.warn('listArchivedPresets failed:', e);
+        if (strict) throw e;
         return [];
     }
 }
