@@ -183,6 +183,13 @@ export async function handleListClick(e, panelCtx) {
         else state.expandedVersions.add(key);
         const body = group.querySelector(':scope > .pas-version-body');
         if (body) {
+            // Collapsed versions are intentionally rendered with an empty body.
+            // The first expansion must hydrate their cards instead of only
+            // toggling the already-present placeholder container.
+            if (!wasExpanded && body.childElementCount === 0) {
+                renderListTab();
+                return;
+            }
             toggleGroupVisualState(group, body, !wasExpanded, '.pas-version-chevron');
             return;
         }
@@ -200,6 +207,10 @@ export async function handleListClick(e, panelCtx) {
         else state.expandedPresets.add(key);
         const body = group.querySelector(':scope > .pas-preset-body');
         if (body) {
+            if (!wasExpanded && body.childElementCount === 0) {
+                renderListTab();
+                return;
+            }
             toggleGroupVisualState(group, body, !wasExpanded, '.pas-preset-chevron');
             return;
         }

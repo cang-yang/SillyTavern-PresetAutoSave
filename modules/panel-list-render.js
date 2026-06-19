@@ -312,7 +312,7 @@ function renderPresetGroup(key, snapshots, panelCtx) {
         </div>
     </div>
     <div class="pas-preset-body"${isExpanded ? '' : ' hidden'}>
-        ${snapshots.map(s => renderCard(s, panelCtx)).join('')}
+        ${isExpanded ? snapshots.map(s => renderCard(s, panelCtx)).join('') : ''}
     </div>
 </div>`;
 }
@@ -468,7 +468,11 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         </div>
     </div>
     <div class="pas-version-body"${isExpanded ? '' : ' hidden'}>
-        ${ver.snapshots.length > 0 ? ver.snapshots.map(s => renderCard(s, panelCtx)).join('') : `<div class="pas-version-empty-hint">${escapeHtml(t('No Snapshots Yet Hint'))}</div>`}
+        ${isExpanded
+            ? (ver.snapshots.length > 0
+                ? ver.snapshots.map(s => renderCard(s, panelCtx)).join('')
+                : `<div class="pas-version-empty-hint">${escapeHtml(t('No Snapshots Yet Hint'))}</div>`)
+            : ''}
     </div>
 </div>`;
 }
@@ -859,7 +863,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
                 latestTime = seriesData.latestTime || 0;
                 versionsHtml = seriesData.versions.map(v => renderVersionGroup(v, node.key, seriesData.versions, panelCtx)).join('');
             } else if (hasItems) {
-                versionCount = itemCount = node.items.length;
+                versionCount = node.items.length;
                 versionsHtml = node.items.map(presetName => {
                     const found = presetToVersion.get(presetName);
                     if (found) {
