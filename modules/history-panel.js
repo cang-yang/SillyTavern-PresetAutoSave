@@ -55,6 +55,7 @@ import {
     onCleanup, onExport, onImport,
     onPurgeCorrupt, onSnapshotNow,
 } from './panel-settings-log.js';
+import { buildPanelHTML as buildPanelShellHTML } from './panel-shell.js';
 import {
     presetKey, parsePresetKey, groupSnapshotsByPreset,
     applyFiltersAndSearch, renderSeriesView, renderFlatView,
@@ -170,7 +171,7 @@ export async function showHistoryPanel() {
     if (_popup) return;
 
     // Step 1: 创建 popup（简单操作，不太可能失败）
-    const html = buildPanelHTML();
+    const html = buildPanelShellHTML({ t, escapeHtml, escapeAttr });
 
     // 通过 createPopupSafe 集中防御 ctx / Popup / POPUP_TYPE 缺失
     _popup = createPopupSafe(html, 'DISPLAY', {
@@ -559,6 +560,45 @@ function bindEvents() {
     // Tab 切换
     $$('.pas-tab').forEach(tab => {
         tab.addEventListener('click', () => switchTab(tab.getAttribute('data-tab')));
+        tab.addEventListener('keydown', (event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const tabs = Array.from($$('.pas-tab'));
+            const current = tabs.indexOf(tab);
+            const next = event.key === 'Home' ? 0
+                : event.key === 'End' ? tabs.length - 1
+                    : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+            tabs[next]?.focus();
+            tabs[next]?.click();
+        });
+    });
+
+    // 低频工具集中在一个可关闭的菜单中，避免主界面长期被操作按钮占满。
+    const toolsTrigger = $('.pas-tools-trigger');
+    const toolsMenu = $('.pas-tools-menu');
+    const closeTools = ({ restoreFocus = false } = {}) => {
+        if (!toolsTrigger || !toolsMenu || toolsMenu.hidden) return;
+        toolsMenu.hidden = true;
+        toolsTrigger.setAttribute('aria-expanded', 'false');
+        if (restoreFocus) toolsTrigger.focus();
+    };
+    toolsTrigger?.addEventListener('click', () => {
+        const willOpen = toolsMenu.hidden;
+        toolsMenu.hidden = !willOpen;
+        toolsTrigger.setAttribute('aria-expanded', String(willOpen));
+        if (willOpen) toolsMenu.querySelector('[role="menuitem"]')?.focus();
+    });
+    toolsMenu?.addEventListener('click', (event) => {
+        if (event.target.closest('[role="menuitem"]')) closeTools();
+    });
+    _root.addEventListener('click', (event) => {
+        if (!event.target.closest('.pas-tools')) closeTools();
+    });
+    _root.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !toolsMenu?.hidden) {
+            event.preventDefault();
+            closeTools({ restoreFocus: true });
+        }
     });
 
     // 搜索（列表）
@@ -578,7 +618,9 @@ function bindEvents() {
     $$('.pas-filter').forEach(btn => {
         btn.addEventListener('click', () => {
             $$('.pas-filter').forEach(b => b.classList.remove('pas-filter-active'));
+            $$('.pas-filter').forEach(b => b.setAttribute('aria-pressed', 'false'));
             btn.classList.add('pas-filter-active');
+            btn.setAttribute('aria-pressed', 'true');
             _state.filter = btn.getAttribute('data-filter');
             renderListTab();
         });
@@ -592,6 +634,7 @@ function bindEvents() {
             _state.viewMode = v;
             // 同步到 settings：groupingEnabled
             updateSetting('groupingEnabled', v === 'series');
+            $$('.pas-view-btn').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
             updateViewToggleUI();
             renderListTab();
         });
@@ -724,6 +767,12 @@ function bindEvents() {
             }
             _handleListClick(e, _panelCtx());
         });
+        list.addEventListener('keydown', e => {
+            const toggle = e.target.closest('[data-action="toggle-group"], [data-action="toggle-series"], [data-action="toggle-version"]');
+            if (!toggle || !['Enter', ' '].includes(e.key)) return;
+            e.preventDefault();
+            toggle.click();
+        });
     }
 
     // diff 选择条
@@ -820,10 +869,15 @@ function switchTab(tabName) {
     const $$ = (s) => _root.querySelectorAll(s);
 
     $$('.pas-tab').forEach(t => {
-        t.classList.toggle('pas-tab-active', t.getAttribute('data-tab') === tabName);
+        const active = t.getAttribute('data-tab') === tabName;
+        t.classList.toggle('pas-tab-active', active);
+        t.setAttribute('aria-selected', String(active));
+        t.tabIndex = active ? 0 : -1;
     });
     $$('.pas-tab-content').forEach(c => {
-        c.classList.toggle('pas-tab-content-active', c.getAttribute('data-content') === tabName);
+        const active = c.getAttribute('data-content') === tabName;
+        c.classList.toggle('pas-tab-content-active', active);
+        c.hidden = !active;
     });
 
     renderActiveTab();
@@ -887,7 +941,9 @@ function _renderListTabImpl() {
 function updateViewToggleUI() {
     if (!_root) return;
     _root.querySelectorAll('.pas-view-btn').forEach(b => {
-        b.classList.toggle('pas-view-btn-active', b.getAttribute('data-view') === _state.viewMode);
+        const active = b.getAttribute('data-view') === _state.viewMode;
+        b.classList.toggle('pas-view-btn-active', active);
+        b.setAttribute('aria-pressed', String(active));
     });
     // 系列视图下显示"管理分组"按钮，flat 隐藏
     const manageBtn = _root.querySelector('.pas-btn-manage-grouping');

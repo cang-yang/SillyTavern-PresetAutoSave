@@ -292,7 +292,7 @@ function renderPresetGroup(key, snapshots, panelCtx) {
 
     return `
 <div class="pas-preset-group ${isCurrent ? 'pas-preset-current' : ''}" data-preset-key="${safeKey}">
-    <div class="pas-preset-header" data-action="toggle-group">
+    <div class="pas-preset-header" data-action="toggle-group" role="button" tabindex="0" aria-expanded="${isExpanded}">
         <div class="pas-preset-header-main">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-preset-chevron"></i>
             <i class="fa-solid fa-layer-group pas-preset-icon"></i>
@@ -340,7 +340,7 @@ function renderSeriesGroup(info, panelCtx) {
 
     return `
 <div class="pas-series-group ${isCurrent ? 'pas-series-current' : ''}" data-series-key="${safeKey}">
-    <div class="pas-series-header" data-action="toggle-series">
+    <div class="pas-series-header" data-action="toggle-series" role="button" tabindex="0" aria-expanded="${isExpanded}">
         <div class="pas-series-header-row pas-series-header-row-title">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
             <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"></i>
@@ -440,7 +440,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
 
     return `
 <div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isEmpty ? 'pas-version-empty' : ''} ${ver.archived ? 'pas-version-archived' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
-    <div class="pas-version-header" data-action="toggle-version">
+    <div class="pas-version-header" data-action="toggle-version" role="button" tabindex="0" aria-expanded="${isExpanded}">
         <div class="pas-version-header-row pas-version-header-row-title">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-version-chevron"></i>
             <i class="fa-solid fa-code-branch pas-version-icon"></i>
@@ -899,7 +899,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
             const pillBgStyle = isCurrent ? ' style="background: rgba(245, 158, 11, 0.16)"' : '';
 
             return `<div class="pas-series-group pas-series-nested" data-series-key="${escapeAttr(node.key)}" style="margin-left:${indentPx}px; border-left:${borderLeft}; padding-left:${node.depth > 0 ? '8px' : '0'};">
-                <div class="pas-series-header" data-action="toggle-series">
+                <div class="pas-series-header" data-action="toggle-series" role="button" tabindex="0" aria-expanded="${isExpanded}">
                     <div class="pas-series-header-row pas-series-header-row-title">
                         <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
                         <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"${iconStyle}></i>

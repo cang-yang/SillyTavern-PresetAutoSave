@@ -901,6 +901,7 @@ export function updateDiffBar(panelCtx) {
     if (!root) return;
     const slotA = root.querySelector('#pas-diff-slot-a');
     const slotB = root.querySelector('#pas-diff-slot-b');
+    const bar = root.querySelector('#pas-diff-bar');
     const startBtn = root.querySelector('.pas-btn-start-diff');
     const clearBtn = root.querySelector('.pas-btn-clear-diff');
 
@@ -923,13 +924,14 @@ export function updateDiffBar(panelCtx) {
     formatSlot('a', slotA);
     formatSlot('b', slotB);
 
+    const hasAny = !!state.diffSel.a || !!state.diffSel.b;
+    if (bar) bar.hidden = !hasAny;
     const ready = !!state.diffSel.a && !!state.diffSel.b;
     if (startBtn) {
         if (ready) startBtn.removeAttribute('disabled');
         else startBtn.setAttribute('disabled', 'disabled');
     }
     if (clearBtn) {
-        const hasAny = !!state.diffSel.a || !!state.diffSel.b;
         if (hasAny) clearBtn.removeAttribute('disabled');
         else clearBtn.setAttribute('disabled', 'disabled');
     }

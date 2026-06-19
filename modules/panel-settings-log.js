@@ -211,36 +211,39 @@ export function renderSettingsTab(panelCtx) {
 // =====================================================
 function group(title, items) {
     return `
-<div class="pas-settings-group">
-    <div class="pas-settings-group-title">${escapeHtml(title)}</div>
+<section class="pas-settings-group">
+    <h4 class="pas-settings-group-title">${escapeHtml(title)}</h4>
     <div class="pas-settings-group-items">${items.join('')}</div>
-</div>`;
+</section>`;
 }
 
 function toggle(key, label, desc, value) {
+    const id = `pas-setting-${key}`;
     return `
 <div class="pas-setting-item">
     <div class="pas-setting-info">
-        <div class="pas-setting-label">${escapeHtml(label)}</div>
-        <div class="pas-setting-desc">${escapeHtml(desc)}</div>
+        <label class="pas-setting-label" for="${escapeAttr(id)}">${escapeHtml(label)}</label>
+        <div class="pas-setting-desc" id="${escapeAttr(id)}-desc">${escapeHtml(desc)}</div>
     </div>
     <label class="pas-switch">
-        <input type="checkbox" data-setting="${escapeAttr(key)}" ${value ? 'checked' : ''}>
+        <input id="${escapeAttr(id)}" type="checkbox" data-setting="${escapeAttr(key)}" aria-describedby="${escapeAttr(id)}-desc" ${value ? 'checked' : ''}>
         <span class="pas-switch-slider"></span>
     </label>
 </div>`;
 }
 
 function number(key, label, desc, value, min, max, step, unit = '') {
+    const id = `pas-setting-${key}`;
     return `
 <div class="pas-setting-item">
     <div class="pas-setting-info">
-        <div class="pas-setting-label">${escapeHtml(label)}</div>
-        <div class="pas-setting-desc">${escapeHtml(desc)}</div>
+        <label class="pas-setting-label" for="${escapeAttr(id)}">${escapeHtml(label)}</label>
+        <div class="pas-setting-desc" id="${escapeAttr(id)}-desc">${escapeHtml(desc)}</div>
     </div>
     <div class="pas-setting-input">
-        <input type="number" class="text_pole pas-number-input"
+        <input id="${escapeAttr(id)}" type="number" class="text_pole pas-number-input"
             data-setting="${escapeAttr(key)}"
+            aria-describedby="${escapeAttr(id)}-desc"
             value="${value}" min="${min}" max="${max}" step="${step}">
         ${unit ? `<span class="pas-setting-unit">${escapeHtml(unit)}</span>` : ''}
     </div>
@@ -248,17 +251,18 @@ function number(key, label, desc, value, min, max, step, unit = '') {
 }
 
 function select(key, label, desc, value, options) {
+    const id = `pas-setting-${key}`;
     const optsHtml = (options || []).map(o => `
         <option value="${escapeAttr(o.value)}" ${o.value === value ? 'selected' : ''}>${escapeHtml(o.label)}</option>
     `).join('');
     return `
 <div class="pas-setting-item">
     <div class="pas-setting-info">
-        <div class="pas-setting-label">${escapeHtml(label)}</div>
-        <div class="pas-setting-desc">${escapeHtml(desc)}</div>
+        <label class="pas-setting-label" for="${escapeAttr(id)}">${escapeHtml(label)}</label>
+        <div class="pas-setting-desc" id="${escapeAttr(id)}-desc">${escapeHtml(desc)}</div>
     </div>
     <div class="pas-setting-input">
-        <select class="text_pole pas-select-input" data-setting="${escapeAttr(key)}" data-setting-type="select">
+        <select id="${escapeAttr(id)}" class="text_pole pas-select-input" data-setting="${escapeAttr(key)}" data-setting-type="select" aria-describedby="${escapeAttr(id)}-desc">
             ${optsHtml}
         </select>
     </div>
@@ -273,7 +277,7 @@ function action(actionKey, label, desc, icon = 'fa-bolt') {
         <div class="pas-setting-desc">${escapeHtml(desc)}</div>
     </div>
     <div class="pas-setting-input">
-        <button class="menu_button pas-setting-action-btn" data-action="${escapeAttr(actionKey)}" type="button">
+        <button class="menu_button pas-setting-action-btn" data-action="${escapeAttr(actionKey)}" type="button" aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">
             <i class="fa-solid ${escapeAttr(icon)}"></i>
         </button>
     </div>
