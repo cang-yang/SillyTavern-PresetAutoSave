@@ -33,6 +33,7 @@ const ALL_FILES = [
   'modules/core/value-utils.js',
   'modules/core/preset-schema.js',
   'modules/core/change-set.js',
+  'modules/core/save-coordinator.js',
 ];
 
 let issues = [];
