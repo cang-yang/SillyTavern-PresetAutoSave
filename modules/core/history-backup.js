@@ -1,4 +1,5 @@
 import { enrichSnapshotList, HISTORY_SCHEMA_VERSION } from './history-schema.js';
+import { stableStringify } from './value-utils.js';
 
 export const HISTORY_BACKUP_VERSION = 2;
 const KEY_DELIMITER = '::';
@@ -59,6 +60,17 @@ function normalizeList(list, max = Number.POSITIVE_INFINITY) {
     return enrichSnapshotList(trimListWithPinned(ordered, max));
 }
 
+function snapshotIdentityContent(snapshot) {
+    return stableStringify({
+        apiId: snapshot?.apiId ?? '',
+        presetName: snapshot?.presetName ?? '',
+        timestamp: snapshot?.timestamp ?? 0,
+        trigger: snapshot?.cause?.trigger ?? snapshot?.trigger ?? 'unknown',
+        canonicalHash: snapshot?.canonicalHash ?? snapshot?.hash ?? '',
+        preset: snapshot?.preset ?? null,
+    });
+}
+
 export function createHistoryBackup(data, diagnostics = {}, now = () => Date.now()) {
     if (!isPlainObject(data)) throw new TypeError('History backup data must be an object');
     return {
@@ -106,6 +118,13 @@ export function buildHistoryImportPlan(payload, existingByKey = new Map(), { mod
     for (const [key, incoming] of validated.data) {
         const existing = mode === 'merge' && Array.isArray(data.get(key)) ? data.get(key) : [];
         const existingIds = new Set(existing.map(snapshot => snapshot?.id).filter(Boolean));
+        const existingById = new Map(existing.map(snapshot => [snapshot?.id, snapshot]));
+        for (const snapshot of incoming) {
+            const current = existingById.get(snapshot.id);
+            if (current && snapshotIdentityContent(current) !== snapshotIdentityContent(snapshot)) {
+                throw new TypeError(`Conflicting snapshot id ${snapshot.id} in ${key}`);
+            }
+        }
         const incomingById = new Map(incoming.map(snapshot => [snapshot.id, snapshot]));
         const merged = mode === 'merge'
             ? [...existing, ...incoming.filter(snapshot => !existingIds.has(snapshot.id))]

@@ -108,6 +108,19 @@ test('merge planning deduplicates IDs, sorts, trims, and preserves pinned record
     assert.equal(plan.imported, 1, 'count only imported snapshots that survive trimming');
 });
 
+test('merge planning rejects a same-ID snapshot with different content', () => {
+    const existing = new Map([['openai::Demo', [snapshot({ id: 'collision', hash: 'old' })]]]);
+    const payload = { version: 2, data: { 'openai::Demo': [
+        snapshot({ id: 'collision', hash: 'new', preset: { temperature: 0.99 } }),
+    ] } };
+
+    assert.throws(
+        () => buildHistoryImportPlan(payload, existing, { mode: 'merge', max: 50 }),
+        /conflicting snapshot id/i,
+    );
+    assert.equal(existing.get('openai::Demo')[0].hash, 'old');
+});
+
 test('replace planning produces a complete replacement image', () => {
     const existing = new Map([['openai::Old', [snapshot({ presetName: 'Old' })]]]);
     const payload = { version: 2, data: { 'openai::Demo': [snapshot()] } };
