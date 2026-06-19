@@ -27,6 +27,13 @@ import { createStorage, normalizePresetFields, sanitizePresetForExport, filterEx
 import { createChangeSet, assertExplainableChange } from './core/change-set.js';
 import { canonicalizePreset } from './core/preset-schema.js';
 import { HistoryRepository } from './core/history-repository.js';
+import {
+    applyHistoryImportPlan,
+    buildHistoryImportPlan,
+    captureHistoryImage,
+    createHistoryBackup,
+    validateHistoryBackup,
+} from './core/history-backup.js';
 
 const STORAGE_NAME = 'PresetAutoSave';
 const STORE_NAME = 'history';
@@ -1228,22 +1235,14 @@ export async function getStats() {
  */
 export async function exportAll() {
     await ensureStore();
-    const keys = await getKeys();
+    const keys = await _store.keys();
     const data = {};
-    if (!keys || keys.length === 0) {
-        return { version: 1, exportedAt: Date.now(), data };
-    }
-
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await Promise.all(keys.map(k => _store.getItem(k)));
     for (let i = 0; i < keys.length; i++) {
-        if (lists[i]) data[keys[i]] = lists[i];
+        if (Array.isArray(lists[i])) data[keys[i]] = lists[i];
     }
-
-    return {
-        version: 1,
-        exportedAt: Date.now(),
-        data,
-    };
+    const diagnostics = await _store.getDiagnostics();
+    return createHistoryBackup(data, diagnostics);
 }
 
 /**
@@ -1253,65 +1252,19 @@ export async function exportAll() {
  */
 export async function importAll(payload, mode = 'merge') {
     await ensureStore();
-    if (!payload || !payload.data || typeof payload.data !== 'object') {
-        throw new Error('Invalid import payload');
-    }
-
-    // 版本兼容性检查
-    if (payload.version && payload.version > 1) {
-        logger.warn(`Import payload version ${payload.version} may not be fully compatible`);
-    }
-
-    if (mode === 'replace') {
-        await clearAll();
-    }
-
+    validateHistoryBackup(payload);
     const max = getSettings().maxHistoryPerPreset;
-    let imported = 0;
-
-    // 性能优化：merge 模式下并行读取已有列表
-    const entries = Object.entries(payload.data).filter(([_, v]) => Array.isArray(v));
-    const existingMap = new Map();
-    if (mode === 'merge' && entries.length > 0) {
-        const existingLists = await Promise.all(
-            entries.map(([k]) => _store.getItem(k).catch(() => null))
-        );
-        for (let i = 0; i < entries.length; i++) {
-            existingMap.set(entries[i][0], Array.isArray(existingLists[i]) ? existingLists[i] : []);
-        }
-    }
-
-    for (const [key, list] of entries) {
-        if (mode === 'merge') {
-            const existing = existingMap.get(key) || [];
-            const existingIds = new Set(existing.map(s => s.id));
-            const merged = [...existing];
-            for (const snap of list) {
-                if (snap && snap.id && !existingIds.has(snap.id)) {
-                    merged.push(snap);
-                    imported++;
-                }
-            }
-            merged.sort((a, b) => b.timestamp - a.timestamp);
-            // 裁剪到设置的上限（保留所有 pinned）
-            if (merged.length > max) {
-                trimListWithPinned(merged, max);
-            }
-            await _store.setItem(key, merged);
-        } else {
-            // replace 模式：先按 timestamp 倒序，再用 pinned-aware 裁剪
-            const ordered = [...list].sort((a, b) => b.timestamp - a.timestamp);
-            if (ordered.length > max) {
-                trimListWithPinned(ordered, max);
-            }
-            await _store.setItem(key, ordered);
-            imported += ordered.length;
-        }
-    }
-
+    const existing = await captureHistoryImage(_store);
+    const plan = buildHistoryImportPlan(payload, existing, { mode, max });
+    const imported = await applyHistoryImportPlan(_store, plan, existing);
     invalidateKeysCache();
-    logger.info(`Imported ${imported} snapshots (mode: ${mode})`);
+    logger.info(`Imported ${imported} verified snapshots (mode: ${mode}, source v${plan.sourceVersion})`);
     return imported;
+}
+
+export async function getRepositoryDiagnostics() {
+    await ensureStore();
+    return _store.getDiagnostics();
 }
 
 // =====================================================

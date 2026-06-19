@@ -101,3 +101,30 @@ test('clear tombstones every visible key without deleting legacy rollback data',
     assert.notEqual(await legacy.getItem('openai::A'), null);
     assert.equal((await v2.getItem(migrationMarkerKey('openai::A'))).status, 'deleted');
 });
+
+test('reports repository marker state and migration counters', async () => {
+    const legacy = new MemoryStore({ 'openai::Legacy': [legacySnapshot()] });
+    const v2 = new MemoryStore({ 'openai::Current': [legacySnapshot({ presetName: 'Current' })] });
+    const repository = new HistoryRepository({ legacyStore: legacy, v2Store: v2 });
+
+    await repository.getItem('openai::Legacy');
+    await repository.removeItem('openai::Current');
+    const diagnostics = await repository.getDiagnostics();
+
+    assert.equal(diagnostics.schemaVersion, 2);
+    assert.equal(diagnostics.legacyKeyCount, 1);
+    assert.equal(diagnostics.v2KeyCount, 1);
+    assert.deepEqual(diagnostics.markers, { active: 0, migrated: 1, deleted: 1, other: 0 });
+    assert.deepEqual(diagnostics.migration, { attempted: 1, succeeded: 1, failed: 0 });
+});
+
+test('failed migrations are counted without making diagnostics throw', async () => {
+    const legacy = new MemoryStore({ 'openai::Demo': [legacySnapshot()] });
+    const v2 = new MemoryStore({}, { failSet: true });
+    const repository = new HistoryRepository({ legacyStore: legacy, v2Store: v2 });
+
+    await repository.getItem('openai::Demo');
+    const diagnostics = await repository.getDiagnostics();
+    assert.deepEqual(diagnostics.migration, { attempted: 1, succeeded: 0, failed: 1 });
+    assert.equal(diagnostics.legacyKeyCount, 1);
+});

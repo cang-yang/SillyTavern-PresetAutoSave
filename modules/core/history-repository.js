@@ -18,6 +18,7 @@ export class HistoryRepository {
         this.now = now;
         this.onError = onError;
         this.migrations = new Map();
+        this.migrationStats = { attempted: 0, succeeded: 0, failed: 0 };
     }
 
     async getItem(key) {
@@ -35,9 +36,13 @@ export class HistoryRepository {
     async #migrate(key, legacy) {
         if (this.migrations.has(key)) return this.migrations.get(key);
         const operation = (async () => {
+            this.migrationStats.attempted++;
             try {
-                return await this.#writeVerified(key, legacy, 'migrated');
+                const migrated = await this.#writeVerified(key, legacy, 'migrated');
+                this.migrationStats.succeeded++;
+                return migrated;
             } catch (error) {
+                this.migrationStats.failed++;
                 this.onError(error, { operation: 'migrate', key });
                 return legacy;
             } finally {
@@ -104,5 +109,35 @@ export class HistoryRepository {
     async clear() {
         const keys = await this.keys();
         for (const key of keys) await this.removeItem(key);
+    }
+
+    async getDiagnostics() {
+        const diagnostics = {
+            schemaVersion: HISTORY_SCHEMA_VERSION,
+            legacyKeyCount: 0,
+            v2KeyCount: 0,
+            markers: { active: 0, migrated: 0, deleted: 0, other: 0 },
+            migration: { ...this.migrationStats },
+            diagnosticErrors: 0,
+        };
+
+        let legacyKeys = [];
+        let v2Keys = [];
+        try { legacyKeys = (await this.legacyStore.keys()) ?? []; } catch (_) { diagnostics.diagnosticErrors++; }
+        try { v2Keys = (await this.v2Store.keys()) ?? []; } catch (_) { diagnostics.diagnosticErrors++; }
+        diagnostics.legacyKeyCount = legacyKeys.filter(isDataKey).length;
+        diagnostics.v2KeyCount = v2Keys.filter(isDataKey).length;
+
+        for (const key of v2Keys.filter(key => typeof key === 'string' && key.startsWith(META_PREFIX))) {
+            try {
+                const marker = await this.v2Store.getItem(key);
+                const status = marker?.status;
+                if (Object.hasOwn(diagnostics.markers, status)) diagnostics.markers[status]++;
+                else diagnostics.markers.other++;
+            } catch (_) {
+                diagnostics.diagnosticErrors++;
+            }
+        }
+        return diagnostics;
     }
 }
