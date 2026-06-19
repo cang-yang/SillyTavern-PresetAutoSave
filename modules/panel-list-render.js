@@ -33,6 +33,7 @@ import {
 import {
     renderSummary, escapeHtml, escapeAttr, formatTime,
 } from './panel-summary.js';
+import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
 
 // =====================================================
 // 工具函数
@@ -159,7 +160,8 @@ function renderCard(s, panelCtx) {
     const _state = panelCtx.state();
     const triggerLabel = t(TRIGGER_LABEL_KEYS[s.trigger] || 'Trigger Auto');
     const id = escapeAttr(s.id);
-    const summaryHtml = renderSummary(s.summary);
+    const diagnostics = getSnapshotDiagnostics(s);
+    const summaryHtml = renderSummary(getSnapshotSummary(s));
     const isPinned = !!s.pinned;
     const isA = _state.diffSel.a === s.id;
     const isB = _state.diffSel.b === s.id;
@@ -176,6 +178,15 @@ function renderCard(s, panelCtx) {
     const pinTitle = isPinned ? t('Unpin Snapshot') : t('Pin Snapshot');
     const aTitle = isA ? t('Diff Clear A') : t('Diff Set A');
     const bTitle = isB ? t('Diff Clear B') : t('Diff Set B');
+    const statusKey = `Diagnostic Status ${diagnostics.saveStatus}`;
+    const translatedStatus = t(statusKey);
+    const statusLabel = translatedStatus === statusKey ? diagnostics.saveStatus : translatedStatus;
+    const diagnosticsTitle = diagnostics.transactionId
+        ? `${t('Diagnostic Transaction ID')}: ${diagnostics.transactionId}`
+        : t('Diagnostic Details');
+    const schemaBadge = diagnostics.schemaVersion >= 2
+        ? `<span class="pas-schema-badge" title="${escapeAttr(diagnosticsTitle)}">v${diagnostics.schemaVersion} · ${escapeHtml(statusLabel)}</span>`
+        : '';
 
     // 删除按钮：pinned 快照禁用
     const deleteAttr = isPinned
@@ -195,7 +206,8 @@ function renderCard(s, panelCtx) {
         <div class="pas-card-meta">
             <span class="pas-card-size">${formatBytes(s.size || 0)}</span>
             <span class="pas-divider">\u00b7</span>
-            <span class="pas-card-hash" title="hash">${escapeHtml(s.hash || '')}</span>
+            <span class="pas-card-hash" title="${escapeAttr(t('Diagnostic Canonical Hash'))}">${escapeHtml(diagnostics.canonicalHash)}</span>
+            ${schemaBadge ? `<span class="pas-divider">\u00b7</span>${schemaBadge}` : ''}
         </div>
     </div>
     <div class="pas-card-actions">

@@ -48,6 +48,7 @@ import {
     renderSummary,
 } from './panel-summary.js';
 import { parsePresetKey } from './panel-list-render.js';
+import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
 
 // --- 从子模块导入分组管理函数（软拆分：panel-group-manager.js） ---
 import {
@@ -428,6 +429,34 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
     }
 }
 
+function renderSnapshotDiagnostics(snapshot) {
+    const diagnostics = getSnapshotDiagnostics(snapshot);
+    const statusKey = `Diagnostic Status ${diagnostics.saveStatus}`;
+    const translatedStatus = t(statusKey);
+    const status = translatedStatus === statusKey ? diagnostics.saveStatus : translatedStatus;
+    const none = t('Diagnostic None');
+    const paths = diagnostics.changedPaths.length > 0
+        ? diagnostics.changedPaths.map(path => `<code>${escapeHtml(path)}</code>`).join('')
+        : `<span>${escapeHtml(none)}</span>`;
+    const row = (label, value) => `<div class="pas-diagnostic-row">
+        <dt>${escapeHtml(t(label))}</dt><dd>${escapeHtml(value || none)}</dd>
+    </div>`;
+
+    return `<details class="pas-view-diagnostics" open>
+        <summary><i class="fa-solid fa-shield-halved"></i> ${escapeHtml(t('Diagnostic Details'))}</summary>
+        <dl class="pas-diagnostic-grid">
+            ${row('Diagnostic Schema Version', `v${diagnostics.schemaVersion}`)}
+            ${row('Diagnostic Save Status', status)}
+            ${row('Diagnostic Transaction ID', diagnostics.transactionId)}
+            ${row('Diagnostic Parent Snapshot', diagnostics.parentSnapshotId)}
+            ${row('Diagnostic Canonical Hash', diagnostics.canonicalHash)}
+            <div class="pas-diagnostic-row pas-diagnostic-paths">
+                <dt>${escapeHtml(t('Diagnostic Changed Paths'))}</dt><dd>${paths}</dd>
+            </div>
+        </dl>
+    </details>`;
+}
+
 async function onView(snapshotId) {
     const snapshot = await getSnapshotById(snapshotId);
     if (!snapshot) return toast.error(t('Snapshot Not Found'));
@@ -437,7 +466,8 @@ async function onView(snapshotId) {
     const json = JSON.stringify(safePreset, null, 2);
     const time = formatTime(snapshot.timestamp);
     const triggerLabel = t(TRIGGER_LABEL_KEYS[snapshot.trigger] || 'Trigger Auto');
-    const summaryHtml = renderSummary(snapshot.summary, { compact: false });
+    const summaryHtml = renderSummary(getSnapshotSummary(snapshot), { compact: false });
+    const diagnosticsHtml = renderSnapshotDiagnostics(snapshot);
 
     const html = `
 <div class="pas-view-popup">
@@ -455,6 +485,7 @@ async function onView(snapshotId) {
         </div>
     </div>
     <div class="pas-view-summary">${summaryHtml}</div>
+    ${diagnosticsHtml}
     <pre class="pas-view-json"><code>${escapeHtml(json)}</code></pre>
     <div class="pas-view-actions">
         <button class="menu_button pas-view-copy-btn" type="button">

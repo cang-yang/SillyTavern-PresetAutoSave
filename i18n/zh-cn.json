@@ -487,5 +487,15 @@
     "Grouping Nesting Max Depth Hint": "已达到最大嵌套深度",
     "Grouping Empty Badge": "空",
     "Grouping Dropdown Empty": "暂无预设",
-    "Import Failed JSON": "导入失败：文件格式无效"
+    "Import Failed JSON": "导入失败：文件格式无效",
+    "Diagnostic Details": "保存诊断信息",
+    "Diagnostic Schema Version": "记录格式",
+    "Diagnostic Canonical Hash": "规范内容哈希",
+    "Diagnostic Transaction ID": "保存事务 ID",
+    "Diagnostic Parent Snapshot": "父快照 ID",
+    "Diagnostic Save Status": "保存状态",
+    "Diagnostic Changed Paths": "实际变化字段",
+    "Diagnostic None": "无",
+    "Diagnostic Status committed": "已完整提交",
+    "Diagnostic Status legacy": "旧版记录"
 }

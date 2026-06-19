@@ -1851,6 +1851,17 @@ body.pas-light .pas-btn-confirm-green:hover {
 }
 .pas-card-size { font-family: 'SF Mono', Consolas, monospace; }
 .pas-divider { opacity: 0.4; }
+.pas-schema-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, var(--pas-c-add) 35%, transparent);
+    border-radius: 999px;
+    color: var(--pas-c-add);
+    background: color-mix(in srgb, var(--pas-c-add) 8%, transparent);
+    font-size: 0.9em;
+    line-height: 1.35;
+}
 
 /* --- 触发类型标签（药丸式 tags） --- */
 .pas-tag {
@@ -2308,6 +2319,53 @@ body.pas-light .pas-btn-confirm-green:hover {
 .pas-view-meta-divider { opacity: 0.35; }
 .pas-view-summary {
     margin-bottom: 4px;
+}
+.pas-view-diagnostics {
+    border: 1px solid var(--pas-border);
+    border-radius: var(--pas-radius);
+    background: var(--pas-surface-3);
+    overflow: hidden;
+}
+.pas-view-diagnostics > summary {
+    cursor: pointer;
+    padding: 9px 12px;
+    color: var(--pas-fg-muted);
+    font-weight: 600;
+    user-select: none;
+}
+.pas-view-diagnostics > summary i {
+    margin-right: 6px;
+    color: var(--pas-accent);
+}
+.pas-diagnostic-grid {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+    margin: 0;
+    padding: 0 12px 10px;
+}
+.pas-diagnostic-row { display: contents; }
+.pas-diagnostic-row dt,
+.pas-diagnostic-row dd {
+    margin: 0;
+    padding: 5px 7px;
+    border-top: 1px solid var(--pas-border);
+}
+.pas-diagnostic-row dt { color: var(--pas-fg-muted); }
+.pas-diagnostic-row dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: 'SF Mono', Consolas, monospace;
+}
+.pas-diagnostic-paths dd {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+.pas-diagnostic-paths code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--pas-accent);
+    background: var(--pas-surface-4);
 }
 .pas-view-json {
     font-family: 'SF Mono', Consolas, 'Monaco', 'Courier New', monospace !important;

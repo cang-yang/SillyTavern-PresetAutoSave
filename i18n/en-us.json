@@ -487,5 +487,15 @@
     "Grouping Nesting Max Depth Hint": "Max nesting depth reached",
     "Grouping Empty Badge": "Empty",
     "Grouping Dropdown Empty": "No presets",
-    "Import Failed JSON": "Import failed: invalid file format"
+    "Import Failed JSON": "Import failed: invalid file format",
+    "Diagnostic Details": "Save diagnostics",
+    "Diagnostic Schema Version": "Record schema",
+    "Diagnostic Canonical Hash": "Canonical content hash",
+    "Diagnostic Transaction ID": "Save transaction ID",
+    "Diagnostic Parent Snapshot": "Parent snapshot ID",
+    "Diagnostic Save Status": "Save status",
+    "Diagnostic Changed Paths": "Changed fields",
+    "Diagnostic None": "None",
+    "Diagnostic Status committed": "Committed",
+    "Diagnostic Status legacy": "Legacy record"
 }
