@@ -45,4 +45,6 @@ test('manifest loads the layered panel stylesheet and mobile keeps tab labels', 
     assert.match(panelCss, /\.pas-tab\s*>\s*span:not\(\.pas-tab-badge\)[\s\S]*?display:\s*inline\s*!important/);
     assert.match(panelCss, /\.pas-filter\s*>\s*span\s*\{\s*display:\s*inline\s*!important/);
     assert.match(panelCss, /min-height:\s*44px/);
+    assert.match(panelCss, /--pas-v4-accent:\s*#8b5cf6/);
+    assert.doesNotMatch(panelCss, /--pas-v4-accent:\s*var\(--SmartThemeQuoteColor/);
 });

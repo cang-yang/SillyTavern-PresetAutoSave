@@ -18,13 +18,64 @@ dialog:has(.pas-panel),
     max-width: 1080px;
 }
 
+.popup:has(.pas-panel) > .popup-button-close {
+    width: 36px;
+    height: 36px;
+    border: 1px solid rgba(226, 232, 255, .09);
+    background: #191f2c;
+    color: #9da7ba;
+    box-shadow: 0 7px 18px rgba(0, 0, 0, .18);
+    transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease;
+}
+.popup:has(.pas-panel) > .popup-button-close:hover {
+    border-color: rgba(251, 113, 133, .28);
+    background: rgba(251, 113, 133, .12);
+    color: #fb7185;
+    transform: rotate(4deg) scale(1.04);
+}
+body.pas-light .popup:has(.pas-panel) > .popup-button-close { border-color: rgba(36, 43, 68, .10); background: #fff; color: #697086; }
+
 .pas-panel {
-    --pas-v4-accent: var(--SmartThemeQuoteColor, #8b7cf6);
-    --pas-v4-accent-soft: color-mix(in srgb, var(--pas-v4-accent) 16%, transparent);
-    --pas-v4-surface: color-mix(in srgb, var(--SmartThemeBlurTintColor, #171821) 92%, transparent);
-    --pas-v4-surface-raised: color-mix(in srgb, var(--SmartThemeBlurTintColor, #171821) 88%, var(--SmartThemeBodyColor, #fff) 12%);
-    --pas-v4-border: color-mix(in srgb, var(--SmartThemeBorderColor, #777) 66%, transparent);
-    --pas-v4-text-muted: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 58%, var(--SmartThemeEmColor, #aaa));
+    /* The workspace owns one coherent palette. Host colors are intentionally
+       not used as accents: a bright orange Tavern theme must not turn half of
+       this product orange while the rest stays purple. */
+    --pas-v4-accent: #8b5cf6;
+    --pas-v4-accent-hover: #9f7aea;
+    --pas-v4-accent-strong: #7c3aed;
+    --pas-v4-accent-soft: rgba(139, 92, 246, .13);
+    --pas-v4-accent-softer: rgba(139, 92, 246, .075);
+    --pas-v4-bg: #0d1018;
+    --pas-v4-surface: #121722;
+    --pas-v4-surface-raised: #191f2c;
+    --pas-v4-surface-hover: #202839;
+    --pas-v4-border: rgba(226, 232, 255, .09);
+    --pas-v4-border-strong: rgba(196, 181, 253, .28);
+    --pas-v4-text: #f5f7ff;
+    --pas-v4-text-muted: #9da7ba;
+    --pas-v4-text-faint: #6f7a90;
+    --pas-v4-success: #42d392;
+    --pas-v4-danger: #fb7185;
+    /* Rebind legacy components to the same system. */
+    --pas-fg: var(--pas-v4-text);
+    --pas-fg-muted: var(--pas-v4-text-muted);
+    --pas-fg-3: #818ba0;
+    --pas-fg-faint: var(--pas-v4-text-faint);
+    --pas-surface-0: rgba(255, 255, 255, .018);
+    --pas-surface-1: var(--pas-v4-surface-raised);
+    --pas-surface-2: var(--pas-v4-surface-hover);
+    --pas-surface-3: rgba(4, 7, 13, .38);
+    --pas-surface-4: rgba(4, 7, 13, .55);
+    --pas-border: var(--pas-v4-border);
+    --pas-border-strong: var(--pas-v4-border-strong);
+    --pas-border-focus: rgba(139, 92, 246, .7);
+    --pas-accent: var(--pas-v4-accent);
+    --pas-accent-soft: var(--pas-v4-accent-soft);
+    --pas-c-pin: var(--pas-v4-accent);
+    --pas-c-edit: #a78bfa;
+    --pas-c-info: #818cf8;
+    --pas-radius: 12px;
+    --pas-radius-sm: 8px;
+    --pas-radius-lg: 16px;
     display: flex;
     flex-direction: column;
     min-height: min(720px, 78vh);
@@ -32,10 +83,29 @@ dialog:has(.pas-panel),
     overflow: hidden;
     border: 1px solid var(--pas-v4-border);
     border-radius: 18px;
-    background: var(--pas-v4-surface);
-    color: var(--SmartThemeBodyColor, #eee);
-    box-shadow: 0 22px 70px rgba(0, 0, 0, .34);
+    background:
+        radial-gradient(circle at 12% -8%, rgba(139, 92, 246, .11), transparent 28%),
+        var(--pas-v4-bg);
+    color: var(--pas-v4-text);
+    box-shadow: 0 28px 90px rgba(0, 0, 0, .52), 0 0 0 1px rgba(255, 255, 255, .025) inset;
     isolation: isolate;
+}
+
+body.pas-light .pas-panel {
+    --pas-v4-bg: #f4f6fb;
+    --pas-v4-surface: #ffffff;
+    --pas-v4-surface-raised: #f8f9fd;
+    --pas-v4-surface-hover: #f0edff;
+    --pas-v4-border: rgba(36, 43, 68, .10);
+    --pas-v4-border-strong: rgba(124, 58, 237, .25);
+    --pas-v4-text: #202436;
+    --pas-v4-text-muted: #697086;
+    --pas-v4-text-faint: #9299aa;
+    --pas-surface-0: rgba(32, 36, 54, .025);
+    --pas-surface-3: rgba(32, 36, 54, .055);
+    --pas-surface-4: rgba(32, 36, 54, .075);
+    background: radial-gradient(circle at 12% -8%, rgba(139, 92, 246, .10), transparent 30%), var(--pas-v4-bg);
+    box-shadow: 0 28px 80px rgba(42, 46, 70, .18), 0 0 0 1px rgba(255, 255, 255, .7) inset;
 }
 
 .pas-panel [hidden] { display: none !important; }
@@ -43,6 +113,13 @@ dialog:has(.pas-panel),
 .pas-panel button,
 .pas-panel input,
 .pas-panel select { font: inherit; }
+
+.pas-panel button {
+    -webkit-tap-highlight-color: transparent;
+    transition: color .16s ease, background-color .16s ease, border-color .16s ease,
+        box-shadow .16s ease, transform .16s cubic-bezier(.2, .8, .2, 1), opacity .16s ease;
+}
+.pas-panel button:not(:disabled):active { transform: scale(.965); }
 
 .pas-panel button:focus-visible,
 .pas-panel input:focus-visible,
@@ -59,10 +136,11 @@ dialog:has(.pas-panel),
     align-items: center;
     justify-content: space-between;
     gap: 18px;
-    padding: 18px 20px 14px;
-    border-bottom: 0;
-    background: linear-gradient(135deg, var(--pas-v4-accent-soft), transparent 52%);
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid var(--pas-v4-border);
+    background: rgba(13, 16, 24, .38);
 }
+body.pas-light .pas-panel-header { background: rgba(255, 255, 255, .52); }
 
 .pas-panel-brand,
 .pas-header-actions,
@@ -79,16 +157,17 @@ dialog:has(.pas-panel),
     width: 42px;
     height: 42px;
     place-items: center;
-    border: 1px solid color-mix(in srgb, var(--pas-v4-accent) 50%, transparent);
-    border-radius: 13px;
-    background: var(--pas-v4-accent-soft);
-    color: var(--pas-v4-accent);
+    border: 1px solid rgba(167, 139, 250, .32);
+    border-radius: 14px;
+    background: linear-gradient(145deg, rgba(139, 92, 246, .22), rgba(139, 92, 246, .08));
+    color: #c4b5fd;
+    box-shadow: 0 8px 22px rgba(76, 29, 149, .16), 0 1px 0 rgba(255, 255, 255, .08) inset;
     font-size: 18px;
 }
 .pas-panel-heading { min-width: 0; }
 .pas-panel-heading h3 { margin: 0; overflow: hidden; font-size: 17px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .pas-panel-status { gap: 7px; margin-top: 3px; color: var(--pas-v4-text-muted); font-size: 12px; }
-.pas-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #42c885; box-shadow: 0 0 0 3px rgba(66, 200, 133, .12); }
+.pas-status-dot { width: 7px; height: 7px; margin: 0; border-radius: 50%; background: var(--pas-v4-success); box-shadow: 0 0 0 4px rgba(66, 211, 146, .10), 0 0 12px rgba(66, 211, 146, .35); }
 .pas-panel-stats:empty { display: none; }
 .pas-panel-stats:not(:empty)::before { content: '·'; margin-right: 7px; }
 
@@ -102,14 +181,15 @@ dialog:has(.pas-panel),
     gap: 8px;
     padding: 0 14px;
     border: 1px solid var(--pas-v4-border);
-    border-radius: 11px;
+    border-radius: 12px;
     cursor: pointer;
 }
-.pas-primary-action { border-color: transparent; background: var(--pas-v4-accent); color: #fff; font-weight: 650; }
-.pas-primary-action:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.pas-primary-action { border-color: rgba(255, 255, 255, .10); background: linear-gradient(135deg, var(--pas-v4-accent-hover), var(--pas-v4-accent-strong)); color: #fff; font-weight: 650; box-shadow: 0 8px 22px rgba(109, 40, 217, .26), 0 1px 0 rgba(255, 255, 255, .18) inset; }
+.pas-primary-action:hover { box-shadow: 0 11px 28px rgba(109, 40, 217, .36), 0 1px 0 rgba(255, 255, 255, .2) inset; transform: translateY(-2px); }
 .pas-tools { position: relative; }
-.pas-tools-trigger { background: var(--pas-v4-surface-raised); color: inherit; }
-.pas-tools-trigger[aria-expanded="true"] { border-color: var(--pas-v4-accent); background: var(--pas-v4-accent-soft); }
+.pas-tools-trigger { background: var(--pas-v4-surface-raised); color: var(--pas-v4-text-muted); }
+.pas-tools-trigger:hover { border-color: var(--pas-v4-border-strong); background: var(--pas-v4-surface-hover); color: var(--pas-v4-text); }
+.pas-tools-trigger[aria-expanded="true"] { border-color: rgba(139, 92, 246, .42); background: var(--pas-v4-accent-soft); color: #c4b5fd; box-shadow: 0 0 0 3px rgba(139, 92, 246, .08); }
 .pas-tools-menu {
     position: absolute;
     z-index: 20;
@@ -119,8 +199,8 @@ dialog:has(.pas-panel),
     padding: 8px;
     border: 1px solid var(--pas-v4-border);
     border-radius: 14px;
-    background: color-mix(in srgb, var(--pas-v4-surface-raised) 96%, black 4%);
-    box-shadow: 0 18px 48px rgba(0, 0, 0, .4);
+    background: var(--pas-v4-surface-raised);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, .46), 0 1px 0 rgba(255, 255, 255, .04) inset;
 }
 .pas-tools-section { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .pas-tools-section + .pas-tools-section { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--pas-v4-border); }
@@ -138,9 +218,9 @@ dialog:has(.pas-panel),
     cursor: pointer;
 }
 .pas-tool-item:hover,
-.pas-tool-item:focus-visible { background: var(--pas-v4-accent-soft); }
+.pas-tool-item:focus-visible { background: var(--pas-v4-accent-soft); color: #ddd6fe; transform: translateX(2px); }
 .pas-tool-item i { width: 16px; color: var(--pas-v4-text-muted); text-align: center; }
-.pas-tool-danger { color: var(--fullred, #ef6a73); }
+.pas-tool-danger { color: var(--pas-v4-danger); }
 
 .pas-panel-tabs {
     display: grid;
@@ -149,9 +229,11 @@ dialog:has(.pas-panel),
     margin: 0 20px;
     padding: 4px;
     border: 1px solid var(--pas-v4-border);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--pas-v4-surface-raised) 68%, transparent);
+    border-radius: 14px;
+    background: rgba(4, 7, 13, .28);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .025) inset;
 }
+body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 .pas-tab {
     position: relative;
     display: flex;
@@ -167,9 +249,9 @@ dialog:has(.pas-panel),
     color: var(--pas-v4-text-muted);
     cursor: pointer;
 }
-.pas-tab:hover { color: inherit; }
-.pas-tab-active { background: var(--pas-v4-surface-raised); color: inherit; box-shadow: 0 2px 10px rgba(0, 0, 0, .14); }
-.pas-tab-active::after { content: ''; position: absolute; right: 22%; bottom: -5px; left: 22%; height: 2px; border-radius: 2px; background: var(--pas-v4-accent); }
+.pas-tab:hover { background: rgba(255, 255, 255, .035); color: var(--pas-v4-text); }
+.pas-tab-active { background: var(--pas-v4-surface-raised); color: #ddd6fe; box-shadow: 0 7px 20px rgba(0, 0, 0, .16), 0 0 0 1px rgba(139, 92, 246, .12) inset; }
+.pas-tab-active::after { content: ''; position: absolute; right: 30%; bottom: -5px; left: 30%; height: 2px; border-radius: 2px; background: var(--pas-v4-accent); box-shadow: 0 0 10px rgba(139, 92, 246, .55); }
 .pas-tab-badge { min-width: 19px; padding: 1px 6px; border-radius: 99px; background: color-mix(in srgb, var(--pas-v4-text-muted) 18%, transparent); font-size: 11px; }
 
 .pas-panel-body { display: flex; min-height: 0; flex: 1 1 auto; padding: 14px 20px 0; overflow: hidden; }
@@ -180,16 +262,21 @@ dialog:has(.pas-panel),
 .pas-toolbar-primary { gap: 10px; }
 .pas-search-wrap { position: relative; display: block; min-width: 180px; flex: 1 1 420px; }
 .pas-search-wrap .pas-search-icon { position: absolute; z-index: 1; top: 50%; left: 13px; color: var(--pas-v4-text-muted); transform: translateY(-50%); pointer-events: none; }
-.pas-search-wrap input.text_pole { width: 100%; min-height: 42px; padding: 8px 12px 8px 38px; border: 1px solid var(--pas-v4-border); border-radius: 11px; background: color-mix(in srgb, var(--pas-v4-surface-raised) 72%, transparent); }
+.pas-search-wrap input.text_pole { width: 100%; min-height: 42px; padding: 8px 12px 8px 38px; border: 1px solid var(--pas-v4-border); border-radius: 12px; background: var(--pas-v4-surface); color: var(--pas-v4-text); box-shadow: 0 1px 0 rgba(255, 255, 255, .025) inset; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.pas-search-wrap input.text_pole:hover { border-color: rgba(196, 181, 253, .20); }
+.pas-search-wrap input.text_pole:focus { border-color: rgba(139, 92, 246, .62); background: var(--pas-v4-surface-raised); box-shadow: 0 0 0 3px rgba(139, 92, 246, .10); outline: none; }
 
-.pas-view-toggle { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--pas-v4-border); border-radius: 11px; }
+.pas-view-toggle { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--pas-v4-border); border-radius: 12px; background: rgba(4, 7, 13, .22); }
 .pas-view-btn { display: flex; min-height: 34px; align-items: center; gap: 7px; padding: 5px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--pas-v4-text-muted); cursor: pointer; }
-.pas-view-btn-active { background: var(--pas-v4-accent-soft); color: inherit; }
+.pas-view-btn:hover { color: var(--pas-v4-text); }
+.pas-panel .pas-view-btn.pas-view-btn-active { border-color: rgba(139, 92, 246, .18); background: var(--pas-v4-accent-soft); color: #c4b5fd; box-shadow: 0 0 0 1px rgba(139, 92, 246, .10) inset; }
 
 .pas-filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
 .pas-filter,
 .pas-log-filter { display: inline-flex; min-height: 34px; flex: 0 0 auto; align-items: center; gap: 6px; padding: 5px 11px; border: 1px solid var(--pas-v4-border); border-radius: 99px; background: transparent; color: var(--pas-v4-text-muted); cursor: pointer; }
-.pas-filter-active { border-color: color-mix(in srgb, var(--pas-v4-accent) 62%, transparent); background: var(--pas-v4-accent-soft); color: inherit; }
+.pas-filter:hover,
+.pas-log-filter:hover { border-color: var(--pas-v4-border-strong); background: var(--pas-v4-surface-raised); color: var(--pas-v4-text); transform: translateY(-1px); }
+.pas-filter-active { border-color: rgba(139, 92, 246, .36); background: var(--pas-v4-accent-soft); color: #c4b5fd; box-shadow: 0 0 0 1px rgba(139, 92, 246, .06) inset; }
 
 .pas-diff-bar { display: grid; grid-template-columns: auto minmax(120px, 1fr) minmax(120px, 1fr) auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid color-mix(in srgb, var(--pas-v4-accent) 46%, transparent); border-radius: 12px; background: var(--pas-v4-accent-soft); }
 .pas-diff-bar-slot { min-width: 0; }
@@ -198,13 +285,33 @@ dialog:has(.pas-panel),
 .pas-log-view,
 .pas-settings { min-height: 0; flex: 1 1 auto; overflow: auto; padding: 2px 4px 18px 2px; scrollbar-width: thin; }
 .pas-preset-group,
-.pas-series-group { border-color: var(--pas-v4-border); border-radius: 12px; background: color-mix(in srgb, var(--pas-v4-surface-raised) 58%, transparent); }
+.pas-series-group { border: 1px solid var(--pas-v4-border); border-left: 1px solid var(--pas-v4-border); border-radius: 14px; background: var(--pas-v4-surface); box-shadow: 0 7px 20px rgba(0, 0, 0, .08); }
+.pas-series-group.pas-series-current,
+.pas-preset-group.pas-preset-current { border-color: rgba(139, 92, 246, .34); border-left-color: rgba(139, 92, 246, .6); background: linear-gradient(135deg, rgba(139, 92, 246, .08), var(--pas-v4-surface) 42%); }
+.pas-version-group { border: 1px solid var(--pas-v4-border); border-left: 2px solid rgba(139, 92, 246, .30); border-radius: 12px; background: var(--pas-v4-surface-raised); }
+.pas-version-group.pas-version-current { border-left-color: var(--pas-v4-accent); background: linear-gradient(135deg, rgba(139, 92, 246, .075), var(--pas-v4-surface-raised) 38%); }
 .pas-preset-header,
 .pas-series-header,
 .pas-version-header { border-radius: 11px; }
 .pas-preset-header:hover,
 .pas-series-header:hover,
-.pas-version-header:hover { background: var(--pas-v4-accent-soft); }
+.pas-version-header:hover { background: var(--pas-v4-accent-softer); }
+
+.pas-card { border: 1px solid var(--pas-v4-border); border-left: 2px solid rgba(139, 92, 246, .28); border-radius: 12px; background: var(--pas-v4-surface-raised); box-shadow: 0 4px 14px rgba(0, 0, 0, .07); transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s cubic-bezier(.2,.8,.2,1); }
+.pas-card:hover { border-color: rgba(139, 92, 246, .24); border-left-color: var(--pas-v4-accent); background: var(--pas-v4-surface-hover); box-shadow: 0 9px 26px rgba(0, 0, 0, .16); transform: translateY(-1px); }
+.pas-card.pas-card-pinned { border-color: rgba(139, 92, 246, .32); background: rgba(139, 92, 246, .075); }
+.pas-tag-current,
+.pas-series-version-pill,
+.pas-version-pill { border-color: rgba(139, 92, 246, .25); background: rgba(139, 92, 246, .10); color: #c4b5fd; }
+.pas-panel .pas-series-current .pas-series-version-pill,
+.pas-panel .pas-version-current .pas-version-pill,
+.pas-panel .pas-tag-current { border-color: rgba(139, 92, 246, .28); background: rgba(139, 92, 246, .12); color: #c4b5fd; }
+body.pas-light .pas-panel .pas-series-current,
+body.pas-light .pas-panel .pas-version-current,
+body.pas-light .pas-panel .pas-preset-current { border-color: rgba(124, 58, 237, .25); background: linear-gradient(135deg, rgba(139, 92, 246, .08), var(--pas-v4-surface) 44%); }
+body.pas-light .pas-panel .pas-series-current .pas-series-version-pill,
+body.pas-light .pas-panel .pas-version-current .pas-version-pill,
+body.pas-light .pas-panel .pas-tag-current { border-color: rgba(124, 58, 237, .22); background: rgba(139, 92, 246, .09); color: #6d28d9; }
 
 .pas-batch-toolbar { position: sticky; z-index: 4; bottom: 0; margin: 0 -4px; border-radius: 12px 12px 0 0; box-shadow: 0 -12px 30px rgba(0, 0, 0, .24); }
 
@@ -213,7 +320,12 @@ dialog:has(.pas-panel),
 .pas-log-actions { display: flex; flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .pas-log-view { font-family: var(--monoFontFamily, ui-monospace, monospace); }
 
-.pas-panel-footer { display: flex; min-height: 40px; flex: 0 0 auto; align-items: center; padding: 8px 20px; border-top: 1px solid var(--pas-v4-border); background: color-mix(in srgb, var(--pas-v4-surface-raised) 46%, transparent); color: var(--pas-v4-text-muted); font-size: 12px; }
+.pas-panel-footer { display: flex; min-height: 40px; flex: 0 0 auto; align-items: center; padding: 8px 20px; border-top: 1px solid var(--pas-v4-border); background: rgba(4, 7, 13, .20); color: var(--pas-v4-text-faint); font-size: 12px; }
+
+.pas-panel ::-webkit-scrollbar { width: 8px; height: 8px; }
+.pas-panel ::-webkit-scrollbar-track { background: transparent; }
+.pas-panel ::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: rgba(157, 167, 186, .22); background-clip: padding-box; }
+.pas-panel ::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, .42); background-clip: padding-box; }
 
 @media (max-width: 720px) {
     dialog:has(.pas-panel),
@@ -257,14 +369,17 @@ dialog:has(.pas-panel),
         margin: 0;
         padding: 0;
         border: 0;
+        background: #0d1018;
     }
-    .pas-panel { width: 100vw; min-height: 100dvh; max-height: 100dvh; border-width: 0; border-radius: 0; }
+    body.pas-light dialog:has(.pas-panel),
+    body.pas-light .popup:has(.pas-panel) { background: #f4f6fb; }
+    .pas-panel { width: 100%; height: 100%; min-height: 100%; max-height: 100%; border-width: 0; border-radius: 0; }
     .pas-panel-header { gap: 8px; }
     .pas-header-actions { margin-right: 34px; }
     .pas-panel-heading h3 { max-width: 132px; }
     .pas-panel-status .pas-panel-stats { display: none; }
     .pas-primary-action span { display: none; }
-    .pas-tools-menu { position: fixed; top: auto; right: 8px; bottom: 8px; left: 8px; width: auto; padding: 10px; border-radius: 17px; }
+    .pas-tools-menu { position: absolute; top: calc(100% + 8px); right: 0; bottom: auto; left: auto; width: min(340px, calc(100vw - 28px)); max-height: calc(100dvh - 110px); overflow-y: auto; padding: 10px; border-radius: 16px; }
     .pas-tools-section { grid-template-columns: 1fr 1fr; }
     .pas-tool-item { min-height: 48px; }
     .pas-tab { gap: 5px; font-size: 13px; }
