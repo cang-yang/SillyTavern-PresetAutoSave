@@ -199,6 +199,8 @@
 
     "Summary Initial": "初始基线（首次记录）",
     "Summary Minor": "细微改动（无明显字段差异）",
+    "Summary Runtime Only": "仅运行状态发生变化（未计入预设内容）",
+    "Summary Unchanged": "预设内容未变化",
     "Summary Unknown": "旧版快照，无对比信息",
     "Summary Tag Initial": "初始",
     "Summary Tag Prompt+": "新增条目",

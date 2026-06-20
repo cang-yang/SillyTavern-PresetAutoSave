@@ -10,6 +10,18 @@ import { t, escapeHtml, escapeAttr, formatTime } from './compatibility.js';
 // Re-export：保持其他模块 `from './panel-summary.js'` 的导入不变
 export { escapeHtml, escapeAttr, formatTime };
 
+function renderEmptySummary(summary = {}) {
+    const key = summary.onlyIgnoredChanges
+        ? 'Summary Runtime Only'
+        : summary.unchanged
+            ? 'Summary Unchanged'
+            : 'Summary Minor';
+    return `<div class="pas-card-summary pas-summary-empty">
+        <i class="fa-solid fa-circle-dot"></i>
+        <span>${escapeHtml(t(key))}</span>
+    </div>`;
+}
+
 // =====================================================
 // Utility
 // =====================================================
@@ -227,10 +239,7 @@ export function renderSummary(summary, opts = {}) {
     if (sections.length === 0) {
         const rawFallback = renderRawChangedPaths(summary.rawChangedPaths, compact);
         if (rawFallback) return rawFallback;
-        return `<div class="pas-card-summary pas-summary-empty">
-            <i class="fa-solid fa-circle-dot"></i>
-            <span>${escapeHtml(t('Summary Minor'))}</span>
-        </div>`;
+        return renderEmptySummary(summary);
     }
 
     // 把所有 sections 拍平成"行"
@@ -243,10 +252,7 @@ export function renderSummary(summary, opts = {}) {
     if (lines.length === 0) {
         const rawFallback = renderRawChangedPaths(summary.rawChangedPaths, compact);
         if (rawFallback) return rawFallback;
-        return `<div class="pas-card-summary pas-summary-empty">
-            <i class="fa-solid fa-circle-dot"></i>
-            <span>${escapeHtml(t('Summary Minor'))}</span>
-        </div>`;
+        return renderEmptySummary(summary);
     }
 
     // 紧凑模式：默认显示前 4 行 + "more"
@@ -451,7 +457,7 @@ export function renderLegacySummary(summary) {
     }
 
     if (!tagHtml && !detailsHtml) {
-        return `<div class="pas-card-summary pas-summary-empty">${escapeHtml(t('Summary Minor'))}</div>`;
+        return renderEmptySummary(summary);
     }
     return `<div class="pas-card-summary">
         ${tagHtml ? `<div class="pas-summary-tags">${tagHtml}</div>` : ''}

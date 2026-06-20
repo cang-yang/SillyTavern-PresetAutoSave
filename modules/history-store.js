@@ -25,7 +25,6 @@ import { logger } from './logger.js';
 import { getSettings } from './settings.js';
 import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, extractCanonicalForDiff, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 import { createChangeSet, assertExplainableChange } from './core/change-set.js';
-import { canonicalizePreset } from './core/preset-schema.js';
 import { HistoryRepository } from './core/history-repository.js';
 import { SerialTaskQueue } from './core/serial-task-queue.js';
 import { emitHistoryChange } from './core/history-change-events.js';
@@ -172,12 +171,12 @@ function fnv1aHash(str) {
 /**
  * 计算预设内容哈希（FNV-1a 32-bit）
  *
- * 注：getPresetSnapshot → sanitizePresetForExport 已在源头过滤了所有
- * 非预设字段，传入的 obj 已经是干净数据，无需再做条件过滤。
+ * 防御性地再次执行统一字段契约，确保实时快照、原生手动保存载荷、
+ * 旧历史记录和直接调用都生成相同哈希。
  */
-export function hashPreset(obj) {
+export function hashPreset(obj, apiId = 'openai') {
     if (!obj || typeof obj !== 'object') return '';
-    const { canonical } = canonicalizePreset(obj);
+    const canonical = sanitizePresetForExport(obj, { apiId });
     return fnv1aHash(stableStringify(canonical));
 }
 
@@ -216,7 +215,7 @@ export function formatBytes(bytes) {
  *   }
  * }}
  */
-export function computeChangeSummary(prev, curr) {
+export function computeChangeSummary(prev, curr, apiId = 'openai') {
     const result = {
         isFirst: false,
         sections: [],
@@ -237,20 +236,28 @@ export function computeChangeSummary(prev, curr) {
         return result;
     }
 
-    const changeSet = createChangeSet(prev, curr);
-    assertExplainableChange(prev, curr, changeSet);
+    const canonicalPrev = sanitizePresetForExport(prev, { apiId });
+    const canonicalCurr = sanitizePresetForExport(curr, { apiId });
+    const rawChangeSet = createChangeSet(prev, curr);
+    const changeSet = createChangeSet(canonicalPrev, canonicalCurr);
+    assertExplainableChange(canonicalPrev, canonicalCurr, changeSet);
     result.rawChangedPaths = changeSet.changed.map(item => item.path);
-    result.ignoredPaths = [];
+    const canonicalPaths = new Set(result.rawChangedPaths);
+    result.ignoredPaths = rawChangeSet.changed
+        .map(item => item.path)
+        .filter(path => !canonicalPaths.has(path));
+    result.unchanged = changeSet.changed.length === 0;
+    result.onlyIgnoredChanges = result.unchanged && result.ignoredPaths.length > 0;
 
     // 对比前过滤扩展注入的 prompt（确保新旧快照使用相同标准，
     // 避免旧快照包含而新快照不包含时产生虚假的"删除"摘要）
     const prevPrompts = filterExtensionPrompts(
-        Array.isArray(prev.prompts) ? prev.prompts : [],
-        prev.prompt_order,
+        Array.isArray(canonicalPrev.prompts) ? canonicalPrev.prompts : [],
+        canonicalPrev.prompt_order,
     );
     const currPrompts = filterExtensionPrompts(
-        Array.isArray(curr.prompts) ? curr.prompts : [],
-        curr.prompt_order,
+        Array.isArray(canonicalCurr.prompts) ? canonicalCurr.prompts : [],
+        canonicalCurr.prompt_order,
     );
 
     // 1. Prompts 增删改（带 name + 改动字段明细）
@@ -269,8 +276,8 @@ export function computeChangeSummary(prev, curr) {
     }
 
     // 2. 顺序调整（仅在 prompts 数组本身没增减时才单独显示）
-    const prevOrder = extractOrder(prev.prompt_order);
-    const currOrder = extractOrder(curr.prompt_order);
+    const prevOrder = extractOrder(canonicalPrev.prompt_order);
+    const currOrder = extractOrder(canonicalCurr.prompt_order);
     const reorderCount = countReorderedPositions(prevOrder, currOrder);
     if (reorderCount > 0) {
         result.sections.push({ kind: 'prompt-reorder', items: [{ count: reorderCount }] });
@@ -278,7 +285,7 @@ export function computeChangeSummary(prev, curr) {
     }
 
     // 3. enabled 切换（按提示词名）
-    const enabledDiff = compareEnabledDetail(prev.prompt_order, curr.prompt_order, currPrompts, prevPrompts);
+    const enabledDiff = compareEnabledDetail(canonicalPrev.prompt_order, canonicalCurr.prompt_order, currPrompts, prevPrompts);
     if (enabledDiff.toggledOn.length > 0) {
         result.sections.push({ kind: 'prompt-toggle-on', items: enabledDiff.toggledOn });
         result.counts.promptToggledOn = enabledDiff.toggledOn.length;
@@ -289,7 +296,7 @@ export function computeChangeSummary(prev, curr) {
     }
 
     // 4. 标量字段
-    const scalarDiff = compareScalars(prev, curr);
+    const scalarDiff = compareScalars(canonicalPrev, canonicalCurr);
     const representedKeys = new Set(scalarDiff.map(item => item.key));
     for (const item of changeSet.changed) {
         if (item.path === 'prompts' || item.path.startsWith('prompts[')) continue;
@@ -676,7 +683,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
         logger.warn(`addSnapshot: preset is not a plain object, type=${typeof preset}`);
         return null;
     }
-    const { canonical: canonicalPreset } = canonicalizePreset(preset, { apiId });
+    const canonicalPreset = sanitizePresetForExport(preset, { apiId });
     const presetKeys = Object.keys(canonicalPreset);
     if (presetKeys.length < 5) {
         logger.warn(
@@ -697,12 +704,15 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
     // 1. 去重: 与最新一条相同则跳过
     //   manual trigger 不受 skipUnchangedSave 限制 —— 用户明确要求"立即快照"时
     //   不应该被静默跳过（resetLastSavedHash 已重置内部 hash，但 store 层也应放行）
+    const previousCanonicalHash = list.length > 0
+        ? hashPreset(list[0]?.preset, apiId)
+        : '';
     if (
         settings.skipUnchangedSave
         && trigger !== TRIGGER.MANUAL
         && trigger !== TRIGGER.RESTORE
         && list.length > 0
-        && list[0].hash === hash
+        && (list[0].hash === hash || previousCanonicalHash === hash)
     ) {
         logger.debug(`Snapshot skipped (unchanged): ${presetName}`);
         return null;
@@ -710,7 +720,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
 
     // 计算修改摘要（对比上一条快照）
     const previousSnapshot = list.length > 0 ? list[0] : null;
-    const summary = computeChangeSummary(previousSnapshot?.preset, canonicalPreset);
+    const summary = computeChangeSummary(previousSnapshot?.preset, canonicalPreset, apiId);
 
     // 2. 合并窗口: 在窗口期内且触发类型相同 -> 替换最新
     //    注意: 锁定（pinned）的快照永远不会被合并覆盖
@@ -720,7 +730,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
         if (elapsed < mergeWindowMs) {
             // 合并时摘要应基于"被合并条之前的那一条"
             const baseSnapshot = list.length > 1 ? list[1] : null;
-            const mergedSummary = computeChangeSummary(baseSnapshot?.preset, canonicalPreset);
+            const mergedSummary = computeChangeSummary(baseSnapshot?.preset, canonicalPreset, apiId);
             const merged = {
                 ...list[0],
                 timestamp: now,

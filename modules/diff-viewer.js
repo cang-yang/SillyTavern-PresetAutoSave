@@ -642,7 +642,7 @@ function downloadSnapshotAsPreset(snapshot) {
         return;
     }
     // R-1: 过滤敏感/环境配置字段，只导出预设参数
-    const data = sanitizePresetForExport(snapshot.preset);
+    const data = sanitizePresetForExport(snapshot.preset, { apiId: snapshot.apiId });
     const safeName = (snapshot.presetName || 'preset').replace(/[<>:"/\\|?*]/g, '_');
     const dateStr = new Date(snapshot.timestamp).toISOString().slice(0, 10);
     const fileName = `${safeName}_${dateStr}.json`;

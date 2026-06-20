@@ -416,7 +416,7 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
             const restoredPreset = snapshot.preset;
             if (restoredPreset) {
                 await addSnapshot(currentPreset, currentApi, restoredPreset, TRIGGER.RESTORE);
-                restoreHash = hashPreset(restoredPreset);
+                restoreHash = hashPreset(restoredPreset, apiId);
             }
         } catch (snapErr) {
             logger.warn('Post-restore snapshot failed (non-fatal):', snapErr);
@@ -473,7 +473,7 @@ async function onView(snapshotId) {
     if (!snapshot) return toast.error(t('Snapshot Not Found'));
 
     // 显示前过滤敏感字段，避免 API key 等泄露到 UI
-    const safePreset = sanitizePresetForExport(snapshot.preset);
+    const safePreset = sanitizePresetForExport(snapshot.preset, { apiId: snapshot.apiId });
     const json = JSON.stringify(safePreset, null, 2);
     const time = formatTime(snapshot.timestamp);
     const triggerLabel = t(TRIGGER_LABEL_KEYS[snapshot.trigger] || 'Trigger Auto');
@@ -560,7 +560,7 @@ async function onExportPreset(snapshotId) {
     }
 
     // R-1: 过滤敏感/环境配置字段，只导出预设参数
-    const data = sanitizePresetForExport(snapshot.preset);
+    const data = sanitizePresetForExport(snapshot.preset, { apiId: snapshot.apiId });
     const safeName = (snapshot.presetName || 'preset').replace(/[<>:"/\\|?*]/g, '_');
     const dateStr = new Date(snapshot.timestamp).toISOString().slice(0, 10);
     const fileName = `${safeName}_${dateStr}.json`;

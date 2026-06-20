@@ -74,6 +74,45 @@ export const CONNECTION_FIELDS = new Set([
     'preset_settings_openai',
 ]);
 
+// SillyTavern's native Chat Completion preset contract. This mirrors the
+// entries in openai.js/settingsToUpdate whose is_connection flag is false.
+// OpenAI live settings also contain provider state, UI caches and values
+// injected by extensions; those values must never silently become history.
+export const OPENAI_PRESET_FIELDS = new Set([
+    'temperature', 'frequency_penalty', 'presence_penalty',
+    'top_p', 'top_k', 'top_a', 'min_p', 'repetition_penalty',
+    'max_context_unlocked', 'tool_reasoning_mode',
+    'openai_max_context', 'openai_max_tokens', 'names_behavior',
+    'send_if_empty', 'impersonation_prompt', 'new_chat_prompt',
+    'new_group_chat_prompt', 'new_example_chat_prompt', 'continue_nudge_prompt',
+    'bias_preset_selected', 'wi_format', 'scenario_format', 'personality_format',
+    'group_nudge_prompt', 'stream_openai', 'prompts', 'prompt_order',
+    'assistant_prefill', 'assistant_impersonation', 'use_sysprompt',
+    'squash_system_messages', 'media_inlining', 'inline_image_quality',
+    'continue_prefill', 'continue_postfix', 'function_calling',
+    'tool_call_recurse_limit', 'show_thoughts', 'reasoning_effort', 'verbosity',
+    'enable_web_search', 'seed', 'n', 'request_images',
+    'request_image_aspect_ratio', 'request_image_resolution', 'extensions',
+]);
+
+// These are native ST controls, but they are backed by separate global state
+// rather than the completion preset payload observed by every save path.
+export const OPENAI_HISTORY_EXCLUDED_FIELDS = new Set([
+    'bias_preset_selected',
+]);
+
+function pathRoot(path) {
+    const match = String(path ?? '').match(/^[^.[\]]+/);
+    return match?.[0] ?? '';
+}
+
+export function isHistoryOwnedPath(path, { apiId = 'openai' } = {}) {
+    const root = pathRoot(path);
+    if (!root) return false;
+    if (apiId !== 'openai') return !CONNECTION_FIELDS.has(root);
+    return OPENAI_PRESET_FIELDS.has(root) && !OPENAI_HISTORY_EXCLUDED_FIELDS.has(root);
+}
+
 const NUMBER_FIELDS = new Set([
     'temperature', 'frequency_penalty', 'presence_penalty',
     'top_p', 'top_k', 'top_a', 'min_p', 'repetition_penalty',
@@ -108,6 +147,10 @@ export function canonicalizePreset(preset, { apiId = 'openai' } = {}) {
     for (const key of Object.keys(preset).sort()) {
         if (apiId === 'openai' && CONNECTION_FIELDS.has(key)) {
             ignored.push({ path: key, reason: 'connection-setting' });
+            continue;
+        }
+        if (apiId === 'openai' && !OPENAI_PRESET_FIELDS.has(key)) {
+            ignored.push({ path: key, reason: 'runtime-or-unknown-setting' });
             continue;
         }
         canonical[key] = normalizePresetField(key, preset[key]);

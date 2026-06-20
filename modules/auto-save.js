@@ -146,7 +146,7 @@ export async function initAutoSave() {
     // 计算初始哈希（避免初次加载就触发保存）
     const initialPreset = getPresetSnapshot();
     if (initialPreset) {
-        _lastSavedHash = hashPreset(initialPreset);
+        _lastSavedHash = hashPreset(initialPreset, _currentApiId);
         _lastQuickFingerprint = _computeQuickFingerprint(_currentApiId);
         const keys = Object.keys(initialPreset).length;
         logger.debug(
@@ -251,7 +251,7 @@ function startPolling() {
         try {
             const preset = getPresetSnapshot();
             if (!preset) return;
-            const h = hashPreset(preset);
+            const h = hashPreset(preset, _currentApiId);
             if (_lastSavedHash && h !== _lastSavedHash) {
                 logger.debug(`[Polling] hash mismatch ${_lastSavedHash} -> ${h}, scheduling save`);
                 scheduleAutoSave(getSettings().debounceMs, 'polling');
@@ -669,7 +669,7 @@ function onPresetSelectChangeCapture(event) {
         logger.warn(`Native switch guard could not capture live preset "${_currentPresetName}"`);
         return;
     }
-    const liveHash = hashPreset(preset);
+    const liveHash = hashPreset(preset, _currentApiId);
     if (_lastSavedHash && liveHash === _lastSavedHash) {
         cancelPendingSave();
         _dirty = false;
@@ -854,7 +854,7 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
     }
 
     // 计算 hash 并诊断
-    const newHash = hashPreset(preset);
+    const newHash = hashPreset(preset, apiId);
     const promptCount = Array.isArray(preset.prompts) ? preset.prompts.length : 0;
     const promptOrderCount = Array.isArray(preset.prompt_order)
         ? (preset.prompt_order[0]?.order?.length || 0)
@@ -1088,7 +1088,7 @@ async function recordNativeManualSave({ apiId, name, preset }) {
     );
     // Native save payloads and live snapshots must share one canonical schema.
     // In particular ST keeps bias_presets outside the completion-preset file.
-    const canonicalPreset = sanitizePresetForExport(preset);
+    const canonicalPreset = sanitizePresetForExport(preset, { apiId: target.apiId });
     const snapshot = await addSnapshot(target.presetName, target.apiId, canonicalPreset, TRIGGER.MANUAL);
     if (!snapshot) return null;
 
@@ -1277,7 +1277,7 @@ function bindPresetEvents() {
                 });
                 return;
             }
-            const liveHash = hashPreset(preset);
+            const liveHash = hashPreset(preset, _currentApiId);
             if (_lastSavedHash && liveHash === _lastSavedHash) {
                 // 内容跟上次保存一致：取消未触发的 debounce，纯跳过
                 _stats.switchGuardSkipped++;
@@ -1375,7 +1375,7 @@ function updateTrackingAfterSwitch() {
     const newApiId = getCurrentApiId();
     const newPresetName = getSelectedPresetName();
     const newPreset = getPresetSnapshot();
-    const newHash = newPreset ? hashPreset(newPreset) : null;
+    const newHash = newPreset ? hashPreset(newPreset, newApiId) : null;
 
     // 去重：相同 (apiId, name, hash) 在短时间内重复进来直接 return
     if (

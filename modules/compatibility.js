@@ -10,7 +10,11 @@
  */
 
 import { logger } from './logger.js';
-import { canonicalizePreset, CONNECTION_FIELDS } from './core/preset-schema.js';
+import {
+    canonicalizePreset,
+    CONNECTION_FIELDS,
+    OPENAI_PRESET_FIELDS,
+} from './core/preset-schema.js';
 export { escapeHtml, escapeAttr } from './key-utils.js';
 export { formatTime } from './time-utils.js';
 
@@ -365,61 +369,21 @@ export function normalizePresetFields(preset) {
 }
 
 // =====================================================
-// 阶段7：Canonical 预设字段白名单（用于 diff 比较阶段）
+// Canonical 预设字段契约（采集、哈希、存储与 diff 共用）
 //
 // 基于 ST openai.js settingsToUpdate 的白名单设计：
 //   旧方案用黑名单（EXPORT_EXCLUDED_FIELDS）过滤，任何不在黑名单的字段
 //   （扩展注入、ST 新字段、字段名拼写差异等）都会被捕获，导致修改 1 个参数
 //   却显示 10 个字段变化。
 //
-//   新方案在 diff 阶段用此白名单精确提取：只比较 ST 预设定义中
-//   isConnection=false 的标量字段。连接配置字段（模型选择、URL 等）和
-//   非预设字段（运行时计算值、扩展注入等）自动被排除。
+//   核心契约定义在 core/preset-schema.js。OpenAI 采用默认拒绝策略：
+//   只有 ST 原生 settingsToUpdate 中 isConnection=false 的字段可进入历史；
+//   其他 API 暂无统一契约，维持兼容性的默认保留策略。
 //
 // 来源：ST openai.js settingsToUpdate（约第288-387行）
 // 维护：若 ST 新增预设字段，需同步更新此列表
 // =====================================================
-export const CANONICAL_PRESET_FIELDS = new Set([
-    // ---- 采样参数 ----
-    'temperature', 'frequency_penalty', 'presence_penalty',
-    'top_p', 'top_k', 'top_a', 'min_p', 'repetition_penalty',
-    'seed', 'n',
-
-    // ---- 上下文 & tokens ----
-    'max_context_unlocked', 'openai_max_context', 'openai_max_tokens',
-
-    // ---- 流式传输 ----
-    'stream_openai',
-
-    // ---- 推理 ----
-    'reasoning_effort', 'show_thoughts', 'tool_reasoning_mode',
-
-    // ---- 角色行为 / Character Behavior ----
-    'names_behavior', 'continue_prefill', 'continue_postfix',
-    'squash_system_messages', 'assistant_prefill', 'assistant_impersonation',
-    'use_sysprompt',
-
-    // ---- 媒体 ----
-    'media_inlining', 'inline_image_quality',
-    'request_images', 'request_image_aspect_ratio', 'request_image_resolution',
-
-    // ---- 功能开关 ----
-    'function_calling', 'enable_web_search', 'verbosity',
-
-    // ---- 提示词模板（标量文本字段，非 prompts 数组） ----
-    'send_if_empty', 'impersonation_prompt', 'new_chat_prompt',
-    'new_group_chat_prompt', 'new_example_chat_prompt', 'continue_nudge_prompt',
-    'group_nudge_prompt',
-
-    // ---- 格式化 ----
-    'wi_format', 'scenario_format', 'personality_format',
-
-    // ---- 偏置 ----
-    'bias_preset_selected',
-
-    // ---- 后处理 ----
-    'custom_prompt_post_processing',
-]);
+export const CANONICAL_PRESET_FIELDS = OPENAI_PRESET_FIELDS;
 
 /**
  * 从预设对象中提取 canonical 字段（仅用于 diff 比较阶段）。
@@ -431,8 +395,8 @@ export const CANONICAL_PRESET_FIELDS = new Set([
  * 这样任何不在 ST 预设定义中的字段（扩展注入、ST 新字段、字段名拼写差异等）
  * 都不会参与比较，从根本上根治"修改1个参数却显示10个字段变化"的问题。
  *
- * ⚠️ 此函数不改变快照存储格式（向后兼容）。
- *    只在 compareScalars() 中调用，对旧快照和新快照均适用，无需数据迁移。
+ * 快照采集阶段也使用相同核心契约；这里仅提取标量字段，结构化的
+ * prompts / prompt_order / extensions 仍由专用摘要逻辑处理。
  *
  * @param {object} preset - 规范化后的预设对象
  * @returns {object} 只包含 canonical 字段的新对象
@@ -441,6 +405,9 @@ export function extractCanonicalForDiff(preset) {
     if (!preset || typeof preset !== 'object') return {};
     const result = {};
     for (const key of CANONICAL_PRESET_FIELDS) {
+        if (key === 'prompts' || key === 'prompt_order' || key === 'extensions' || key === 'bias_preset_selected') {
+            continue;
+        }
         if (key in preset) {
             result[key] = preset[key];
         }
@@ -550,9 +517,10 @@ export const DISPLAY_IGNORED_FIELDS = new Set([
  * 只包含预设参数（采样参数、prompts、prompt_order、extensions 等）。
  *
  * @param {object} preset - 原始预设对象（oai_settings 快照）
+ * @param {{apiId?: string}} [options] 当前预设 API 类型
  * @returns {object} 清理后的安全预设对象
  */
-export function sanitizePresetForExport(preset) {
+export function sanitizePresetForExport(preset, { apiId = 'openai' } = {}) {
     if (!preset || typeof preset !== 'object') return {};
     // 1. 规范化字段名（temp_openai → temperature 等）
     const cleaned = normalizePresetFields(preset);
@@ -567,7 +535,7 @@ export function sanitizePresetForExport(preset) {
     // 所有哈希、摘要与保存路径必须共享同一份 canonical 数据。
     // canonicalizePreset 只对已知数值/布尔控件做字段感知的类型规范化；
     // Prompt、extensions 和文本框内容保持原类型，避免篡改用户文本。
-    return canonicalizePreset(cleaned, { apiId: 'openai' }).canonical;
+    return canonicalizePreset(cleaned, { apiId }).canonical;
 }
 
 /**
@@ -677,7 +645,7 @@ export function getPresetSnapshot(presetName) {
                 logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (live memory data)`);
                 _lastSnapshotPath = `live:${apiId}`;
             }
-            return sanitizePresetForExport(cloneDeepSafe(live));
+            return sanitizePresetForExport(cloneDeepSafe(live), { apiId });
         }
     }
 
@@ -691,7 +659,7 @@ export function getPresetSnapshot(presetName) {
                     logger.debug('[getPresetSnapshot] using ctx.chatCompletionSettings (fallback)');
                     _lastSnapshotPath = 'ctx-ccs';
                 }
-                return sanitizePresetForExport(cloneDeepSafe(ctx.chatCompletionSettings));
+                return sanitizePresetForExport(cloneDeepSafe(ctx.chatCompletionSettings), { apiId });
             }
         } catch (_) { /* ignore */ }
     }
@@ -706,7 +674,7 @@ export function getPresetSnapshot(presetName) {
                     logger.debug('[getPresetSnapshot] using window.oai_settings (fallback)');
                     _lastSnapshotPath = 'oai-global';
                 }
-                return sanitizePresetForExport(cloneDeepSafe(oai));
+                return sanitizePresetForExport(cloneDeepSafe(oai), { apiId });
             }
         } catch (_) { /* ignore */ }
     }
@@ -733,7 +701,7 @@ export function getPresetSnapshot(presetName) {
                 }
 
                 if (isUsable(presetData)) {
-                    return sanitizePresetForExport(cloneDeepSafe(presetData));
+                    return sanitizePresetForExport(cloneDeepSafe(presetData), { apiId });
                 }
             }
         } catch (e) {
@@ -746,7 +714,7 @@ export function getPresetSnapshot(presetName) {
     if (typeof pm.getPresetSettings === 'function') {
         const raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
         if (isUsable(raw)) {
-            return sanitizePresetForExport(cloneDeepSafe(raw));
+            return sanitizePresetForExport(cloneDeepSafe(raw), { apiId });
         }
     }
 
@@ -833,7 +801,7 @@ export function getLivePresetSnapshot(apiId = null) {
     const list = safeCall(() => pm.getPresetList(id), null, 'getPresetList-live-capture');
     const live = list?.settings;
     if (!live || typeof live !== 'object' || Object.keys(live).length === 0) return null;
-    return sanitizePresetForExport(cloneDeepSafe(live));
+    return sanitizePresetForExport(cloneDeepSafe(live), { apiId: id });
 }
 
 /**

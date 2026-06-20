@@ -49,7 +49,31 @@ test('adds v2 changed paths to an otherwise empty legacy summary', () => {
     assert.deepEqual(getSnapshotSummary(snapshot), {
         isFirst: false,
         sections: [],
-        rawChangedPaths: ['tool_choice', 'extensions.foo'],
+        rawChangedPaths: ['extensions.foo'],
     });
     assert.equal(snapshot.summary.rawChangedPaths, undefined, 'projection must not mutate stored snapshots');
+});
+
+test('removes runtime-only paths and field rows from legacy summaries', () => {
+    const summary = getSnapshotSummary({
+        apiId: 'openai',
+        summary: {
+            isFirst: false,
+            sections: [{
+                kind: 'field',
+                items: [{
+                    key: 'additional_parameters_by_source.custom.exclude_body',
+                    kind: 'scalar',
+                    from: { a: 1 },
+                    to: { a: 2 },
+                }],
+            }],
+            rawChangedPaths: ['additional_parameters_by_source.custom.exclude_body'],
+        },
+    });
+
+    assert.deepEqual(summary.sections, []);
+    assert.deepEqual(summary.rawChangedPaths, []);
+    assert.deepEqual(summary.ignoredPaths, ['additional_parameters_by_source.custom.exclude_body']);
+    assert.equal(summary.onlyIgnoredChanges, true);
 });

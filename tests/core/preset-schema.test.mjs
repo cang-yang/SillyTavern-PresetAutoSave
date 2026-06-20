@@ -30,11 +30,13 @@ test('normalizes nested values without changing semantic array order', () => {
     const result = canonicalizePreset(input);
 
     assert.deepEqual(result.canonical, {
-        a: '02',
         stream_openai: true,
-        nested: { a: '', z: '3.5' },
         prompts: [{ identifier: 'second' }, { identifier: 'first' }],
     });
+    assert.deepEqual(result.ignored, [
+        { path: 'a', reason: 'runtime-or-unknown-setting' },
+        { path: 'nested', reason: 'runtime-or-unknown-setting' },
+    ]);
     assert.equal(input.stream_openai, 'true');
     assert.equal(input.nested.z, '3.5');
 });
@@ -81,4 +83,31 @@ test('classifies official model-list presentation controls as connection setting
 
     assert.deepEqual(result.canonical, { temperature: 1 });
     assert.deepEqual(result.ignored.map(item => item.path), ['group_models', 'sort_models']);
+});
+
+test('rejects unknown OpenAI runtime trees while preserving extension-owned data', () => {
+    const result = canonicalizePreset({
+        temperature: 0.7,
+        additional_parameters_by_source: {
+            custom: { exclude_body: { transient: true, source: 'runtime' } },
+        },
+        extensions: { user_plugin: { enabled: true } },
+    }, { apiId: 'openai' });
+
+    assert.deepEqual(result.canonical, {
+        extensions: { user_plugin: { enabled: true } },
+        temperature: 0.7,
+    });
+    assert.deepEqual(result.ignored, [{
+        path: 'additional_parameters_by_source',
+        reason: 'runtime-or-unknown-setting',
+    }]);
+});
+
+test('keeps unknown fields for non-OpenAI preset families without a native field contract', () => {
+    const result = canonicalizePreset({ sampler_order: [6, 0, 1], temperature: 0.7 }, {
+        apiId: 'textgenerationwebui',
+    });
+    assert.deepEqual(result.canonical, { sampler_order: [6, 0, 1], temperature: 0.7 });
+    assert.deepEqual(result.ignored, []);
 });

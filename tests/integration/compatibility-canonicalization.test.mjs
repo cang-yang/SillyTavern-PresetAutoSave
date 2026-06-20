@@ -38,6 +38,29 @@ test('snapshot sanitization uses the canonical schema without dropping preset co
     });
 });
 
+test('live OpenAI runtime state and native save payload converge to one snapshot schema', () => {
+    const live = sanitizePresetForExport({
+        temperature: '0.8',
+        prompts: [{ identifier: 'main', content: 'hello' }],
+        prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+        additional_parameters_by_source: {
+            custom: { exclude_body: { transient: true, source: 'runtime' } },
+        },
+        bias_presets: { Default: [] },
+        bias_preset_selected: 'Default (none)',
+        custom_exclude_body: '- frequency_penalty',
+    }, { apiId: 'openai' });
+    const native = sanitizePresetForExport({
+        temperature: 0.8,
+        prompts: [{ identifier: 'main', content: 'hello' }],
+        prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+    }, { apiId: 'openai' });
+
+    assert.deepEqual(live, native);
+    assert.equal('additional_parameters_by_source' in live, false);
+    assert.equal('bias_preset_selected' in live, false);
+});
+
 test('savePresetSafe treats the official undefined return value as success', async () => {
     const calls = [];
     const presetManager = {
