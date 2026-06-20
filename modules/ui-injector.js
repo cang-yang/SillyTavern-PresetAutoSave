@@ -13,6 +13,7 @@ import { getSettings, onSettingChange } from './settings.js';
 import { on, getEventType, t } from './compatibility.js';
 import { registerStatusSetter } from './auto-save.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
+import { applyStatusIndicatorState, STATUS_INDICATOR_STATES } from './core/status-indicator.js';
 
 // =====================================================
 // 常量
@@ -256,11 +257,12 @@ function injectStatusDots() {
 function createStatusDot(apiId, dotId) {
     const dot = document.createElement('span');
     dot.id = dotId;
-    dot.className = `${STATUS_DOT_CLASS} pas-status-idle`;
-    dot.title = statusLabel('idle');
+    dot.className = STATUS_DOT_CLASS;
     dot.setAttribute('data-pas-element', 'status-dot');
     dot.setAttribute('data-api-id', apiId);
+    dot.setAttribute('role', 'status');
     dot.setAttribute('aria-live', 'polite');
+    applyStatusIndicatorState(dot, 'idle', statusLabel('idle'));
     return dot;
 }
 
@@ -276,19 +278,12 @@ function updateStatusDotVisibility() {
 // 状态切换（供 auto-save 调用）
 // =====================================================
 export function setStatusDot(state) {
-    const validStates = ['idle', 'pending', 'saving', 'saved', 'error'];
-    if (!validStates.includes(state)) return;
+    if (!STATUS_INDICATOR_STATES.includes(state)) return;
 
     const label = statusLabel(state);
     const dots = document.querySelectorAll(`.${STATUS_DOT_CLASS}`);
     for (const dot of dots) {
-        // 去重：如果已经在目标状态，跳过 DOM 操作（消除无效 classList 闪烁）
-        const targetClass = `pas-status-${state}`;
-        if (dot.classList.contains(targetClass)) continue;
-
-        validStates.forEach(s => dot.classList.remove(`pas-status-${s}`));
-        dot.classList.add(targetClass);
-        dot.title = label;
+        applyStatusIndicatorState(dot, state, label);
     }
 
     // saved/error 状态自动恢复 idle

@@ -24,6 +24,10 @@ import {
 import {
     escapeHtml, escapeAttr,
 } from './panel-summary.js';
+import {
+    buildGroupManagerSummary,
+    filterGroupingNodes,
+} from './core/group-manager-view-model.js';
 
 // =====================================================
 // 常量
@@ -42,6 +46,9 @@ let _gmAllNames = [];
 let _gmPanelCtx = null;
 /** @type {Set<string>} 尚未有预设的自定义空分组名（AQ-1） */
 let _pendingCustomGroups = new Set();
+let _gmSearchQuery = '';
+let _gmExpandedKeys = new Set();
+let _gmSearchTimer = null;
 
 // =====================================================
 // 分组管理弹窗状态 getter/setter
@@ -58,6 +65,10 @@ export function setGroupingManagerPopup(v) { _groupingManagerPopup = v; }
 export function clearGroupingManagerState() {
     _gmOverrides = {};
     _pendingCustomGroups.clear();
+    _gmSearchQuery = '';
+    _gmExpandedKeys.clear();
+    if (_gmSearchTimer) clearTimeout(_gmSearchTimer);
+    _gmSearchTimer = null;
 }
 
 // =====================================================
@@ -324,6 +335,115 @@ function renderNestedGroupingHTML(rootNodes) {
 </div>`;
 }
 
+function flattenGroupingNodes(rootNodes) {
+    const flattened = [];
+    const visit = node => {
+        flattened.push({
+            key: node.key,
+            displayName: node.displayName,
+            depth: node.depth || 0,
+            items: (node.items || []).map(presetName => ({
+                presetName,
+                manualOverride: !!_gmOverrides[presetName],
+            })),
+        });
+        for (const child of node.children || []) visit(child);
+    };
+    for (const node of rootNodes || []) visit(node);
+    return flattened;
+}
+
+function normalizeGroupingNodes(groups) {
+    return (groups || []).map(group => ({
+        key: normalizeSeriesKey(group.series),
+        displayName: group.series,
+        depth: 0,
+        items: (group.items || []).map(item => ({
+            presetName: item.presetName,
+            manualOverride: !!item.manualOverride,
+        })),
+    }));
+}
+
+function appendPendingGroups(nodes) {
+    const known = new Set(nodes.map(node => node.key));
+    for (const name of _pendingCustomGroups) {
+        const key = normalizeSeriesKey(name);
+        if (!known.has(key)) {
+            nodes.push({ key, displayName: name, depth: 0, items: [], pending: true });
+        }
+    }
+    return nodes;
+}
+
+function renderModernPresetRows(node) {
+    if (!node.items.length) {
+        return `<div class="pas-gm-empty">${escapeHtml(t('Grouping Empty Series'))}</div>`;
+    }
+    return node.items.map(item => {
+        const manual = item.manualOverride
+            ? `<span class="pas-gm-origin pas-gm-origin-manual" title="${escapeAttr(t('Grouping Manual Override'))}"><i class="fa-solid fa-link"></i><span>${escapeHtml(t('Grouping Manual Short'))}</span></span>`
+            : '';
+        return `<div class="pas-gm-preset" draggable="true"
+            data-preset-name="${escapeAttr(item.presetName)}"
+            data-series-key="${escapeAttr(node.key)}">
+            <span class="pas-gm-preset-name" title="${escapeAttr(item.presetName)}">${escapeHtml(item.presetName)}</span>
+            ${manual}
+            <button class="pas-gm-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Preset Actions'))}"><i class="fa-solid fa-ellipsis"></i></button>
+        </div>`;
+    }).join('');
+}
+
+function renderModernGroupingHTML(nodes) {
+    const allNodes = appendPendingGroups([...nodes]);
+    const summary = buildGroupManagerSummary(allNodes);
+    const visibleNodes = filterGroupingNodes(allNodes, _gmSearchQuery);
+    const searching = !!_gmSearchQuery.trim();
+    const nestingEnabled = !!getSettings().nestingEnabled;
+
+    const cards = visibleNodes.map(node => {
+        const expanded = searching || _gmExpandedKeys.has(node.key);
+        const isCustom = node.pending || (node.items.length > 0 && node.items.every(item => item.manualOverride));
+        const indent = Math.min(Number(node.depth) || 0, 3);
+        return `<section class="pas-gm-series${expanded ? '' : ' collapsed'}${indent ? ' pas-gm-nested' : ''}"
+            data-series-key="${escapeAttr(node.key)}" data-depth="${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
+            <div class="pas-gm-series-header" role="button" tabindex="0" aria-expanded="${expanded}">
+                <span class="pas-gm-series-icon"><i class="fa-regular fa-folder${expanded ? '-open' : ''}"></i></span>
+                ${nestingEnabled ? `<span class="pas-gm-drag-handle" draggable="true" title="${escapeAttr(t('Grouping Drag Handle Title'))}"><i class="fa-solid fa-grip-vertical"></i></span>` : ''}
+                <span class="pas-gm-series-name" title="${escapeAttr(node.displayName)}">${escapeHtml(node.displayName)}</span>
+                ${isCustom ? `<span class="pas-gm-origin" title="${escapeAttr(t('Grouping Custom Badge'))}"><i class="fa-solid fa-wand-magic-sparkles"></i></span>` : ''}
+                <span class="pas-gm-series-count">${node.items.length}</span>
+                <button class="pas-gm-series-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Group Actions'))}"><i class="fa-solid fa-ellipsis"></i></button>
+                <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
+            </div>
+            <div class="pas-gm-series-body">${expanded ? renderModernPresetRows(node) : ''}</div>
+        </section>`;
+    }).join('');
+
+    const empty = `<div class="pas-gm-no-results"><i class="fa-solid fa-magnifying-glass"></i><span>${escapeHtml(t('Grouping No Results'))}</span></div>`;
+    return `<div class="pas-gm-popup">
+        <div class="pas-gm-header">
+            <div class="pas-gm-header-left"><span class="pas-gm-title-icon"><i class="fa-solid fa-layer-group"></i></span><div><h3>${escapeHtml(t('Grouping Manage Title'))}</h3><p>${escapeHtml(t('Grouping Manage Desc'))}</p></div></div>
+            <div class="pas-gm-header-actions">
+                <button class="pas-gm-new-group-btn" type="button" aria-label="${escapeAttr(t('Grouping New Group Btn'))}"><i class="fa-solid fa-plus"></i><span>${escapeHtml(t('Grouping New Group Btn'))}</span></button>
+                <button class="pas-gm-reset-all-btn" type="button" title="${escapeAttr(t('Grouping Reset All'))}" aria-label="${escapeAttr(t('Grouping Reset All'))}"><i class="fa-solid fa-arrow-rotate-left"></i><span>${escapeHtml(t('Grouping Reset All'))}</span></button>
+            </div>
+        </div>
+        <div class="pas-gm-toolbar">
+            <label class="pas-gm-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" value="${escapeAttr(_gmSearchQuery)}" placeholder="${escapeAttr(t('Grouping Search Placeholder'))}" aria-label="${escapeAttr(t('Grouping Search Placeholder'))}" autocomplete="off"></label>
+        </div>
+        <div class="pas-gm-body">
+            <div class="pas-gm-summary">
+                <span><strong>${summary.groups}</strong>${escapeHtml(t('Grouping Summary Groups'))}</span>
+                <span><strong>${summary.presets}</strong>${escapeHtml(t('Grouping Summary Presets'))}</span>
+                <span><strong>${summary.manual}</strong>${escapeHtml(t('Grouping Summary Manual'))}</span>
+            </div>
+            <div class="pas-gm-list">${cards || empty}</div>
+        </div>
+        <div class="pas-gm-auto-zone" data-series="__auto__"><i class="fa-solid fa-wand-magic-sparkles"></i><div><strong>${escapeHtml(t('Grouping Auto Zone Title'))}</strong><span>${escapeHtml(t('Grouping Auto Zone Hint'))}</span></div></div>
+    </div>`;
+}
+
 /**
  * 保存分组设置到 extensionSettings（AI-0 极简化：只保存 overrides；嵌套模式下同步 groupingTree）
  * @param {object} overrides - groupingManualOverrides 映射
@@ -560,20 +680,15 @@ function performResetAll(container) {
 function refreshGroupingUI(container) {
     if (!container) return;
     // Bug A: 保存当前展开状态，避免 innerHTML 重建后全部收起
-    const expandedKeys = new Set();
-    container.querySelectorAll('.pas-gm-series:not(.collapsed)').forEach(card => {
-        const key = card.getAttribute('data-series-key');
-        if (key) expandedKeys.add(key);
-    });
     const settings = getSettings();
     let html;
     if (settings.nestingEnabled) {
         const tree = settings.groupingTree || {};
         const rootNodes = buildNestedGroupTree(_gmAllNames, _gmOverrides, tree, settings.nestingMaxDepth);
-        html = renderNestedGroupingHTML(rootNodes);
+        html = renderModernGroupingHTML(flattenGroupingNodes(rootNodes));
     } else {
         const { groups } = buildGroupingData();
-        html = renderGroupingHTML(groups);
+        html = renderModernGroupingHTML(normalizeGroupingNodes(groups));
     }
     // P1-5: 合并为单次 innerHTML 赋值，消除中间 tempDiv DOM 解析
     const tempDiv = document.createElement('div');
@@ -591,12 +706,6 @@ function refreshGroupingUI(container) {
         oldAutoZone.replaceWith(newAutoZone);
     }
     // Bug A: 恢复展开状态
-    container.querySelectorAll('.pas-gm-series').forEach(card => {
-        const key = card.getAttribute('data-series-key');
-        if (key && expandedKeys.has(key)) {
-            card.classList.remove('collapsed');
-        }
-    });
     // 重新绑定事件
     bindGroupingEvents(container);
 }
@@ -1292,12 +1401,34 @@ function bindClickEvents(container) {
         newGroupBtn.onclick = () => onCreateCustomGroup(container);
     }
 
+    const searchInput = container.querySelector('.pas-gm-search input');
+    if (searchInput) {
+        searchInput.oninput = () => {
+            _gmSearchQuery = searchInput.value;
+            if (_gmSearchTimer) clearTimeout(_gmSearchTimer);
+            _gmSearchTimer = setTimeout(() => {
+                _gmSearchTimer = null;
+                refreshGroupingUI(container);
+            }, 100);
+        };
+    }
+
     // --- 折叠/展开系列卡片 ---
     container.querySelectorAll('.pas-gm-series-header').forEach(header => {
-        header.addEventListener('click', (e) => {
+        const toggle = (e) => {
             if (e.target.closest('.pas-gm-menu-btn') || e.target.closest('.pas-gm-series-menu-btn')) return;
             const series = header.closest('.pas-gm-series');
-            if (series) series.classList.toggle('collapsed');
+            const key = series?.getAttribute('data-series-key');
+            if (!key) return;
+            if (_gmExpandedKeys.has(key)) _gmExpandedKeys.delete(key);
+            else _gmExpandedKeys.add(key);
+            refreshGroupingUI(container);
+        };
+        header.addEventListener('click', toggle);
+        header.addEventListener('keydown', e => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            toggle(e);
         });
     });
     // --- 右键菜单（同预设级 ⋯ 菜单） ---
@@ -1375,9 +1506,9 @@ export async function showGroupingManager(panelCtx) {
     if (settings.nestingEnabled) {
         const tree = settings.groupingTree || {};
         const rootNodes = buildNestedGroupTree(_gmAllNames, _gmOverrides, tree, settings.nestingMaxDepth);
-        html = renderNestedGroupingHTML(rootNodes);
+        html = renderModernGroupingHTML(flattenGroupingNodes(rootNodes));
     } else {
-        html = renderGroupingHTML(groups);
+        html = renderModernGroupingHTML(normalizeGroupingNodes(groups));
     }
 
     _groupingManagerPopup = createPopupSafe(html, 'DISPLAY', {

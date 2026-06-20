@@ -28,6 +28,7 @@ import { createChangeSet, assertExplainableChange } from './core/change-set.js';
 import { canonicalizePreset } from './core/preset-schema.js';
 import { HistoryRepository } from './core/history-repository.js';
 import { SerialTaskQueue } from './core/serial-task-queue.js';
+import { emitHistoryChange } from './core/history-change-events.js';
 import {
     applyHistoryImportPlan,
     buildHistoryImportPlan,
@@ -731,6 +732,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
             list[0] = merged;
             await safeSetItem(key, list);
             logger.debug(`Snapshot merged (within ${settings.mergeWindowSec}s): ${presetName}`);
+            emitHistoryChange({ type: 'snapshot-updated', snapshot: merged });
             return merged;
         }
     }
@@ -759,6 +761,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
     await safeSetItem(key, list);
     const desc = describeSummaryForLog(summary);
     logger.debug(`Snapshot added: ${presetName} (total: ${list.length}/${max}) ${desc}`);
+    emitHistoryChange({ type: 'snapshot-added', snapshot });
     return snapshot;
 }
 

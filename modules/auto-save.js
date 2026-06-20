@@ -38,21 +38,14 @@ import { getDeferredSaveDelay } from './core/deferred-save.js';
 import { commitPresetSave, PresetSaveTransactionError } from './core/save-transaction.js';
 import { createJsonFingerprint } from './core/json-fingerprint.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
+import { observeNativePresetSaves } from './core/native-preset-save-observer.js';
+import { resolveNativePresetSaveTarget } from './core/native-preset-save-target.js';
+import { PRESET_WATCH_SELECTORS, isInsidePresetWatchArea } from './core/preset-dom-watch.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
 // =====================================================
-const WATCH_SELECTORS = [
-    '#openai_settings',
-    '#completion_prompt_manager',
-    '#range_block_openai',
-    '#textgenerationwebui_api-settings',
-    '#range_block_textgenerationwebui',
-    '#kobold_api-settings',
-    '#range_block_kobold',
-    '#novel_api-settings',
-    '#range_block_novel',
-];
+const WATCH_SELECTORS = PRESET_WATCH_SELECTORS;
 
 // Prompt Manager 区域 - 需要单独监听（弹窗保存按钮 click 等）
 const PROMPT_MANAGER_SELECTORS = [
@@ -116,6 +109,7 @@ let _containerRebindTimer = null;     // 节流定时器
 let _switchCaptureBound = false;      // preset selects live outside several settings containers
 let _settingUnsubscribe = null;       // 设置变更订阅
 let _eventUnsubscribers = [];         // ST 事件订阅取消函数集合
+let _nativeSaveUnsubscribe = null;
 let _promptObserver = null;           // Prompt Manager 区域 MutationObserver
 let _pollingTimer = null;             // 兜底轮询计时器
 const _runtimeTimers = new RuntimeTimerRegistry(); // 生命周期相关的延迟回调
@@ -169,6 +163,11 @@ export async function initAutoSave() {
 
     // 绑定 ST 事件（包含 SETTINGS_UPDATED + 切换/预设变更）
     bindPresetEvents();
+    _nativeSaveUnsubscribe = observeNativePresetSaves({
+        onSaved: recordNativeManualSave,
+        onError: error => logger.error('Native manual preset snapshot failed:', error),
+        shouldCapture: () => !_isInternalSave && !_restoreInProgress,
+    });
 
     // 监听设置变更（动态启用/禁用 + polling 联动）
     _settingUnsubscribe = onSettingChange(({ key, newValue }) => {
@@ -381,15 +380,7 @@ function unbindDOMListeners() {
  * 判断元素是否在我们关心的区域内（容器级监听后这只是双保险）
  */
 function isInWatchedArea(element) {
-    if (!element || !element.closest) return false;
-    for (const selector of WATCH_SELECTORS) {
-        try {
-            if (element.closest(selector)) return true;
-        } catch (_) {
-            // 无效 selector 忽略
-        }
-    }
-    return false;
+    return isInsidePresetWatchArea(element);
 }
 
 /**
@@ -1083,6 +1074,34 @@ export async function saveNow(trigger = TRIGGER.MANUAL) {
     return await doSave(trigger, 'manual');
 }
 
+async function recordNativeManualSave({ apiId, name, preset }) {
+    if (!_enabled || _restoreInProgress) return null;
+
+    cancelPendingSave();
+    const coordinator = _saveCoordinator;
+    if (coordinator) await coordinator.whenIdle();
+
+    const target = resolveNativePresetSaveTarget(
+        { apiId, name },
+        { apiId: _currentApiId, presetName: _currentPresetName },
+    );
+    const snapshot = await addSnapshot(target.presetName, target.apiId, preset, TRIGGER.MANUAL);
+    if (!snapshot) return null;
+
+    if (sameSaveTarget(
+        target,
+        { apiId: _currentApiId, presetName: _currentPresetName },
+    )) {
+        _lastSavedHash = snapshot.hash;
+        _lastQuickFingerprint = _computeQuickFingerprint(apiId);
+        _dirty = false;
+        _setStatus('saved');
+    }
+    _stats.saved++;
+    logger.info(`[Native manual save] Snapshot recorded for [${target.apiId}] ${target.presetName}`);
+    return snapshot;
+}
+
 /**
  * 关键字段指纹：让用户能从日志判断"哪个字段刚刚被改了"
  * 输出：长度（prompt array）+ 几个常见 toggle 的真实值
@@ -1531,6 +1550,10 @@ export async function teardown() {
         try { typeof unsub === 'function' && unsub(); } catch (_) {}
     }
     _eventUnsubscribers = [];
+    if (_nativeSaveUnsubscribe) {
+        _nativeSaveUnsubscribe();
+        _nativeSaveUnsubscribe = null;
+    }
 
     if (_ignoreInputTimer) {
         clearTimeout(_ignoreInputTimer);

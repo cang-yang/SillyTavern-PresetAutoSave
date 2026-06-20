@@ -19,6 +19,7 @@ import {
 import {
     getAllSnapshots,
 } from './history-store.js';
+import { onHistoryChange } from './core/history-change-events.js';
 import {
     confirmSafe, toast, t,
     getCurrentApiId, getSelectedPresetName,
@@ -80,6 +81,8 @@ let _popup = null;
 let _root = null;
 let _logUnsubscribe = null;
 let _logRefreshTimer = null;
+let _historyRefreshUnsubscribe = null;
+let _historyRefreshTimer = null;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
 let _panelEventBindings = [];  // [{ event, handler }] 用于 popup 关闭时退订
 
@@ -266,6 +269,14 @@ export async function showHistoryPanel() {
         if (_logRefreshTimer) {
             clearTimeout(_logRefreshTimer);
             _logRefreshTimer = null;
+        }
+        if (_historyRefreshUnsubscribe) {
+            _historyRefreshUnsubscribe();
+            _historyRefreshUnsubscribe = null;
+        }
+        if (_historyRefreshTimer) {
+            clearTimeout(_historyRefreshTimer);
+            _historyRefreshTimer = null;
         }
         // 取消所有面板内的事件订阅（预设切换等）
         for (const { event, handler } of _panelEventBindings) {
@@ -884,6 +895,18 @@ function switchTab(tabName) {
         t.classList.toggle('pas-tab-active', active);
         t.setAttribute('aria-selected', String(active));
         t.tabIndex = active ? 0 : -1;
+    });
+
+    _historyRefreshUnsubscribe = onHistoryChange(() => {
+        if (!_root || _historyRefreshTimer) return;
+        _historyRefreshTimer = setTimeout(async () => {
+            _historyRefreshTimer = null;
+            try {
+                await refreshData();
+            } catch (e) {
+                logger.debug('[Panel] history change refresh failed:', e);
+            }
+        }, 60);
     });
     $$('.pas-tab-content').forEach(c => {
         const active = c.getAttribute('data-content') === tabName;
