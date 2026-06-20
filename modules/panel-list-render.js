@@ -902,7 +902,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
             const iconStyle = isCurrent ? ' style="color: var(--pas-c-pin)"' : '';
             const pillBgStyle = isCurrent ? ' style="background: rgba(245, 158, 11, 0.16)"' : '';
 
-            return `<div class="pas-series-group pas-series-nested" data-series-key="${escapeAttr(node.key)}" style="margin-left:${indentPx}px; border-left:${borderLeft}; padding-left:${node.depth > 0 ? '8px' : '0'};">
+            return `<div class="pas-series-group pas-series-nested${isCurrent ? ' pas-series-current-node' : ''}" data-series-key="${escapeAttr(node.key)}" style="margin-left:${indentPx}px; border-left:${borderLeft}; padding-left:${node.depth > 0 ? '8px' : '0'};">
                 <div class="pas-series-header" data-action="toggle-series" role="button" tabindex="0" aria-expanded="${isExpanded}">
                     <div class="pas-series-header-row pas-series-header-row-title">
                         <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>

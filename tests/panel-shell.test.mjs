@@ -38,6 +38,7 @@ test('manifest loads the layered panel stylesheet and mobile keeps tab labels', 
     const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
     const indexCss = await readFile(new URL('../styles/index.css', import.meta.url), 'utf8');
     const panelCss = await readFile(new URL('../styles/panel-v4.css', import.meta.url), 'utf8');
+    const panelRenderer = await readFile(new URL('../modules/panel-list-render.js', import.meta.url), 'utf8');
     assert.equal(manifest.css, 'styles/index.css');
     assert.match(indexCss, /@import url\('\.\.\/style\.css'\)/);
     assert.match(indexCss, /@import url\('\.\/panel-v4\.css'\)/);
@@ -46,5 +47,11 @@ test('manifest loads the layered panel stylesheet and mobile keeps tab labels', 
     assert.match(panelCss, /\.pas-filter\s*>\s*span\s*\{\s*display:\s*inline\s*!important/);
     assert.match(panelCss, /min-height:\s*44px/);
     assert.match(panelCss, /--pas-v4-accent:\s*#8b5cf6/);
+    assert.match(panelCss, /--pas-v4-current:\s*#f59e0b/);
+    assert.match(panelCss, /\.pas-version-group\.pas-version-current[\s\S]*?var\(--pas-v4-current\)/);
+    assert.match(panelCss, /content-visibility:\s*visible/);
+    assert.match(panelCss, /height:\s*100svh\s*!important/);
+    assert.match(panelCss, /@media \(hover:\s*none\), \(pointer:\s*coarse\)/);
+    assert.match(panelRenderer, /pas-series-current-node/);
     assert.doesNotMatch(panelCss, /--pas-v4-accent:\s*var\(--SmartThemeQuoteColor/);
 });
