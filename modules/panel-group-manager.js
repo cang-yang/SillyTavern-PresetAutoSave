@@ -28,6 +28,7 @@ import {
     buildGroupManagerSummary,
     filterGroupingNodes,
 } from './core/group-manager-view-model.js';
+import { DragHoverExpander } from './core/drag-hover-expander.js';
 
 // =====================================================
 // 常量
@@ -49,6 +50,8 @@ let _pendingCustomGroups = new Set();
 let _gmSearchQuery = '';
 let _gmExpandedKeys = new Set();
 let _gmSearchTimer = null;
+let _gmDragPayload = null;
+const _gmHoverExpander = new DragHoverExpander({ delay: 450 });
 
 // =====================================================
 // 分组管理弹窗状态 getter/setter
@@ -67,6 +70,8 @@ export function clearGroupingManagerState() {
     _pendingCustomGroups.clear();
     _gmSearchQuery = '';
     _gmExpandedKeys.clear();
+    _gmDragPayload = null;
+    _gmHoverExpander.cancelAll();
     if (_gmSearchTimer) clearTimeout(_gmSearchTimer);
     _gmSearchTimer = null;
 }
@@ -337,17 +342,20 @@ function renderNestedGroupingHTML(rootNodes) {
 
 function flattenGroupingNodes(rootNodes) {
     const flattened = [];
-    const visit = node => {
+    const visit = (node, parent = null) => {
         flattened.push({
             key: node.key,
             displayName: node.displayName,
             depth: node.depth || 0,
+            parentKey: parent?.key || null,
+            parentName: parent?.displayName || '',
+            hasChildren: !!node.children?.length,
             items: (node.items || []).map(presetName => ({
                 presetName,
                 manualOverride: !!_gmOverrides[presetName],
             })),
         });
-        for (const child of node.children || []) visit(child);
+        for (const child of node.children || []) visit(child, node);
     };
     for (const node of rootNodes || []) visit(node);
     return flattened;
@@ -405,9 +413,13 @@ function renderModernGroupingHTML(nodes) {
         const expanded = searching || _gmExpandedKeys.has(node.key);
         const isCustom = node.pending || (node.items.length > 0 && node.items.every(item => item.manualOverride));
         const indent = Math.min(Number(node.depth) || 0, 3);
+        const relationship = indent
+            ? `<span class="pas-gm-tree-relation"><i class="fa-solid fa-turn-up"></i><span>${escapeHtml(node.parentName || '')}</span></span>`
+            : '';
         return `<section class="pas-gm-series${expanded ? '' : ' collapsed'}${indent ? ' pas-gm-nested' : ''}"
-            data-series-key="${escapeAttr(node.key)}" data-depth="${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
+            data-series-key="${escapeAttr(node.key)}" data-depth="${indent}" data-drop-label="${escapeAttr(t('Grouping Drag Hint'))}" style="--pas-gm-depth:${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
             <div class="pas-gm-series-header" role="button" tabindex="0" aria-expanded="${expanded}">
+                ${relationship}
                 <span class="pas-gm-series-icon"><i class="fa-regular fa-folder${expanded ? '-open' : ''}"></i></span>
                 ${nestingEnabled ? `<span class="pas-gm-drag-handle" draggable="true" title="${escapeAttr(t('Grouping Drag Handle Title'))}"><i class="fa-solid fa-grip-vertical"></i></span>` : ''}
                 <span class="pas-gm-series-name" title="${escapeAttr(node.displayName)}">${escapeHtml(node.displayName)}</span>
@@ -416,7 +428,7 @@ function renderModernGroupingHTML(nodes) {
                 <button class="pas-gm-series-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Group Actions'))}"><i class="fa-solid fa-ellipsis"></i></button>
                 <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
             </div>
-            <div class="pas-gm-series-body">${expanded ? renderModernPresetRows(node) : ''}</div>
+            <div class="pas-gm-series-body">${renderModernPresetRows(node)}</div>
         </section>`;
     }).join('');
 
@@ -1040,6 +1052,25 @@ async function onCreateSubGroup(parentKey, container) {
 
 // P1-6: bindDragEvents — 拖拽相关事件（分组拖拽 + 预设拖拽 + 拖放目标）
 function bindDragEvents(container) {
+    const expandCard = card => {
+        const key = card?.getAttribute('data-series-key');
+        if (!key || !card.classList.contains('collapsed')) return;
+        _gmExpandedKeys.add(key);
+        card.classList.remove('collapsed');
+        card.querySelector('.pas-gm-series-header')?.setAttribute('aria-expanded', 'true');
+        const icon = card.querySelector('.pas-gm-series-icon i');
+        icon?.classList.remove('fa-folder');
+        icon?.classList.add('fa-folder-open');
+    };
+    const finishDrag = () => {
+        _gmDragPayload = null;
+        _gmHoverExpander.cancelAll();
+        container.classList.remove('pas-gm-drag-active');
+        container.querySelectorAll('.pas-gm-drop-zone, .pas-gm-drop-target, .drag-over').forEach(el => {
+            el.classList.remove('pas-gm-drop-zone', 'pas-gm-drop-target', 'drag-over');
+            el.removeAttribute('data-drop-kind');
+        });
+    };
     // --- 分组卡片拖拽源（嵌套模式：从 ⋮⋮ 手柄发起分组移动） ---
     container.querySelectorAll('.pas-gm-drag-handle').forEach(handle => {
         handle.addEventListener('dragstart', (e) => {
@@ -1047,6 +1078,8 @@ function bindDragEvents(container) {
             if (!seriesCard) return;
             const seriesKey = seriesCard.getAttribute('data-series-key');
             if (!seriesKey) return;
+            _gmDragPayload = { type: 'group', seriesKey };
+            container.classList.add('pas-gm-drag-active');
             try {
                 e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'group', seriesKey }));
             } catch (_) {
@@ -1070,6 +1103,7 @@ function bindDragEvents(container) {
             });
             const autoZone = container.querySelector('.pas-gm-auto-zone');
             if (autoZone) autoZone.classList.remove('pas-gm-drop-zone', 'drag-over');
+            finishDrag();
         });
     });
 
@@ -1082,24 +1116,19 @@ function bindDragEvents(container) {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             card.classList.add('pas-gm-drop-target');
-            // hover 自动展开：拖拽悬浮在折叠的分组卡片上 600ms 后自动展开
+            card.setAttribute('data-drop-kind', _gmDragPayload?.type || 'unknown');
+            // hover 自动展开：拖拽悬浮在折叠分组上片刻后同步展开状态与内容
             if (card.classList.contains('collapsed')) {
-                if (!card._hoverExpandTimer) {
-                    card._hoverExpandTimer = setTimeout(() => {
-                        card.classList.remove('collapsed');
-                        card._hoverExpandTimer = null;
-                    }, 600);
-                }
+                const key = card.getAttribute('data-series-key');
+                _gmHoverExpander.schedule(key, () => expandCard(card));
             }
         });
 
         card.addEventListener('dragleave', (e) => {
             if (!card.contains(e.relatedTarget)) {
                 card.classList.remove('pas-gm-drop-target');
-                if (card._hoverExpandTimer) {
-                    clearTimeout(card._hoverExpandTimer);
-                    card._hoverExpandTimer = null;
-                }
+                card.removeAttribute('data-drop-kind');
+                _gmHoverExpander.cancel(card.getAttribute('data-series-key'));
             }
         });
 
@@ -1108,19 +1137,18 @@ function bindDragEvents(container) {
             // Bug C: 阻止事件冒泡，防止嵌套子卡片 drop 触发父卡片 drop
             e.stopPropagation();
             card.classList.remove('pas-gm-drop-target');
+            card.removeAttribute('data-drop-kind');
+            _gmHoverExpander.cancel(card.getAttribute('data-series-key'));
             const raw = e.dataTransfer.getData('text/plain');
-            if (!raw) return;
-            let seriesKey;
+            let data = _gmDragPayload;
             try {
-                const data = JSON.parse(raw);
-                if (data.type !== 'group') return;
-                seriesKey = data.seriesKey;
-            } catch (_) {
-                return;
-            }
+                if (raw) data = JSON.parse(raw);
+            } catch (_) {}
             const targetKey = card.getAttribute('data-series-key');
-            if (!targetKey || !seriesKey) return;
-            performMoveGroup(seriesKey, targetKey, container);
+            if (!targetKey || !data) return;
+            if (data.type === 'item' && data.presetName) performMove(data.presetName, targetKey, container);
+            if (data.type === 'group' && data.seriesKey) performMoveGroup(data.seriesKey, targetKey, container);
+            finishDrag();
         });
     });
 
@@ -1128,6 +1156,8 @@ function bindDragEvents(container) {
     container.querySelectorAll('.pas-gm-preset').forEach(presetEl => {
         presetEl.addEventListener('dragstart', (e) => {
             const presetName = presetEl.getAttribute('data-preset-name');
+            _gmDragPayload = { type: 'item', presetName };
+            container.classList.add('pas-gm-drag-active');
             try {
                 e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'item', presetName }));
             } catch (_) {
@@ -1149,6 +1179,7 @@ function bindDragEvents(container) {
             });
             const autoZone = container.querySelector('.pas-gm-auto-zone');
             if (autoZone) autoZone.classList.remove('pas-gm-drop-zone', 'drag-over');
+            finishDrag();
         });
     });
 
@@ -1164,26 +1195,20 @@ function bindDragEvents(container) {
             // hover 自动展开父卡片
             const card = body.closest('.pas-gm-series');
             if (card && card.classList.contains('collapsed')) {
-                if (!card._hoverExpandTimer) {
-                    card._hoverExpandTimer = setTimeout(() => {
-                        card.classList.remove('collapsed');
-                        card._hoverExpandTimer = null;
-                    }, 600);
-                }
+                const key = card.getAttribute('data-series-key');
+                _gmHoverExpander.schedule(key, () => expandCard(card));
             }
         });
         body.addEventListener('dragleave', (e) => {
             if (!body.contains(e.relatedTarget)) {
                 body.classList.remove('drag-over');
                 const card = body.closest('.pas-gm-series');
-                if (card && card._hoverExpandTimer) {
-                    clearTimeout(card._hoverExpandTimer);
-                    card._hoverExpandTimer = null;
-                }
+                if (card) _gmHoverExpander.cancel(card.getAttribute('data-series-key'));
             }
         });
         body.addEventListener('drop', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             body.classList.remove('drag-over');
             const raw = e.dataTransfer.getData('text/plain');
             if (!raw) return;
@@ -1200,6 +1225,7 @@ function bindDragEvents(container) {
             const targetKey = targetSeries?.getAttribute('data-series-key');
             if (!targetKey) return;
             performMove(presetName, targetKey, container);
+            finishDrag();
         });
     });
 

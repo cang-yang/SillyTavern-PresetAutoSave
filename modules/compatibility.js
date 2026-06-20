@@ -511,6 +511,10 @@ export const EXPORT_EXCLUDED_FIELDS = new Set([
     'show_external_models', 'bypass_status_check',
     'bind_preset_to_connection',
     'preset_settings_openai',
+    // Logit-bias presets are managed by ST as a separate global preset library.
+    // They are deliberately omitted from /api/presets/save and must not make a
+    // native manual save look like it deleted an object from the active preset.
+    'bias_presets', 'bias_preset_selected',
 ]);
 
 // =====================================================

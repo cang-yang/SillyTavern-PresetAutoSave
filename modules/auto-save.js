@@ -27,6 +27,7 @@ import {
     getPresetManager,
     savePresetSafe,
     syncPresetToMemory,
+    sanitizePresetForExport,
     toast,
     t,
 } from './compatibility.js';
@@ -1085,7 +1086,10 @@ async function recordNativeManualSave({ apiId, name, preset }) {
         { apiId, name },
         { apiId: _currentApiId, presetName: _currentPresetName },
     );
-    const snapshot = await addSnapshot(target.presetName, target.apiId, preset, TRIGGER.MANUAL);
+    // Native save payloads and live snapshots must share one canonical schema.
+    // In particular ST keeps bias_presets outside the completion-preset file.
+    const canonicalPreset = sanitizePresetForExport(preset);
+    const snapshot = await addSnapshot(target.presetName, target.apiId, canonicalPreset, TRIGGER.MANUAL);
     if (!snapshot) return null;
 
     if (sameSaveTarget(

@@ -470,5 +470,7 @@ export function formatSummaryValue(v) {
         if (v === '') return '∅';
         return v.length > 24 ? v.slice(0, 22) + '…' : v;
     }
+    if (Array.isArray(v)) return `列表（${v.length} 项）`;
+    if (typeof v === 'object') return `对象（${Object.keys(v).length} 项）`;
     return String(v);
 }

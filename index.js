@@ -45,6 +45,7 @@ const VERSION = '1.0.0';
 let _phase1Done = false;
 let _takeoverDone = false;
 let _phase2Done = false;
+let _runtimeReadyPromise = null;
 let _mainEventsBound = false;       // 防止 main() 中事件重复订阅
 let _mainEventUnsubscribers = [];   // main() 中订阅的事件取消函数
 const _runtimeTimers = new RuntimeTimerRegistry();
@@ -59,6 +60,7 @@ function resetLifecycleState() {
     _phase1Done = false;
     _takeoverDone = false;
     _phase2Done = false;
+    _runtimeReadyPromise = null;
     _mainEventsBound = false;
     _mainEventUnsubscribers = [];
 }
@@ -109,7 +111,7 @@ async function runTakeoverPhase() {
 async function runPhase2() {
     if (_phase2Done) return;
     if (!_phase1Done || !_takeoverDone) {
-        logger.warn('Auto-save phase deferred because its storage/takeover dependencies are not ready');
+        logger.debug('Auto-save phase is waiting for storage/takeover initialization');
         return;
     }
     _phase2Done = true;
@@ -223,12 +225,32 @@ export async function onDelete() {
     return { ...recovery, settingsCleared };
 }
 
+/**
+ * One serialized initialization path for DOM fallback and both ST lifecycle events.
+ * APP_READY can be emitted while APP_INITIALIZED work is still awaiting storage;
+ * sharing this promise turns that normal race into an await instead of a warning.
+ */
+function ensureRuntimeReady() {
+    if (_phase1Done && _takeoverDone && _phase2Done) return Promise.resolve(true);
+    if (_runtimeReadyPromise) return _runtimeReadyPromise;
+
+    _runtimeReadyPromise = (async () => {
+        await runPhase1();
+        if (!_phase1Done) return false;
+        await runTakeoverPhase();
+        if (!_takeoverDone) return false;
+        await runPhase2();
+        return _phase1Done && _takeoverDone && _phase2Done;
+    })().finally(() => {
+        _runtimeReadyPromise = null;
+    });
+    return _runtimeReadyPromise;
+}
+
 export async function onEnable() {
     logger.info('Enabled - initializing extension runtime');
     initCompatibility();
-    await runPhase1();
-    await runTakeoverPhase();
-    await runPhase2();
+    await ensureRuntimeReady();
     const ready = _phase1Done && _takeoverDone && _phase2Done;
     if (!ready) logger.warn('Enable completed with one or more initialization phases unavailable');
     return { ready };
@@ -436,7 +458,7 @@ export async function onDisable() {
             const evtInit = getEventType('APP_INITIALIZED', 'app_initialized');
             const unsub1 = on(evtInit, () => {
                 logger.debug('[event] APP_INITIALIZED received');
-                runPhase1().then(() => runTakeoverPhase());
+                ensureRuntimeReady();
             });
             if (typeof unsub1 === 'function') _mainEventUnsubscribers.push(unsub1);
         } catch (e) {
@@ -447,7 +469,7 @@ export async function onDisable() {
             const evtReady = getEventType('APP_READY', 'app_ready');
             const unsub2 = on(evtReady, () => {
                 logger.debug('[event] APP_READY received');
-                runPhase2();
+                ensureRuntimeReady();
             });
             if (typeof unsub2 === 'function') _mainEventUnsubscribers.push(unsub2);
         } catch (e) {
@@ -474,9 +496,7 @@ export async function onDisable() {
     function bootstrapIfReady() {
         if (isStAlreadyInitialized()) {
             logger.info('ST already initialized (detected via DOM), running phases manually');
-            runPhase1()
-                .then(() => runTakeoverPhase())
-                .then(() => runPhase2());
+            ensureRuntimeReady();
             return true;
         }
         return false;
@@ -522,9 +542,7 @@ export async function onDisable() {
                 phase2Done: () => _phase2Done,
                 listSeries: () => listSeriesFromNativeSelects(),
                 forceInit: async () => {
-                    await runPhase1();
-                    await runTakeoverPhase();
-                    await runPhase2();
+                    await ensureRuntimeReady();
                     return { phase1: _phase1Done, takeover: _takeoverDone, phase2: _phase2Done };
                 },
                 parse: (name) => parsePresetName(name),
