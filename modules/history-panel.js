@@ -83,6 +83,9 @@ let _logUnsubscribe = null;
 let _logRefreshTimer = null;
 let _historyRefreshUnsubscribe = null;
 let _historyRefreshTimer = null;
+let _panelDataWarmupPromise = null;
+let _panelDataCache = null;
+let _panelDataCacheAt = 0;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
 let _panelEventBindings = [];  // [{ event, handler }] 用于 popup 关闭时退订
 
@@ -108,6 +111,56 @@ const INITIAL_STATE = Object.freeze({
 });
 
 let _state = newState();
+const PANEL_DATA_CACHE_TTL_MS = 15000;
+const PANEL_WARMUP_DELAY_MS = 1200;
+
+function scheduleIdleWork(fn, delay = 0) {
+    const run = () => {
+        if (typeof requestIdleCallback === 'function') {
+            requestIdleCallback(fn, { timeout: 3000 });
+        } else {
+            setTimeout(fn, 0);
+        }
+    };
+    setTimeout(run, delay);
+}
+
+function invalidatePanelDataCache() {
+    _panelDataCache = null;
+    _panelDataCacheAt = 0;
+    _panelDataWarmupPromise = null;
+}
+
+async function loadPanelDataset({ allowCache = true } = {}) {
+    const now = Date.now();
+    if (allowCache && _panelDataCache && (now - _panelDataCacheAt) < PANEL_DATA_CACHE_TTL_MS) {
+        return _panelDataCache;
+    }
+    if (allowCache && _panelDataWarmupPromise) {
+        return _panelDataWarmupPromise;
+    }
+    const promise = Promise.all([
+        getAllSnapshots().catch(() => []),
+        listArchivedPresets().catch(() => []),
+    ]).then(([snapshots, archives]) => {
+        const dataset = { snapshots: snapshots || [], archives: archives || [] };
+        _panelDataCache = dataset;
+        _panelDataCacheAt = Date.now();
+        return dataset;
+    }).finally(() => {
+        if (_panelDataWarmupPromise === promise) _panelDataWarmupPromise = null;
+    });
+    if (allowCache) _panelDataWarmupPromise = promise;
+    return promise;
+}
+
+function warmupPanelData() {
+    if (_panelDataWarmupPromise || _panelDataCache) return;
+    _panelDataWarmupPromise = loadPanelDataset({ allowCache: false }).catch((e) => {
+        logger.debug('[Panel] data warmup failed:', e);
+        return { snapshots: [], archives: [] };
+    });
+}
 
 function newState() {
     return {
@@ -173,6 +226,22 @@ export async function initHistoryPanel() {
     logger.debug('History panel ready');
     // 启动导入识别（事件驱动，无轮询）
     startImportWatcher();
+    scheduleIdleWork(() => warmupPanelData(), PANEL_WARMUP_DELAY_MS);
+    if (!_historyRefreshUnsubscribe) {
+        _historyRefreshUnsubscribe = onHistoryChange(() => {
+            invalidatePanelDataCache();
+            scheduleIdleWork(() => warmupPanelData(), 500);
+            if (!_root || _historyRefreshTimer) return;
+            _historyRefreshTimer = setTimeout(async () => {
+                _historyRefreshTimer = null;
+                try {
+                    await refreshData({ allowCache: false });
+                } catch (e) {
+                    logger.debug('[Panel] history change refresh failed:', e);
+                }
+            }, 120);
+        });
+    }
 }
 
 /**
@@ -181,6 +250,15 @@ export async function initHistoryPanel() {
 export function teardownHistoryPanel() {
     stopImportWatcher();
     cleanupActionPopups({ includeWizard: true });
+    if (_historyRefreshUnsubscribe) {
+        _historyRefreshUnsubscribe();
+        _historyRefreshUnsubscribe = null;
+    }
+    if (_historyRefreshTimer) {
+        clearTimeout(_historyRefreshTimer);
+        _historyRefreshTimer = null;
+    }
+    invalidatePanelDataCache();
     _initialized = false;
 }
 
@@ -299,10 +377,6 @@ export async function showHistoryPanel() {
             clearTimeout(_logRefreshTimer);
             _logRefreshTimer = null;
         }
-        if (_historyRefreshUnsubscribe) {
-            _historyRefreshUnsubscribe();
-            _historyRefreshUnsubscribe = null;
-        }
         if (_historyRefreshTimer) {
             clearTimeout(_historyRefreshTimer);
             _historyRefreshTimer = null;
@@ -339,12 +413,9 @@ function waitForDOM() {
 // =====================================================
 // 数据加载
 // =====================================================
-async function loadData() {
+async function loadData({ allowCache = true } = {}) {
     // 并行加载快照 + 归档（数据接管模式下面板要展示完整版本）
-    const [snapshots, archives] = await Promise.all([
-        getAllSnapshots().catch(() => []),
-        listArchivedPresets().catch(() => []),
-    ]);
+    const { snapshots, archives } = await loadPanelDataset({ allowCache });
     _state.snapshots = snapshots || [];
     _archivedCache = archives || [];
 
@@ -385,9 +456,9 @@ async function loadData() {
     }
 }
 
-async function refreshData() {
+async function refreshData(options = {}) {
     if (!_root) return;  // 面板已关闭
-    await loadData();
+    await loadData(options);
     renderActiveTab();
     await updateStats(_panelCtx());
 }
@@ -926,17 +997,6 @@ function switchTab(tabName) {
         t.tabIndex = active ? 0 : -1;
     });
 
-    _historyRefreshUnsubscribe = onHistoryChange(() => {
-        if (!_root || _historyRefreshTimer) return;
-        _historyRefreshTimer = setTimeout(async () => {
-            _historyRefreshTimer = null;
-            try {
-                await refreshData();
-            } catch (e) {
-                logger.debug('[Panel] history change refresh failed:', e);
-            }
-        }, 60);
-    });
     $$('.pas-tab-content').forEach(c => {
         const active = c.getAttribute('data-content') === tabName;
         c.classList.toggle('pas-tab-content-active', active);

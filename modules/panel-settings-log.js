@@ -38,6 +38,8 @@ function formatLogTime(ts) {
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
+const LOG_RENDER_LIMIT = 200;
+
 // =====================================================
 // 日志 Tab 渲染
 // =====================================================
@@ -53,8 +55,10 @@ export function renderLogTab(panelCtx) {
     }
     if (state.log.search) filter.search = state.log.search;
 
-    const entries = logger.getLogs(filter);
-    updateLogBadge(panelCtx, entries.length);
+    const matchingEntries = logger.getLogs(filter);
+    const totalCount = matchingEntries.length;
+    const entries = matchingEntries.slice(-LOG_RENDER_LIMIT);
+    updateLogBadge(panelCtx, totalCount);
 
     if (entries.length === 0) {
         view.innerHTML = `
@@ -65,7 +69,11 @@ export function renderLogTab(panelCtx) {
         return;
     }
 
-    const html = entries.map(renderLogEntry).join('');
+    const hiddenCount = Math.max(0, totalCount - entries.length);
+    const limitNotice = hiddenCount > 0
+        ? `<div class="pas-log-row pas-log-row-info pas-log-limit-notice">${escapeHtml(t('Showing recent logs') || 'Showing recent logs')}: ${entries.length}/${totalCount}</div>`
+        : '';
+    const html = limitNotice + entries.map(renderLogEntry).join('');
     view.innerHTML = html;
 
     if (state.log.autoScroll) {
