@@ -10,6 +10,7 @@
  */
 
 import { logger } from './logger.js';
+import { describePresetLookup } from './core/preset-lookup-diagnostics.js';
 import {
     canonicalizePreset,
     CONNECTION_FIELDS,
@@ -615,8 +616,9 @@ export function getPresetSettingsSafe(presetName) {
  * @param {string} [presetName] 预设名（可选）
  * @returns {object|null}
  */
-export function getPresetSnapshot(presetName) {
-    const apiId = getCurrentApiId();
+export function getPresetSnapshot(presetName, options = {}) {
+    const explicitApiId = typeof options === 'string' ? options : options?.apiId;
+    const apiId = explicitApiId || getCurrentApiId();
     const pm = getPresetManager(apiId);
     if (!pm) {
         logger.warn('[getPresetSnapshot] no preset manager');
@@ -631,7 +633,8 @@ export function getPresetSnapshot(presetName) {
 
     const isUsable = (obj) => obj && typeof obj === 'object' && Object.keys(obj).length > 0;
     const currentName = getSelectedPresetName();
-    const isCurrentPreset = (name === currentName);
+    const currentApiId = getCurrentApiId();
+    const isCurrentPreset = (name === currentName && apiId === currentApiId);
 
     // ===== 路径 1（核心，M-1 修复）：从 getPresetList().settings 获取内存实时数据 =====
     // pm.getPresetList(apiId).settings 就是 oai_settings / textgen_settings 的引用，
@@ -684,7 +687,8 @@ export function getPresetSnapshot(presetName) {
     // 注意：这里读的是 openai_settings 数组中的磁盘副本，不是实时数据。
     if (!isCurrentPreset && typeof pm.getPresetList === 'function') {
         try {
-            const { presets, preset_names } = pm.getPresetList(apiId);
+            const list = pm.getPresetList(apiId);
+            const { presets, preset_names } = list || {};
             if (presets && preset_names) {
                 let presetData = null;
 
@@ -703,6 +707,10 @@ export function getPresetSnapshot(presetName) {
                 if (isUsable(presetData)) {
                     return sanitizePresetForExport(cloneDeepSafe(presetData), { apiId });
                 }
+                logger.debug('[getPresetSnapshot] non-current lookup unusable:', describePresetLookup(list, name, currentName));
+            }
+            if (!presets || !preset_names) {
+                logger.debug('[getPresetSnapshot] non-current lookup missing list parts:', describePresetLookup(list, name, currentName));
             }
         } catch (e) {
             logger.debug('[getPresetSnapshot] path 4 getPresetList error:', e);

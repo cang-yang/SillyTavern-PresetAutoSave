@@ -16,7 +16,7 @@ import {
     getSettings, updateSetting, resetSettings, batchUpdate,
 } from './settings.js';
 import {
-    getStats, trimOldSnapshots, cleanCorruptSnapshots,
+    getStats, computeStatsFromSnapshots, trimOldSnapshots, cleanCorruptSnapshots,
     exportAll, importAll, clearAll,
 } from './history-store.js';
 import {
@@ -534,7 +534,8 @@ export async function updateStats(panelCtx) {
     if (!root) return;
     let stats;
     try {
-        stats = await getStats();
+        const snapshots = panelCtx.state?.()?.snapshots;
+        stats = Array.isArray(snapshots) ? computeStatsFromSnapshots(snapshots) : await getStats();
     } catch (e) {
         logger.debug('updateStats getStats failed:', e);
         return;

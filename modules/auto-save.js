@@ -101,6 +101,8 @@ let _noChangeCount = 0;            // 连续无变化次数，用于日志降噪
 
 let _currentApiId = null;          // 当前跟踪的 API
 let _currentPresetName = null;     // 当前跟踪的预设名
+let _switchTraceSeq = 0;
+let _activeSwitchTrace = null;
 
 // 容器级监听：只在 WATCH_SELECTORS 命中的元素上 bind input/change，
 // 而不是在整个 document 捕获。聊天框、其他扩展的输入完全不进入热路径。
@@ -639,6 +641,41 @@ function unbindPromptManagerListeners() {
  * @param {number} [delay] 自定义延迟，默认使用 settings.debounceMs
  * @param {string} [reason] 触发原因（用于日志诊断）
  */
+function createSwitchTrace(source, eventData = null) {
+    const trace = {
+        id: `sw-${++_switchTraceSeq}`,
+        source,
+        at: Date.now(),
+        eventPresetName: eventData?.presetName ?? null,
+        eventPresetNameBefore: eventData?.presetNameBefore ?? null,
+        trackedApiId: _currentApiId,
+        trackedPresetName: _currentPresetName,
+        selectedPresetName: getSelectedPresetName(),
+        dirty: _dirty,
+        pending: !!_debounceTimer,
+        ignoring: _ignoreInput,
+        suspended: Date.now() < _suspendUntil,
+        domCaptured: false,
+        oaiBeforeSeen: false,
+    };
+    _activeSwitchTrace = trace;
+    logger.debug('[SwitchTrace] start', trace);
+    return trace;
+}
+
+function noteSwitchTrace(stage, details = {}) {
+    const trace = _activeSwitchTrace || createSwitchTrace(stage);
+    Object.assign(trace, details);
+    logger.debug('[SwitchTrace]', { stage, ...trace, details });
+    return trace;
+}
+
+function clearSwitchTrace(stage) {
+    if (!_activeSwitchTrace) return;
+    logger.debug('[SwitchTrace] clear', { stage, id: _activeSwitchTrace.id });
+    _activeSwitchTrace = null;
+}
+
 function queueCompensationSave(reason) {
     _dirty = true;
     _setStatus('pending');
@@ -663,14 +700,22 @@ function onPresetSelectChangeCapture(event) {
     if (!_enabled || _restoreInProgress || _ignoreInput) return;
     if (!_dirty && !_debounceTimer) return;
     if (!_currentApiId || !_currentPresetName) return;
+    const trace = createSwitchTrace('dom-capture');
+    trace.domCaptured = true;
+    noteSwitchTrace('dom-capture:eligible', {
+        selectApiId: select.getAttribute?.('data-preset-manager-for') ?? null,
+        selectValue: select.value ?? null,
+    });
 
     const preset = getLivePresetSnapshot(_currentApiId);
     if (!preset) {
+        noteSwitchTrace('dom-capture:no-live-preset');
         logger.warn(`Native switch guard could not capture live preset "${_currentPresetName}"`);
         return;
     }
     const liveHash = hashPreset(preset, _currentApiId);
     if (_lastSavedHash && liveHash === _lastSavedHash) {
+        noteSwitchTrace('dom-capture:unchanged', { liveHash, lastSavedHash: _lastSavedHash });
         cancelPendingSave();
         _dirty = false;
         _stats.switchGuardSkipped++;
@@ -680,6 +725,7 @@ function onPresetSelectChangeCapture(event) {
     const target = { apiId: _currentApiId, presetName: _currentPresetName };
     const payload = _buildSavePayload('native-switch-capture', target, preset);
     if (!payload) return;
+    noteSwitchTrace('dom-capture:payload-ready', { target, liveHash, newHash: payload.newHash });
 
     cancelPendingSave();
     _stats.switchGuardSaved++;
@@ -845,7 +891,7 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
         }
     }
 
-    const preset = presetOverride || getPresetSnapshot(presetName);
+    const preset = presetOverride || getPresetSnapshot(presetName, { apiId });
     if (!preset) {
         logger.warn('Cannot read current preset:', presetName);
         _setStatus('error');
@@ -1097,7 +1143,7 @@ async function recordNativeManualSave({ apiId, name, preset }) {
         { apiId: _currentApiId, presetName: _currentPresetName },
     )) {
         _lastSavedHash = snapshot.hash;
-        _lastQuickFingerprint = _computeQuickFingerprint(apiId);
+        _lastQuickFingerprint = _computeQuickFingerprint(target.apiId);
         _dirty = false;
         _setStatus('saved');
     }
@@ -1241,18 +1287,28 @@ function bindPresetEvents() {
     //   2. 只有 hash != lastSavedHash 才需要 switch_guard 保存
     //   3. 否则只设置 ignoreInput 跳过即可（高频切换场景几乎不写盘）
     const oaiBefore = getEventType('OAI_PRESET_CHANGED_BEFORE', 'oai_preset_changed_before');
-    _eventUnsubscribers.push(on(oaiBefore, async () => {
+    _eventUnsubscribers.push(on(oaiBefore, async (eventData = {}) => {
         if (_restoreInProgress) return; // AL-1: 恢复期间不做 switch guard
         if (!getSettings().enableSwitchGuard) {
             setIgnoreInput(true);
             return;
         }
 
+        const trace = _activeSwitchTrace || createSwitchTrace('oai-before', eventData);
+        trace.oaiBeforeSeen = true;
+        noteSwitchTrace('oai-before:received', {
+            eventPresetName: eventData?.presetName ?? null,
+            eventPresetNameBefore: eventData?.presetNameBefore ?? null,
+            eventSettingsKeys: eventData?.settings && typeof eventData.settings === 'object' ? Object.keys(eventData.settings).length : null,
+            eventPresetKeys: eventData?.preset && typeof eventData.preset === 'object' ? Object.keys(eventData.preset).length : null,
+        });
+
         try {
             setIgnoreInput(true);
 
             // 第一步：基础前置检查
             if (!_currentPresetName || !_currentApiId) {
+                noteSwitchTrace('oai-before:no-tracked-preset');
                 logger.debug('Switch guard skipped: no tracked preset');
                 return;
             }
@@ -1261,14 +1317,19 @@ function bindPresetEvents() {
             //   - 有 _dirty/_debounceTimer 才进一步算 hash
             if (!_dirty && !_debounceTimer) {
                 _stats.switchGuardSkipped++;
+                noteSwitchTrace('oai-before:not-dirty');
                 logger.debug('Switch guard skipped: not dirty, no pending save');
                 return;
             }
             // 第三步：用真实 hash 判断"内容是否真变了"
             //   防止自动保存已经把内容写盘但 _dirty 还没复位的边缘情况
             //   （正常情况：doSave 完成后 _dirty=false，hash 相等就跳过）
-            const preset = getPresetSnapshot(_currentPresetName);
+            const preset = getPresetSnapshot(_currentPresetName, { apiId: _currentApiId });
             if (!preset) {
+                noteSwitchTrace('oai-before:lookup-failed-fallback', {
+                    target: { apiId: _currentApiId, presetName: _currentPresetName },
+                    willCallDoSave: true,
+                });
                 logger.warn('Switch guard: cannot read preset snapshot, falling back to save');
                 cancelPendingSave();
                 await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
@@ -1281,6 +1342,7 @@ function bindPresetEvents() {
             if (_lastSavedHash && liveHash === _lastSavedHash) {
                 // 内容跟上次保存一致：取消未触发的 debounce，纯跳过
                 _stats.switchGuardSkipped++;
+                noteSwitchTrace('oai-before:unchanged', { liveHash, lastSavedHash: _lastSavedHash });
                 cancelPendingSave();
                 _dirty = false;
                 logger.debug(`Switch guard skipped: hash unchanged (${liveHash})`);
@@ -1289,6 +1351,11 @@ function bindPresetEvents() {
 
             // 第四步：真的有未保存修改，触发兜底保存
             _stats.switchGuardSaved++;
+            noteSwitchTrace('oai-before:saving-dirty', {
+                target: { apiId: _currentApiId, presetName: _currentPresetName },
+                liveHash,
+                lastSavedHash: _lastSavedHash,
+            });
             logger.info(`Switch guard: saving dirty preset "${_currentPresetName}" before switch (${_lastSavedHash || 'null'} -> ${liveHash})`);
             cancelPendingSave();
             await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
@@ -1316,6 +1383,8 @@ function bindPresetEvents() {
         // 2) 晚一点解锁 ignoreInput，避免切换尾部的 mutation 被当成用户输入
         _runtimeTimers.schedule(() => {
             setIgnoreInput(false);
+            if (_activeSwitchTrace) noteSwitchTrace('oai-after:ignore-reset');
+            clearSwitchTrace('oai-after:ignore-reset');
         }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
 
@@ -1337,6 +1406,7 @@ function bindPresetEvents() {
         }, 250);
         _runtimeTimers.schedule(() => {
             setIgnoreInput(false);
+            clearSwitchTrace('preset-changed:ignore-reset');
         }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
 
@@ -1353,6 +1423,7 @@ function bindPresetEvents() {
         }, 250);
         _runtimeTimers.schedule(() => {
             setIgnoreInput(false);
+            clearSwitchTrace('main-api-changed:ignore-reset');
         }, IGNORE_INPUT_AFTER_SWITCH_MS);
     }));
 }

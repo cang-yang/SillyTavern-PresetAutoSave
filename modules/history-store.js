@@ -1234,6 +1234,27 @@ async function trimByAgeMutation(maxDays) {
 // =====================================================
 // 统计
 // =====================================================
+export function computeStatsFromSnapshots(snapshots) {
+    if (!Array.isArray(snapshots) || snapshots.length === 0) {
+        return { snapshotCount: 0, presetCount: 0, totalSize: 0, totalSizeFormatted: '0 B' };
+    }
+
+    const presetKeys = new Set();
+    let totalSize = 0;
+    for (const snap of snapshots) {
+        if (!snap) continue;
+        presetKeys.add(`${snap.apiId || ''}::${snap.presetName || ''}`);
+        totalSize += snap.size || 0;
+    }
+
+    return {
+        snapshotCount: snapshots.length,
+        presetCount: presetKeys.size,
+        totalSize,
+        totalSizeFormatted: formatBytes(totalSize),
+    };
+}
+
 export async function getStats() {
     if (!_initialized) {
         return {
@@ -1251,26 +1272,11 @@ export async function getStats() {
 
     // 性能优化：并行获取
     const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
-    let snapshotCount = 0;
-    let totalSize = 0;
-    let presetCount = 0;
-
+    const all = [];
     for (const list of lists) {
-        if (Array.isArray(list) && list.length > 0) {
-            presetCount++;
-            snapshotCount += list.length;
-            for (const snap of list) {
-                totalSize += snap.size || 0;
-            }
-        }
+        if (Array.isArray(list) && list.length > 0) all.push(...list);
     }
-
-    return {
-        snapshotCount,
-        presetCount,
-        totalSize,
-        totalSizeFormatted: formatBytes(totalSize),
-    };
+    return computeStatsFromSnapshots(all);
 }
 
 // =====================================================

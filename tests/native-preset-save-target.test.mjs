@@ -10,6 +10,13 @@ test('uses the active runtime API for the active preset', () => {
     ), { apiId: 'koboldhorde', presetName: 'RecoveredRuins' });
 });
 
+test('corrects an OpenAI save request when the active preset belongs to Kobold/Horde', () => {
+    assert.deepEqual(resolveNativePresetSaveTarget(
+        { apiId: 'openai', name: 'Ny-Claude-1.6.4_SogonSigon' },
+        { apiId: 'koboldhorde', presetName: 'Ny-Claude-1.6.4_SogonSigon' },
+    ), { apiId: 'koboldhorde', presetName: 'Ny-Claude-1.6.4_SogonSigon' });
+});
+
 test('keeps the request API when the save is not for the active preset', () => {
     assert.deepEqual(resolveNativePresetSaveTarget(
         { apiId: 'openai', name: 'Another preset' },

@@ -144,6 +144,23 @@ function _panelCtx() {
     };
 }
 
+function renderPanelLoading(stage = 'loading') {
+    const listEl = _root?.querySelector('.pas-snapshot-list');
+    if (!listEl) return;
+    listEl.innerHTML = `<div class="pas-empty pas-panel-loading" data-stage="${escapeAttr(stage)}">
+        <i class="fa-solid fa-spinner fa-spin pas-empty-icon"></i>
+        <p class="pas-empty-text">${escapeHtml(t('Loading') || 'Loading...')}</p>
+        <p class="pas-empty-hint">${escapeHtml(stage)}</p>
+    </div>`;
+}
+
+function recordPanelPerf(stage, startedAt, details = {}) {
+    const elapsed = Math.round(performance.now() - startedAt);
+    const payload = { stage, elapsedMs: elapsed, ...details };
+    if (elapsed > 250) logger.info('[PanelPerf]', payload);
+    else logger.debug('[PanelPerf]', payload);
+}
+
 // =====================================================
 // 初始化
 // =====================================================
@@ -172,6 +189,7 @@ export function teardownHistoryPanel() {
 // =====================================================
 export async function showHistoryPanel() {
     if (_popup) return;
+    const panelStartedAt = performance.now();
 
     // Step 1: 创建 popup（简单操作，不太可能失败）
     const html = buildPanelShellHTML({ t, escapeHtml, escapeAttr });
@@ -206,6 +224,11 @@ export async function showHistoryPanel() {
         logger.error('Panel root not found');
         return;
     }
+    recordPanelPerf('shell-ready', panelStartedAt);
+    renderPanelLoading('loading-history');
+    bindEvents();
+
+    const loadAndRender = async () => {
 
     // Step 2: 数据加载和渲染（任一阶段失败都不会让面板成黑屏）
     //
@@ -216,14 +239,17 @@ export async function showHistoryPanel() {
     let _failedStage = null;
     try {
         _failedStage = 'loadData';
+        const loadStartedAt = performance.now();
         await loadData();
-        _failedStage = 'bindEvents';
-        bindEvents();
+        recordPanelPerf('loadData', loadStartedAt, { snapshots: _state.snapshots.length, archives: _archivedCache.length });
         _failedStage = 'renderActiveTab';
+        const renderStartedAt = performance.now();
         renderActiveTab();
+        recordPanelPerf('renderActiveTab', renderStartedAt, { snapshots: _state.snapshots.length });
         _failedStage = 'updateStats';
         await updateStats(_panelCtx());
         _failedStage = null;
+        recordPanelPerf('ready', panelStartedAt, { snapshots: _state.snapshots.length, archives: _archivedCache.length });
     } catch (err) {
         logger.error(`[Panel] render failed at stage="${_failedStage}":`, err);
         if (err && err.stack) {
@@ -258,6 +284,9 @@ export async function showHistoryPanel() {
     }
 
     // Step 3: 等待 popup 关闭
+    };
+    setTimeout(() => { loadAndRender(); }, 0);
+
     try {
         await promise;
     } finally {
