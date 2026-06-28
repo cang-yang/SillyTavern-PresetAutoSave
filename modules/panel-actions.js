@@ -17,7 +17,7 @@ import {
 } from './settings.js';
 import {
     getSnapshotById, deleteSnapshot,
-    clearPresetHistory,
+    clearPresetHistory, deleteOldSnapshotsForPreset,
     renameSnapshot, togglePinSnapshot,
     addSnapshot, TRIGGER, TRIGGER_LABEL_KEYS, formatBytes,
     hashPreset,
@@ -618,11 +618,8 @@ async function onClearPreset(key, panelCtx) {
     // AY-1: 保留最新的一条快照作为当前基准，只删除历史旧快照
     const sorted = [...snapshots].sort((a, b) => b.timestamp - a.timestamp);
     // sorted[0] 是最新的，保留它；删除其余的
-    let deletedCount = 0;
-    for (let i = 1; i < sorted.length; i++) {
-        const result = await deleteSnapshot(sorted[i].id, { force: true });
-        if (result) deletedCount++;
-    }
+    const result = await deleteOldSnapshotsForPreset(apiId, presetName, { keepNewest: 1, force: true });
+    const deletedCount = result.deleted;
 
     logger.info(`[onClearPreset] kept newest snapshot, deleted ${deletedCount}/${sorted.length - 1} old snapshots for [${apiId}] ${presetName}`);
     toast.success(t('Cleared'));

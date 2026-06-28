@@ -1108,7 +1108,63 @@ async function clearPresetHistoryMutation(apiId, presetName) {
 }
 
 /**
- * 清空所有历史
+ * Delete old snapshots for a preset in a single storage write.
+ *
+ * This is used by the panel's "clear preset history" action. The older
+ * implementation called deleteSnapshot() once per snapshot; each call scanned
+ * storage keys and wrote the same preset list back again. On mobile IndexedDB
+ * that turned 40 snapshots into dozens of expensive transactions. This helper
+ * reads one preset bucket once and writes/removes it once.
+ *
+ * @param {string} apiId
+ * @param {string} presetName
+ * @param {{ keepNewest?: number, force?: boolean }} [options]
+ * @returns {Promise<{ deleted: number, kept: number, total: number }>}
+ */
+export function deleteOldSnapshotsForPreset(apiId, presetName, options = {}) {
+    return _historyMutations.run(() => deleteOldSnapshotsForPresetMutation(apiId, presetName, options));
+}
+
+async function deleteOldSnapshotsForPresetMutation(apiId, presetName, options = {}) {
+    await ensureStore();
+    const key = makeKey(apiId, presetName);
+    const list = await _store.getItem(key);
+    if (!Array.isArray(list) || list.length === 0) {
+        return { deleted: 0, kept: 0, total: 0 };
+    }
+
+    const keepNewest = Math.max(0, Number.isFinite(options.keepNewest) ? Math.floor(options.keepNewest) : 1);
+    const force = options && options.force === true;
+    const sorted = [...list].sort((a, b) => (b?.timestamp || 0) - (a?.timestamp || 0));
+    const keepIds = new Set(sorted.slice(0, keepNewest).map(s => s?.id).filter(Boolean));
+    const kept = [];
+    let deleted = 0;
+
+    for (const snap of list) {
+        if (!snap || keepIds.has(snap.id) || (snap.pinned && !force)) {
+            kept.push(snap);
+        } else {
+            deleted++;
+        }
+    }
+
+    if (deleted === 0) {
+        return { deleted: 0, kept: kept.length, total: list.length };
+    }
+
+    kept.sort((a, b) => (b?.timestamp || 0) - (a?.timestamp || 0));
+    if (kept.length === 0) {
+        await _store.removeItem(key);
+    } else {
+        await _store.setItem(key, kept);
+    }
+    invalidateKeysCache();
+    logger.info(`Cleared old history for: [${apiId}] ${presetName} · deleted ${deleted}, kept ${kept.length}`);
+    return { deleted, kept: kept.length, total: list.length };
+}
+
+/**
+ * Clear all history.
  */
 export function clearAll() {
     return _historyMutations.run(clearAllMutation);
