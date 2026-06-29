@@ -333,7 +333,7 @@ async function onTogglePin(snapshotId, panelCtx) {
     const result = await togglePinSnapshot(snapshotId, next);
     if (result === null) return toast.error(t('Snapshot Not Found'));
     toast.success(result ? t('Pinned Done') : t('Unpinned Done'));
-    await panelCtx.refreshData();
+    await panelCtx.refreshData({ allowCache: false });
 }
 
 let _restoreBusy = false;
@@ -595,7 +595,7 @@ async function onDelete(snapshotId, panelCtx) {
 
     await deleteSnapshot(snapshotId);
     toast.success(t('Deleted'));
-    await panelCtx.refreshData();
+    await panelCtx.refreshData({ allowCache: false });
 }
 
 async function onClearPreset(key, panelCtx) {
@@ -623,7 +623,7 @@ async function onClearPreset(key, panelCtx) {
 
     logger.info(`[onClearPreset] kept newest snapshot, deleted ${deletedCount}/${sorted.length - 1} old snapshots for [${apiId}] ${presetName}`);
     toast.success(t('Cleared'));
-    await panelCtx.refreshData();
+    await panelCtx.refreshData({ allowCache: false });
 }
 
 // =====================================================

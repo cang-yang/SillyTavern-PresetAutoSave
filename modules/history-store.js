@@ -1159,6 +1159,13 @@ async function deleteOldSnapshotsForPresetMutation(apiId, presetName, options = 
         await _store.setItem(key, kept);
     }
     invalidateKeysCache();
+    emitHistoryChange({
+        type: 'history-pruned',
+        apiId,
+        presetName,
+        deleted,
+        kept: kept.length,
+    });
     logger.info(`Cleared old history for: [${apiId}] ${presetName} · deleted ${deleted}, kept ${kept.length}`);
     return { deleted, kept: kept.length, total: list.length };
 }

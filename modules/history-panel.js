@@ -86,6 +86,7 @@ let _historyRefreshTimer = null;
 let _panelDataWarmupPromise = null;
 let _panelDataCache = null;
 let _panelDataCacheAt = 0;
+let _panelDataCacheGeneration = 0;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
 let _panelEventBindings = [];  // [{ event, handler }] 用于 popup 关闭时退订
 
@@ -126,12 +127,13 @@ function scheduleIdleWork(fn, delay = 0) {
 }
 
 function invalidatePanelDataCache() {
+    _panelDataCacheGeneration++;
     _panelDataCache = null;
     _panelDataCacheAt = 0;
     _panelDataWarmupPromise = null;
 }
 
-async function loadPanelDataset({ allowCache = true } = {}) {
+function loadPanelDataset({ allowCache = true } = {}) {
     const now = Date.now();
     if (allowCache && _panelDataCache && (now - _panelDataCacheAt) < PANEL_DATA_CACHE_TTL_MS) {
         return _panelDataCache;
@@ -139,13 +141,16 @@ async function loadPanelDataset({ allowCache = true } = {}) {
     if (allowCache && _panelDataWarmupPromise) {
         return _panelDataWarmupPromise;
     }
+    const generation = _panelDataCacheGeneration;
     const promise = Promise.all([
         getAllSnapshots().catch(() => []),
         listArchivedPresets().catch(() => []),
     ]).then(([snapshots, archives]) => {
         const dataset = { snapshots: snapshots || [], archives: archives || [] };
-        _panelDataCache = dataset;
-        _panelDataCacheAt = Date.now();
+        if (generation === _panelDataCacheGeneration) {
+            _panelDataCache = dataset;
+            _panelDataCacheAt = Date.now();
+        }
         return dataset;
     }).finally(() => {
         if (_panelDataWarmupPromise === promise) _panelDataWarmupPromise = null;
@@ -156,9 +161,10 @@ async function loadPanelDataset({ allowCache = true } = {}) {
 
 function warmupPanelData() {
     if (_panelDataWarmupPromise || _panelDataCache) return;
-    _panelDataWarmupPromise = loadPanelDataset({ allowCache: false }).catch((e) => {
+    const promise = loadPanelDataset({ allowCache: false });
+    _panelDataWarmupPromise = promise;
+    promise.catch((e) => {
         logger.debug('[Panel] data warmup failed:', e);
-        return { snapshots: [], archives: [] };
     });
 }
 
@@ -191,7 +197,7 @@ function _panelCtx() {
     return {
         root: () => _root,
         state: () => _state,
-        refreshData: () => refreshData(),
+        refreshData: (options) => refreshData(options),
         renderListTab: () => renderListTab(),
         archivedCache: () => _archivedCache,
     };
@@ -456,8 +462,12 @@ async function loadData({ allowCache = true } = {}) {
     }
 }
 
-async function refreshData(options = {}) {
+async function refreshData(options = { allowCache: false }) {
     if (!_root) return;  // 面板已关闭
+    if (_historyRefreshTimer) {
+        clearTimeout(_historyRefreshTimer);
+        _historyRefreshTimer = null;
+    }
     await loadData(options);
     renderActiveTab();
     await updateStats(_panelCtx());

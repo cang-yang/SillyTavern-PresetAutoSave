@@ -60,7 +60,11 @@ const compat = await import('../modules/compatibility.js');
 compat.initCompatibility();
 
 const mod = await import('../modules/history-store.js');
+const { onHistoryChange } = await import('../modules/core/history-change-events.js');
 await mod.initHistoryStore();
+
+const historyChanges = [];
+const stopHistoryChanges = onHistoryChange(change => historyChanges.push(change));
 
 function snap(id, timestamp, pinned = false) {
     return { id, timestamp, pinned, apiId: 'openai', presetName: 'demo', preset: { prompts: [] } };
@@ -77,6 +81,13 @@ writes.remove = 0;
 
 let result = await mod.deleteOldSnapshotsForPreset('openai', 'demo', { keepNewest: 1 });
 assert.deepEqual(result, { deleted: 2, kept: 2, total: 4 });
+assert.deepEqual(historyChanges.at(-1), {
+    type: 'history-pruned',
+    apiId: 'openai',
+    presetName: 'demo',
+    deleted: 2,
+    kept: 2,
+});
 assert.ok(writes.set <= 3, `non-force batch delete should use constant writes, got ${writes.set}`);
 assert.equal(writes.remove, 0);
 assert.deepEqual(storage.get('openai::demo').map(s => s.id), ['newest', 'pinned-old']);
@@ -118,4 +129,5 @@ assert.ok(writes.set <= 3, `empty-bucket delete should use constant writes, got 
 assert.ok(writes.remove <= 3, `empty-bucket delete should use constant removes, got ${writes.remove}`);
 assert.equal(storage.has('openai::demo'), false);
 
+stopHistoryChanges();
 console.log('history-store batch delete smoke passed');
