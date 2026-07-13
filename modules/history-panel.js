@@ -32,6 +32,7 @@ import {
     getSeriesInfo,
     groupSnapshotsBySeries,
     groupNamesBySeries,
+    findSeriesAssignment,
     clearParseCache,
     normalizeSeriesKey,
 } from './preset-grouping.js';
@@ -1237,12 +1238,11 @@ async function importWatchTick() {
     // 收集现有系列（不含 added 自己）
     const existingNames = Array.from(cur).filter(n => !candidates.includes(n));
     const existingGroups = groupNamesBySeries(existingNames, overrides, getSettings().groupingSeriesAliases);
-    const existingSeries = existingGroups.map(g => g.series);
 
     // ⚡ P3 修复：过滤掉与已存在预设同属一个系列的候选
     //   版本切换（takeover）时，被隐藏的 option 可能被临时恢复到 select 中，
     //   导致同系列版本被误判为"新导入"。通过 normalizeSeriesKey 比较排除。
-    const existingNormKeys = new Set(existingSeries.map(s => normalizeSeriesKey(s)));
+    const existingNormKeys = new Set(existingGroups.map(group => group.canonicalKey));
     const trulyNewCandidates = candidates.filter(n => {
         const info = getSeriesInfo(n, overrides);
         const normKey = normalizeSeriesKey(info.series || n);
@@ -1252,7 +1252,7 @@ async function importWatchTick() {
 
     // 一次只处理一个，避免连环弹窗
     for (const newName of trulyNewCandidates) {
-        const ok = await maybePromptForImportAssignment(newName, existingSeries);
+        const ok = await maybePromptForImportAssignment(newName, existingGroups);
         if (!ok) break; // 用户取消则停止
     }
 }
@@ -1261,28 +1261,19 @@ async function importWatchTick() {
  * 弹窗：建议把新预设归到某系列
  * @returns {Promise<boolean>} 是否继续处理后续候选
  */
-async function maybePromptForImportAssignment(newName, existingSeries) {
+async function maybePromptForImportAssignment(newName, existingGroups) {
     const parsed = parsePresetName(newName);
     const candidate = parsed.series;
+    const assignment = findSeriesAssignment(candidate, existingGroups);
 
     // 自动识别后系列名 == 原名（无版本）→ 没有歧义，新建系列即可，不打扰
-    if (!parsed.version && existingSeries.includes(candidate) === false) {
+    if (!parsed.version && !assignment) {
         return true;
     }
 
     // 自动归到现有系列时，弹窗确认（用户最常见的诉求）
-    let suggested = '';
-    if (existingSeries.includes(candidate)) {
-        suggested = candidate;
-    } else {
-        // 大小写不敏感匹配
-        const lower = candidate.toLowerCase();
-        const hit = existingSeries.find(s => s.toLowerCase() === lower);
-        if (hit) suggested = hit;
-    }
-
     // 没有匹配的现有系列 → 新建系列，不打扰
-    if (!suggested) return true;
+    if (!assignment) return true;
 
     _importPromptInflight = true;
     try {
@@ -1291,7 +1282,7 @@ async function maybePromptForImportAssignment(newName, existingSeries) {
             t('Grouping Import Detected Title'),
             `<div>${t('Grouping Import Detected Hint', {
                 name: `<b>${escapeHtml(newName)}</b>`,
-                series: `<b>${escapeHtml(suggested)}</b>`,
+                series: `<b>${escapeHtml(assignment.displayName)}</b>`,
             })}</div>
             <div style="margin-top: 6px; font-size: 0.86em; opacity: 0.7;">
               ${escapeHtml(t('Grouping Manage Auto'))}: ${escapeHtml(parsed.series)}
@@ -1299,11 +1290,11 @@ async function maybePromptForImportAssignment(newName, existingSeries) {
             </div>`
         );
         if (ok) {
-            // 写入手动覆盖：精确归到 suggested
+            // 展示别名，但持久化稳定的自动分组名。
             const newOverrides = { ...(getSettings().groupingManualOverrides || {}) };
-            newOverrides[newName] = suggested;
+            newOverrides[newName] = assignment.canonicalName;
             updateSetting('groupingManualOverrides', newOverrides);
-            toast.success(t('Grouping Override Set', { name: newName, series: suggested }));
+            toast.success(t('Grouping Override Set', { name: newName, series: assignment.displayName }));
         }
         return true;
     } catch (e) {

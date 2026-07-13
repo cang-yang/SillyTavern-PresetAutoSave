@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 
 import {
     buildNestedGroupTree,
+    findSeriesAssignment,
+    groupNamesBySeries,
     groupSnapshotsBySeries,
 } from '../modules/preset-grouping.js';
 
@@ -53,4 +55,24 @@ test('every user-facing grouping consumer reads the alias setting', async () => 
 test('settings reset clears group aliases alongside manual membership overrides', async () => {
     const source = await readFile(new URL('../modules/panel-settings-log.js', import.meta.url), 'utf8');
     assert.match(source, /groupingSeriesAliases:\s*\{\}/);
+});
+
+test('import assignment displays an alias but persists the canonical automatic name', () => {
+    const groups = groupNamesBySeries(['Story V1'], {}, { story: 'Creative' });
+    assert.deepEqual(findSeriesAssignment('Story', groups), {
+        canonicalName: 'Story',
+        displayName: 'Creative',
+    });
+});
+
+test('conflicting imported aliases fall back without merging unrelated groups', () => {
+    const aliases = { story: 'Same', utility: 'Same' };
+    const groups = groupNamesBySeries(['Story V1', 'Utility V1'], {}, aliases);
+    assert.deepEqual(groups.map(group => group.series).sort(), ['Story', 'Utility']);
+
+    const history = groupSnapshotsBySeries([
+        { id: '1', apiId: 'openai', presetName: 'Story V1', timestamp: 1, size: 10 },
+        { id: '2', apiId: 'openai', presetName: 'Utility V1', timestamp: 2, size: 10 },
+    ], { aliases });
+    assert.equal(history.size, 2);
 });

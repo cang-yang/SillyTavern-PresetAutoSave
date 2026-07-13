@@ -1022,9 +1022,34 @@ export function groupNamesBySeries(names, overrides = null, aliases = null) {
             items,
         });
     }
+    const displayCounts = new Map();
+    for (const group of groups) {
+        const key = normalizeSeriesKey(group.displayName);
+        displayCounts.set(key, (displayCounts.get(key) || 0) + 1);
+    }
+    for (const group of groups) {
+        if (!group.customized) continue;
+        if ((displayCounts.get(normalizeSeriesKey(group.displayName)) || 0) < 2) continue;
+        group.displayName = group.automaticName;
+        group.series = group.automaticName;
+        group.customized = false;
+    }
     // 系列名 A→Z
     groups.sort((a, b) => a.series.localeCompare(b.series));
     return groups;
+}
+
+/** Find a visible group by its automatic identity for safe import assignment. */
+export function findSeriesAssignment(candidate, groups = []) {
+    const target = normalizeSeriesKey(candidate);
+    const group = (Array.isArray(groups) ? groups : []).find(item =>
+        normalizeSeriesKey(item?.canonicalKey || item?.automaticName || '') === target
+    );
+    if (!group) return null;
+    return {
+        canonicalName: group.automaticName || candidate,
+        displayName: group.displayName || group.series || group.automaticName || candidate,
+    };
 }
 
 // =====================================================
@@ -1066,6 +1091,14 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
         return seriesMap;
     }
 
+    const resolvedGroups = new Map(
+        groupNamesBySeries(
+            [...new Set(snapshots.map(snap => snap?.presetName).filter(Boolean))],
+            overrides,
+            aliases,
+        ).map(group => [group.canonicalKey, group]),
+    );
+
     // 一次扫描：按 series → versionKey → snapshot[]
     for (const snap of snapshots) {
         const presetName = snap?.presetName || '';
@@ -1080,8 +1113,8 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
             normToDisplay.set(normKey, rawSeriesKey);
         }
         const automaticName = normToDisplay.get(normKey);
-        const resolved = resolveSeriesDisplayName(automaticName, aliases);
-        const seriesKey = resolved.displayName;
+        const resolved = resolvedGroups.get(normKey) || resolveSeriesDisplayName(automaticName, aliases);
+        const seriesKey = resolved.displayName || resolved.series;
         const versionKey = `${apiId}::${presetName}`;
 
         let series = seriesMap.get(seriesKey);
