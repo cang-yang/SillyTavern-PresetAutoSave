@@ -413,12 +413,16 @@ function renderModernGroupingHTML(nodes) {
     const summary = buildGroupManagerSummary(allNodes);
     const visibleNodes = filterGroupingNodes(allNodes, _gmSearchQuery);
     const searching = !!_gmSearchQuery.trim();
-    const nestingEnabled = !!getSettings().nestingEnabled;
+    const groupingSettings = getSettings();
+    const nestingEnabled = !!groupingSettings.nestingEnabled;
+    const nestingMaxDepth = groupingSettings.nestingMaxDepth || 3;
 
     const cards = visibleNodes.map(node => {
         const expanded = searching || _gmExpandedKeys.has(node.key);
         const isCustom = node.pending || (node.items.length > 0 && node.items.every(item => item.manualOverride));
-        const indent = Math.min(Number(node.depth) || 0, 3);
+        const depth = Number(node.depth) || 0;
+        const indent = Math.min(depth, 3);
+        const depthExceeded = depth >= nestingMaxDepth - 1;
         const relationship = indent
             ? `<span class="pas-gm-tree-relation"><i class="fa-solid fa-turn-up"></i><span>${escapeHtml(node.parentName || '')}</span></span>`
             : '';
@@ -426,8 +430,17 @@ function renderModernGroupingHTML(nodes) {
         const automaticTitle = node.customized
             ? t('Grouping Automatic Name Hint', { name: automaticName })
             : node.displayName;
+        const mobileActions = [
+            nestingEnabled && !depthExceeded
+                ? `<button type="button" data-action="subgroup"><i class="fa-solid fa-plus"></i><span>${escapeHtml(t('Grouping Series Menu New Subgroup'))}</span></button>`
+                : '',
+            node.customized
+                ? `<button type="button" data-action="restore-name"><i class="fa-solid fa-arrow-rotate-left"></i><span>${escapeHtml(t('Grouping Restore Automatic Name', { name: automaticName }))}</span></button>`
+                : '',
+            `<button type="button" class="pas-gm-mobile-delete" data-action="delete"><i class="fa-solid fa-trash"></i><span>${escapeHtml(t('Grouping Series Menu Delete'))}</span></button>`,
+        ].filter(Boolean).join('');
         return `<section class="pas-gm-series${expanded ? '' : ' collapsed'}${indent ? ' pas-gm-nested' : ''}"
-            data-series-key="${escapeAttr(node.key)}" data-automatic-name="${escapeAttr(automaticName)}" data-customized="${node.customized ? '1' : '0'}" data-depth="${indent}" data-drop-label="${escapeAttr(t('Grouping Drag Hint'))}" style="--pas-gm-depth:${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
+            data-series-key="${escapeAttr(node.key)}" data-automatic-name="${escapeAttr(automaticName)}" data-customized="${node.customized ? '1' : '0'}" data-depth="${indent}" data-depth-exceeded="${depthExceeded ? '1' : '0'}" data-drop-label="${escapeAttr(t('Grouping Drag Hint'))}" style="--pas-gm-depth:${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
             <div class="pas-gm-series-header" role="button" tabindex="0" aria-expanded="${expanded}">
                 ${relationship}
                 <span class="pas-gm-series-icon"><i class="fa-regular fa-folder${expanded ? '-open' : ''}"></i></span>
@@ -440,6 +453,7 @@ function renderModernGroupingHTML(nodes) {
                 <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
             </div>
             <div class="pas-gm-series-body">${renderModernPresetRows(node)}</div>
+            <div class="pas-gm-mobile-actions">${mobileActions}</div>
         </section>`;
     }).join('');
 
@@ -1501,7 +1515,7 @@ function bindClickEvents(container) {
     // --- 折叠/展开系列卡片 ---
     container.querySelectorAll('.pas-gm-series-header').forEach(header => {
         const toggle = (e) => {
-            if (e.target.closest('.pas-gm-menu-btn, .pas-gm-series-menu-btn, .pas-gm-rename-btn, .pas-gm-name-editor')) return;
+            if (e.target.closest('.pas-gm-menu-btn, .pas-gm-series-menu-btn, .pas-gm-rename-btn, .pas-gm-name-editor, .pas-gm-mobile-actions')) return;
             const series = header.closest('.pas-gm-series');
             const key = series?.getAttribute('data-series-key');
             if (!key) return;
@@ -1526,6 +1540,20 @@ function bindClickEvents(container) {
     });
 }
 
+function bindMobileGroupActions(container) {
+    container.querySelectorAll('.pas-gm-mobile-actions button').forEach(button => {
+        button.onclick = async event => {
+            event.stopPropagation();
+            const seriesKey = button.closest('.pas-gm-series')?.getAttribute('data-series-key');
+            const action = button.getAttribute('data-action');
+            if (!seriesKey) return;
+            if (action === 'subgroup') await onCreateSubGroup(seriesKey, container);
+            else if (action === 'restore-name') restoreGroupAlias(seriesKey, container);
+            else if (action === 'delete') await onDeleteCustomGroup(seriesKey, container);
+        };
+    });
+}
+
 /**
  * 绑定分组管理弹窗的所有事件（主入口）
  * P1-6: 拆分为 bindDragEvents / bindMenuEvents / bindClickEvents 三个子函数
@@ -1535,6 +1563,7 @@ function bindGroupingEvents(container) {
     // P1-7: refreshGroupingUI 已通过 innerHTML 重建 DOM，元素均为新鲜节点，
     // 无需 cloneNode+replaceChild 来清除旧监听器
     bindClickEvents(container);
+    bindMobileGroupActions(container);
     bindDragEvents(container);
     bindMenuEvents(container);
 }

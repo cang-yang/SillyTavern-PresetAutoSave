@@ -30,3 +30,29 @@ test('group names expose an accessible inline rename interaction', () => {
     assert.match(css, /\.pas-gm-rename-btn/);
     assert.match(css, /min-(?:width|height):\s*44px/);
 });
+
+test('expanded groups expose applicable secondary actions outside the compact header', () => {
+    const mobileActionMarkup = source.match(/const mobileActions = \[([\s\S]*?)\]\.filter\(Boolean\)\.join\(''\);/)?.[1] || '';
+    assert.match(source, /pas-gm-mobile-actions/);
+    assert.match(mobileActionMarkup, /nestingEnabled && !depthExceeded[\s\S]*data-action="subgroup"/);
+    assert.match(mobileActionMarkup, /node\.customized[\s\S]*data-action="restore-name"/);
+    assert.match(mobileActionMarkup, /data-action="delete"/);
+    assert.doesNotMatch(mobileActionMarkup, /data-action="rename"/);
+});
+
+test('mobile group actions reuse existing group operations', () => {
+    const start = source.indexOf('function bindMobileGroupActions');
+    const end = source.indexOf('function bindGroupingEvents', start);
+    const mobileBindings = source.slice(start, end);
+    assert.match(source, /bindMobileGroupActions/);
+    assert.match(mobileBindings, /action === 'subgroup'[\s\S]*onCreateSubGroup/);
+    assert.match(mobileBindings, /action === 'restore-name'[\s\S]*restoreGroupAlias/);
+    assert.match(mobileBindings, /action === 'delete'[\s\S]*onDeleteCustomGroup/);
+});
+
+test('compact layout trades the overflow trigger for touch-safe labeled actions', () => {
+    assert.match(css, /\.pas-gm-mobile-actions\s*\{[^}]*display:\s*none/s);
+    assert.match(css, /@media\s*\(max-width:\s*640px\)[\s\S]*\.pas-gm-series-menu-btn\s*\{[^}]*display:\s*none/s);
+    assert.match(css, /@media\s*\(max-width:\s*640px\)[\s\S]*\.pas-gm-mobile-actions\s*\{[^}]*display:\s*flex/s);
+    assert.match(css, /\.pas-gm-mobile-actions button\s*\{[^}]*min-height:\s*44px/s);
+});
