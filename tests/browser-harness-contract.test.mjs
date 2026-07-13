@@ -15,6 +15,8 @@ test('browser harness loads production styles, shell and list renderer', async (
     assert.match(html, /src="\.\/app\.mjs"/);
     assert.match(app, /from '\.\.\/\.\.\/modules\/panel-shell\.js'/);
     assert.match(app, /import\('\.\.\/\.\.\/modules\/panel-list-render\.js'\)/);
+    assert.match(app, /from '\.\.\/\.\.\/modules\/core\/focus-anchor\.js'/);
+    assert.match(app, /restoreFocusAnchor\(list, focusAnchor/);
     assert.doesNotMatch(app, /class="pas-panel"/);
     assert.doesNotMatch(app, /translate\('Panel Stats'/);
     assert.match(harnessCss, /\.fa-solid::before\s*\{/);

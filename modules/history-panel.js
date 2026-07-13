@@ -20,6 +20,7 @@ import {
     getAllSnapshots,
 } from './history-store.js';
 import { onHistoryChange } from './core/history-change-events.js';
+import { captureFocusAnchor, restoreFocusAnchor } from './core/focus-anchor.js';
 import {
     confirmSafe, toast, t,
     getCurrentApiId, getSelectedPresetName,
@@ -1052,10 +1053,18 @@ function _renderListTabImpl() {
     const list = _root?.querySelector('.pas-snapshot-list');
     if (!list) return;
 
+    const focusAnchor = captureFocusAnchor(list);
+    const scrollTop = list.scrollTop;
+    const restoreInteractionPosition = () => {
+        restoreFocusAnchor(list, focusAnchor, _root?.querySelector('.pas-search'));
+        list.scrollTop = scrollTop;
+    };
+
     const filtered = applyFiltersAndSearch(_state.snapshots, _panelCtx());
     if (filtered.length === 0) {
         list.innerHTML = renderEmptyState(_panelCtx());
         updateBadge(0);
+        restoreInteractionPosition();
         return;
     }
 
@@ -1071,6 +1080,7 @@ function _renderListTabImpl() {
     if (_state.batchMode) {
         updateBatchUI();
     }
+    restoreInteractionPosition();
 }
 
 /**

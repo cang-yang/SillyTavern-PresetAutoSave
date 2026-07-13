@@ -38,10 +38,12 @@ test('manifest loads the layered panel stylesheet and mobile keeps tab labels', 
     const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
     const indexCss = await readFile(new URL('../styles/index.css', import.meta.url), 'utf8');
     const panelCss = await readFile(new URL('../styles/panel-v4.css', import.meta.url), 'utf8');
+    const responsiveCss = await readFile(new URL('../styles/responsive.css', import.meta.url), 'utf8');
     const panelRenderer = await readFile(new URL('../modules/panel-list-render.js', import.meta.url), 'utf8');
     assert.equal(manifest.css, 'styles/index.css');
     assert.match(indexCss, /@import url\('\.\.\/style\.css'\)/);
     assert.match(indexCss, /@import url\('\.\/panel-v4\.css'\)/);
+    assert.match(indexCss, /@import url\('\.\/panel-v4\.css'\);[\s\S]*@import url\('\.\/responsive\.css'\)/);
     assert.doesNotMatch(panelCss, /\.pas-tab\s+span\s*\{[^}]*display:\s*none/s);
     assert.match(panelCss, /\.pas-tab\s*>\s*span:not\(\.pas-tab-badge\)[\s\S]*?display:\s*inline\s*!important/);
     assert.match(panelCss, /\.pas-filter\s*>\s*span\s*\{\s*display:\s*inline\s*!important/);
@@ -52,6 +54,10 @@ test('manifest loads the layered panel stylesheet and mobile keeps tab labels', 
     assert.match(panelCss, /content-visibility:\s*visible/);
     assert.match(panelCss, /height:\s*100svh\s*!important/);
     assert.match(panelCss, /@media \(hover:\s*none\), \(pointer:\s*coarse\)/);
+    assert.match(responsiveCss, /@media \(max-width:\s*768px\)[\s\S]*?\.pas-panel \.pas-tab > span:not\(\.pas-tab-badge\)[\s\S]*?display:\s*inline\s*!important/);
+    assert.match(responsiveCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel button\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/s);
+    assert.match(responsiveCss, /\.pas-panel \.pas-card-actions,[\s\S]*?flex-wrap:\s*wrap/);
+    assert.match(responsiveCss, /\.pas-panel \.pas-log-actions \.pas-mini-btn\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/s);
     assert.match(panelRenderer, /pas-series-current-node/);
     assert.doesNotMatch(panelCss, /--pas-v4-accent:\s*var\(--SmartThemeQuoteColor/);
 });

@@ -2,3 +2,4 @@
    the focused panel layer owns the redesigned main workspace. */
 @import url('../style.css');
 @import url('./panel-v4.css');
+@import url('./responsive.css');

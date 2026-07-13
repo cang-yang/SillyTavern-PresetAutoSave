@@ -1,0 +1,60 @@
+/* Compact-layout safety layer.
+   This file loads last so legacy density rules cannot shrink essential labels
+   or touch targets below the workspace accessibility contract. */
+
+@media (max-width: 768px) {
+    .pas-panel .pas-tab > span:not(.pas-tab-badge),
+    .pas-panel .pas-filter > span {
+        display: inline !important;
+    }
+}
+
+@media (max-width: 460px) {
+    .pas-panel button {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .pas-panel input.text_pole,
+    .pas-panel select,
+    .pas-panel [role="button"] {
+        min-height: 44px;
+    }
+
+    .pas-panel .pas-card-actions,
+    .pas-panel .pas-version-meta-actions,
+    .pas-panel .pas-list-actions,
+    .pas-panel .pas-batch-toolbar {
+        flex-wrap: wrap;
+    }
+
+    .pas-panel .pas-log-toolbar {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .pas-panel .pas-log-toolbar .pas-search-wrap {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .pas-panel .pas-log-actions {
+        grid-column: 1;
+        grid-row: 2;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+    }
+
+    .pas-panel .pas-log-actions .pas-mini-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .pas-panel .pas-log-toolbar > .pas-filters {
+        grid-column: 1;
+        grid-row: 3;
+    }
+
+    .pas-panel .pas-log-autoscroll {
+        min-height: 44px;
+    }
+}

@@ -1,4 +1,5 @@
 import { buildPanelHTML } from '../../modules/panel-shell.js';
+import { captureFocusAnchor, restoreFocusAnchor } from '../../modules/core/focus-anchor.js';
 import { escapeAttr, escapeHtml } from '../../modules/key-utils.js';
 import { buildHarnessScenario } from '../fixtures/browser-harness-model.mjs';
 import { normalizeHarnessOptions } from './config.mjs';
@@ -166,6 +167,7 @@ function filteredRecords() {
 function renderList() {
     const started = performance.now();
     const list = app.querySelector('.pas-snapshot-list');
+    const focusAnchor = captureFocusAnchor(list);
     list.toggleAttribute('aria-busy', options.scenario === 'loading');
 
     if (options.scenario === 'loading' || options.scenario === 'error' || scenario.records.length === 0) {
@@ -181,6 +183,7 @@ function renderList() {
     app.querySelector('#pas-list-badge').textContent = String(visibleRecords);
     app.querySelector('#pas-panel-stats').textContent = `${visibleRecords} 条快照`;
     app.querySelector('#pas-footer-stats').textContent = `${visibleRecords} 条快照`;
+    restoreFocusAnchor(list, focusAnchor, app.querySelector('.pas-search'));
     lastRenderMs = performance.now() - started;
     return lastRenderMs;
 }
