@@ -65,3 +65,16 @@ test('compact layout trades the overflow trigger for touch-safe labeled actions'
     assert.match(css, /@media\s*\(max-width:\s*640px\)[\s\S]*\.pas-gm-mobile-actions\s*\{[^}]*display:\s*flex/s);
     assert.match(css, /\.pas-gm-mobile-actions button\s*\{[^}]*min-height:\s*44px/s);
 });
+
+test('organization changes expose session undo and redo controls', () => {
+    assert.match(source, /pas-gm-undo-btn/);
+    assert.match(source, /pas-gm-redo-btn/);
+    assert.match(source, /undoOrganizationChange/);
+    assert.match(source, /redoOrganizationChange/);
+    assert.match(source, /recordOrganizationChange/);
+    assert.match(source, /event\.ctrlKey \|\| event\.metaKey/);
+    assert.match(source, /wantsUndo/);
+    assert.match(source, /wantsRedo/);
+    assert.match(css, /\.pas-gm-history-status/);
+    assert.match(css, /@media\s*\(max-width:\s*640px\)[\s\S]*\.pas-gm-header-actions button\s*\{[^}]*min-height:\s*44px/s);
+});

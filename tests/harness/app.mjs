@@ -338,6 +338,46 @@ function closeImportPreview() {
     document.querySelector('.pas-harness-dialog')?.remove();
 }
 
+async function showGroupManager({ withUndo = true } = {}) {
+    document.querySelector('.pas-harness-dialog')?.remove();
+    const { renderModernGroupingHTML } = await import('../../modules/panel-group-manager.js');
+    const nodes = [
+        {
+            key: 'primary-writing',
+            displayName: '这是一个很长但仍应完整可读的中文创作预设分组名称 🦊',
+            automaticName: 'primary-writing',
+            customized: true,
+            depth: 0,
+            items: [
+                { presetName: 'Story Alpha v7.1', manualOverride: false },
+                { presetName: 'Story Mobile', manualOverride: true },
+            ],
+        },
+        {
+            key: 'nested-tools',
+            displayName: '嵌套工具组',
+            automaticName: 'nested-tools',
+            customized: false,
+            depth: 1,
+            parentName: '创作预设',
+            items: [{ presetName: 'Summarizer', manualOverride: false }],
+        },
+    ];
+    const host = document.createElement('div');
+    host.className = 'pas-harness-dialog pas-harness-group-dialog';
+    host.innerHTML = renderModernGroupingHTML(nodes);
+    document.body.append(host);
+    const undo = host.querySelector('.pas-gm-undo-btn');
+    const status = host.querySelector('.pas-gm-history-status');
+    if (withUndo && undo && status) {
+        undo.disabled = false;
+        undo.title = translate('Grouping Undo Action', { action: translate('Grouping Action Move Preset') });
+        status.hidden = false;
+        status.textContent = translate('Grouping Change Saved', { action: translate('Grouping Action Move Preset') });
+    }
+    return true;
+}
+
 function isVisible(element) {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -350,6 +390,7 @@ function collectMetrics() {
         '.pas-btn-snap', '.pas-tools-trigger', '.pas-tab', '.pas-search',
         '.pas-view-btn', '.pas-filter', '.pas-btn-restore', '.pas-btn-apply-version',
         '.pas-import-confirm', '.pas-import-mode-card',
+        '.pas-gm-header-actions button', '.pas-gm-rename-btn', '.pas-gm-mobile-actions button',
     ].join(',');
     const controls = [...metricsRoot.querySelectorAll('button, input, [role="button"], .pas-import-mode-card')].map(element => {
         const rect = element.getBoundingClientRect();
@@ -391,6 +432,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     showSaveStatus,
     showImportPreview,
     closeImportPreview,
+    showGroupManager,
     collectMetrics,
     audit: () => evaluateLayoutAudit(collectMetrics()),
 });

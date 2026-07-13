@@ -31,12 +31,21 @@ import {
 } from './core/group-manager-view-model.js';
 import { DragHoverExpander } from './core/drag-hover-expander.js';
 import { createGroupAliasEditor } from './core/group-alias-editor.js';
+import { OrganizationCommandHistory } from './core/organization-command-history.js';
 
 // =====================================================
 // 常量
 // =====================================================
 /** DOM 出现后绑定事件的最小等待 */
 const DOM_BIND_DELAY_MS = 30;
+const PENDING_GROUPS_STATE_KEY = 'pendingCustomGroups';
+const ORGANIZATION_STATE_KEYS = Object.freeze([
+    'groupingManualOverrides',
+    'groupingSeriesAliases',
+    'groupingTree',
+    'seriesDefaultApply',
+    PENDING_GROUPS_STATE_KEY,
+]);
 
 // =====================================================
 // 弹窗状态（模块级）
@@ -54,6 +63,7 @@ let _gmExpandedKeys = new Set();
 let _gmSearchTimer = null;
 let _gmDragPayload = null;
 const _gmHoverExpander = new DragHoverExpander({ delay: 450 });
+const _gmOrganizationHistory = new OrganizationCommandHistory({ limit: 25 });
 
 // =====================================================
 // 分组管理弹窗状态 getter/setter
@@ -74,6 +84,7 @@ export function clearGroupingManagerState() {
     _gmExpandedKeys.clear();
     _gmDragPayload = null;
     _gmHoverExpander.cancelAll();
+    _gmOrganizationHistory.clear();
     if (_gmSearchTimer) clearTimeout(_gmSearchTimer);
     _gmSearchTimer = null;
 }
@@ -427,8 +438,8 @@ function renderModernGroupingHTML(nodes) {
             ? `<span class="pas-gm-tree-relation"><i class="fa-solid fa-turn-up"></i><span>${escapeHtml(node.parentName || '')}</span></span>`
             : '';
         const automaticName = node.automaticName || node.displayName;
-        const automaticTitle = node.customized
-            ? t('Grouping Automatic Name Hint', { name: automaticName })
+        const nameTitle = node.customized
+            ? `${node.displayName} · ${t('Grouping Automatic Name Hint', { name: automaticName })}`
             : node.displayName;
         const mobileActions = [
             nestingEnabled && !depthExceeded
@@ -445,7 +456,7 @@ function renderModernGroupingHTML(nodes) {
                 ${relationship}
                 <span class="pas-gm-series-icon"><i class="fa-regular fa-folder${expanded ? '-open' : ''}"></i></span>
                 ${nestingEnabled ? `<span class="pas-gm-drag-handle" draggable="true" title="${escapeAttr(t('Grouping Drag Handle Title'))}"><i class="fa-solid fa-grip-vertical"></i></span>` : ''}
-                <span class="pas-gm-series-name" title="${escapeAttr(automaticTitle)}">${escapeHtml(node.displayName)}</span>
+                <span class="pas-gm-series-name" title="${escapeAttr(nameTitle)}">${escapeHtml(node.displayName)}</span>
                 <button class="pas-gm-rename-btn" type="button" aria-label="${escapeAttr(t('Grouping Rename Inline', { name: node.displayName }))}" title="${escapeAttr(t('Grouping Series Menu Rename'))}"><i class="fa-solid fa-pen"></i></button>
                 ${isCustom ? `<span class="pas-gm-origin" title="${escapeAttr(t('Grouping Custom Badge'))}"><i class="fa-solid fa-wand-magic-sparkles"></i></span>` : ''}
                 <span class="pas-gm-series-count">${node.items.length}</span>
@@ -462,10 +473,13 @@ function renderModernGroupingHTML(nodes) {
         <div class="pas-gm-header">
             <div class="pas-gm-header-left"><span class="pas-gm-title-icon"><i class="fa-solid fa-layer-group"></i></span><div><h3>${escapeHtml(t('Grouping Manage Title'))}</h3><p>${escapeHtml(t('Grouping Manage Desc'))}</p></div></div>
             <div class="pas-gm-header-actions">
-                <button class="pas-gm-new-group-btn" type="button" aria-label="${escapeAttr(t('Grouping New Group Btn'))}"><i class="fa-solid fa-plus"></i><span>${escapeHtml(t('Grouping New Group Btn'))}</span></button>
-                <button class="pas-gm-reset-all-btn" type="button" title="${escapeAttr(t('Grouping Reset All'))}" aria-label="${escapeAttr(t('Grouping Reset All'))}"><i class="fa-solid fa-arrow-rotate-left"></i><span>${escapeHtml(t('Grouping Reset All'))}</span></button>
+                <button class="pas-gm-new-group-btn" type="button" aria-label="${escapeAttr(t('Grouping New Group Btn'))}"><i class="fa-solid fa-plus"></i><span class="pas-gm-label-long">${escapeHtml(t('Grouping New Group Btn'))}</span><span class="pas-gm-label-short">${escapeHtml(t('Grouping New Group Short'))}</span></button>
+                <button class="pas-gm-undo-btn" type="button" title="${escapeAttr(t('Grouping Undo'))}" aria-label="${escapeAttr(t('Grouping Undo'))}" disabled><i class="fa-solid fa-rotate-left"></i><span>${escapeHtml(t('Grouping Undo'))}</span></button>
+                <button class="pas-gm-redo-btn" type="button" title="${escapeAttr(t('Grouping Redo'))}" aria-label="${escapeAttr(t('Grouping Redo'))}" disabled><i class="fa-solid fa-rotate-right"></i><span>${escapeHtml(t('Grouping Redo'))}</span></button>
+                <button class="pas-gm-reset-all-btn" type="button" title="${escapeAttr(t('Grouping Reset All'))}" aria-label="${escapeAttr(t('Grouping Reset All'))}"><i class="fa-solid fa-wand-magic-sparkles"></i><span class="pas-gm-label-long">${escapeHtml(t('Grouping Reset All'))}</span><span class="pas-gm-label-short">${escapeHtml(t('Grouping Reset All Short'))}</span></button>
             </div>
         </div>
+        <div class="pas-gm-history-status" role="status" aria-live="polite" hidden></div>
         <div class="pas-gm-toolbar">
             <label class="pas-gm-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" value="${escapeAttr(_gmSearchQuery)}" placeholder="${escapeAttr(t('Grouping Search Placeholder'))}" aria-label="${escapeAttr(t('Grouping Search Placeholder'))}" autocomplete="off"></label>
         </div>
@@ -507,6 +521,108 @@ function saveGroupingSettings(overrides, groupingTree = null) {
         }).catch(() => {});
         logger.debug('[saveGroupingSettings] refreshData called');
     }
+}
+
+function captureOrganizationState(keys = ORGANIZATION_STATE_KEYS) {
+    const settings = getSettings();
+    const snapshot = {};
+    for (const key of keys) {
+        snapshot[key] = key === PENDING_GROUPS_STATE_KEY
+            ? [..._pendingCustomGroups]
+            : structuredClone(settings[key] ?? {});
+    }
+    return snapshot;
+}
+
+function updateOrganizationHistoryUI(container, message = null) {
+    if (!container) return;
+    const status = _gmOrganizationHistory.getStatus();
+    const undo = container.querySelector('.pas-gm-undo-btn');
+    const redo = container.querySelector('.pas-gm-redo-btn');
+    const live = container.querySelector('.pas-gm-history-status');
+    const configure = (button, enabled, baseLabelKey, actionLabelKey, actionKey) => {
+        if (!button) return;
+        button.disabled = !enabled;
+        const label = enabled && actionKey
+            ? t(actionLabelKey, { action: t(actionKey) })
+            : t(baseLabelKey);
+        button.setAttribute('aria-label', label.trim());
+        button.setAttribute('title', label.trim());
+    };
+    configure(undo, status.canUndo, 'Grouping Undo', 'Grouping Undo Action', status.undoLabel);
+    configure(redo, status.canRedo, 'Grouping Redo', 'Grouping Redo Action', status.redoLabel);
+    if (live && message !== null) {
+        live.textContent = message;
+        live.hidden = !message;
+    }
+}
+
+function recordOrganizationChange(label, keys, before, container) {
+    const recorded = _gmOrganizationHistory.record({
+        label,
+        before,
+        after: captureOrganizationState(keys),
+    });
+    if (recorded) {
+        updateOrganizationHistoryUI(container, t('Grouping Change Saved', { action: t(label) }));
+    }
+    return recorded;
+}
+
+function applyOrganizationState(snapshot, container) {
+    const updates = {};
+    for (const [key, value] of Object.entries(snapshot)) {
+        if (key === PENDING_GROUPS_STATE_KEY) {
+            _pendingCustomGroups = new Set(Array.isArray(value) ? value : []);
+        } else {
+            updates[key] = structuredClone(value);
+        }
+    }
+    if (Object.keys(updates).length > 0) batchUpdate(updates);
+    _gmOverrides = { ...(getSettings().groupingManualOverrides || {}) };
+    try {
+        Promise.resolve(refreshTakeover({ force: true })).catch(error => {
+            logger.error('[applyOrganizationState] refreshTakeover failed:', error);
+        });
+    } catch (error) {
+        logger.error('[applyOrganizationState] refreshTakeover failed:', error);
+    }
+    refreshGroupingUI(container);
+    if (_gmPanelCtx?.refreshData) {
+        Promise.resolve().then(() => _gmPanelCtx.refreshData()).catch(error => {
+            logger.error('[applyOrganizationState] refreshData failed:', error);
+        });
+    }
+}
+
+function undoOrganizationChange(container) {
+    const result = _gmOrganizationHistory.undo(captureOrganizationState());
+    if (!result.ok) {
+        if (result.reason === 'conflict') {
+            const message = t('Grouping Undo Conflict');
+            toast.warning(message);
+            updateOrganizationHistoryUI(container, message);
+        }
+        return false;
+    }
+    applyOrganizationState(result.state, container);
+    updateOrganizationHistoryUI(container, t('Grouping Undo Done', { action: t(result.label) }));
+    return true;
+}
+
+function redoOrganizationChange(container) {
+    const result = _gmOrganizationHistory.redo(captureOrganizationState());
+    if (!result.ok) {
+        if (result.reason === 'conflict') {
+            const message = t('Grouping Undo Conflict');
+            toast.warning(message);
+            updateOrganizationHistoryUI(container, message);
+        }
+        return false;
+    }
+    applyOrganizationState(result.state, container);
+    updateOrganizationHistoryUI(container, t('Grouping Redo Done', { action: t(result.label) }));
+    return true;
 }
 
 // =====================================================
@@ -610,6 +726,7 @@ function performMoveGroup(childKey, newParentKey, container) {
 
     // 拖到"自动分组"区域 = 提升为根节点
     if (newParentKey === '__auto__') {
+        const before = captureOrganizationState(['groupingTree', PENDING_GROUPS_STATE_KEY]);
         // 从 _pendingCustomGroups 中移除（如果它是空自定义分组）
         for (const name of _pendingCustomGroups) {
             if (normalizeSeriesKey(name) === childKey) {
@@ -619,6 +736,7 @@ function performMoveGroup(childKey, newParentKey, container) {
         }
         delete tree[childKey];
         saveGroupingSettings(_gmOverrides, tree);
+        recordOrganizationChange('Grouping Action Move Group', ['groupingTree', PENDING_GROUPS_STATE_KEY], before, container);
         refreshGroupingUI(container);
         return;
     }
@@ -628,16 +746,18 @@ function performMoveGroup(childKey, newParentKey, container) {
 
     // 循环检测：newParentKey 不能是 childKey 的后代
     if (isAncestor(tree, newParentKey, childKey)) {
-        toast.warning('无法移动：目标分组是当前分组的子分组，这会造成循环引用。');
+        toast.warning(t('Grouping Move Cycle Error'));
         return;
     }
 
     // 深度检测：childKey 在 newParentKey 下的新深度不能超过 maxDepth
     const newDepth = getNodeDepth(tree, newParentKey) + 1;
     if (newDepth >= nestingMaxDepth) {
-        toast.warning(`无法移动：目标位置深度已达到最大嵌套深度 (${nestingMaxDepth})。`);
+        toast.warning(t('Grouping Move Depth Error', { max: nestingMaxDepth }));
         return;
     }
+
+    const before = captureOrganizationState(['groupingTree', PENDING_GROUPS_STATE_KEY]);
 
     // 从 _pendingCustomGroups 中移除（如果它是空自定义分组）
     for (const name of _pendingCustomGroups) {
@@ -651,17 +771,21 @@ function performMoveGroup(childKey, newParentKey, container) {
     tree[childKey] = newParentKey;
 
     saveGroupingSettings(_gmOverrides, tree);
+    recordOrganizationChange('Grouping Action Move Group', ['groupingTree', PENDING_GROUPS_STATE_KEY], before, container);
     refreshGroupingUI(container);
 }
 
 /**
  * 执行移动：将预设移到目标系列（AI-0 重构 + AQ-1：移入后清理 _pendingCustomGroups）
  */
-function performMove(presetName, targetSeriesKey, container) {
+function performMove(presetName, targetSeriesKey, container, targetSeriesName = null) {
+    const keys = ['groupingManualOverrides', PENDING_GROUPS_STATE_KEY];
+    const before = captureOrganizationState(keys);
     // 拖到"自动分组"区 = 恢复自动识别
     if (targetSeriesKey === '__auto__') {
         delete _gmOverrides[presetName];
         saveGroupingSettings(_gmOverrides);
+        recordOrganizationChange('Grouping Action Move Preset', keys, before, container);
         refreshGroupingUI(container);
         return;
     }
@@ -679,7 +803,7 @@ function performMove(presetName, targetSeriesKey, container) {
         } else {
             // AQ-1: 可能是从 _pendingCustomGroups 来的空分组
             const pendingName = [..._pendingCustomGroups].find(n => normalizeSeriesKey(n) === targetSeriesKey);
-            _gmOverrides[presetName] = pendingName || targetSeriesKey;
+            _gmOverrides[presetName] = pendingName || targetSeriesName || targetSeriesKey;
         }
     }
     // AQ-1: 有预设移入后，该分组不再是"待建"状态
@@ -690,6 +814,7 @@ function performMove(presetName, targetSeriesKey, container) {
         }
     }
     saveGroupingSettings(_gmOverrides);
+    recordOrganizationChange('Grouping Action Move Preset', keys, before, container);
     refreshGroupingUI(container);
 }
 
@@ -697,8 +822,11 @@ function performMove(presetName, targetSeriesKey, container) {
  * 重置单个预设：删除手动覆盖（AI-0：恢复自动分组）
  */
 function performResetOne(presetName, container) {
+    const keys = ['groupingManualOverrides'];
+    const before = captureOrganizationState(keys);
     delete _gmOverrides[presetName];
     saveGroupingSettings(_gmOverrides);
+    recordOrganizationChange('Grouping Action Restore Auto', keys, before, container);
     refreshGroupingUI(container);
 }
 
@@ -706,8 +834,11 @@ function performResetOne(presetName, container) {
  * 重置全部（AI-0：清空所有覆盖）
  */
 function performResetAll(container) {
+    const keys = ['groupingManualOverrides', 'groupingTree'];
+    const before = captureOrganizationState(keys);
     for (const key of Object.keys(_gmOverrides)) delete _gmOverrides[key];
     saveGroupingSettings(_gmOverrides, {});
+    recordOrganizationChange('Grouping Action Reset All', keys, before, container);
     refreshGroupingUI(container);
 }
 
@@ -762,11 +893,14 @@ function visibleGroupingNames(container) {
 }
 
 function restoreGroupAlias(seriesKey, container) {
+    const keys = ['groupingSeriesAliases'];
+    const before = captureOrganizationState(keys);
     const aliases = { ...(getSettings().groupingSeriesAliases || {}) };
     for (const key of Object.keys(aliases)) {
         if (normalizeSeriesKey(key) === normalizeSeriesKey(seriesKey)) delete aliases[key];
     }
     batchUpdate({ groupingSeriesAliases: aliases });
+    recordOrganizationChange('Grouping Action Restore Name', keys, before, container);
     refreshTakeover({ force: true });
     refreshGroupingUI(container);
     container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-header`)?.focus();
@@ -833,12 +967,15 @@ function beginInlineRename(seriesKey, container) {
             }
             if (closed) return;
             closed = true;
+            const keys = ['groupingSeriesAliases'];
+            const before = captureOrganizationState(keys);
             const aliases = { ...(getSettings().groupingSeriesAliases || {}) };
             for (const key of Object.keys(aliases)) {
                 if (normalizeSeriesKey(key) === normalizeSeriesKey(seriesKey)) delete aliases[key];
             }
             if (value !== automaticName) aliases[seriesKey] = value;
             batchUpdate({ groupingSeriesAliases: aliases });
+            recordOrganizationChange('Grouping Action Rename Group', keys, before, container);
             refreshTakeover({ force: true });
             refreshGroupingUI(container);
             container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-header`)?.focus();
@@ -934,14 +1071,10 @@ async function showMoveDialog(presetName, container) {
                     if (newName === null || newName === undefined || newName === false) return;
                     newName = String(newName).trim();
                     if (!newName) return;
-                    _gmOverrides[presetName] = newName;
-                    saveGroupingSettings(_gmOverrides);
-                    refreshGroupingUI(container);
+                    performMove(presetName, normalizeSeriesKey(newName), container, newName);
                 } else {
                     const targetName = opt.getAttribute('data-target-name') || targetKey;
-                    _gmOverrides[presetName] = targetName;
-                    saveGroupingSettings(_gmOverrides);
-                    refreshGroupingUI(container);
+                    performMove(presetName, targetKey, container, targetName);
                 }
                 try { popup.completeCancelled?.(); } catch (_) {}
             });
@@ -977,7 +1110,7 @@ async function onCreateCustomGroup(container) {
     const exists = groups.some(g => normalizeSeriesKey(g.series) === targetKey)
         || [..._pendingCustomGroups].some(n => normalizeSeriesKey(n) === targetKey);
     if (exists) {
-        toast.warning(t('Grouping New Group Prompt') + ': ' + escapeHtml(trimmed));
+        toast.warning(t('Grouping Group Exists', { name: trimmed }));
         return;
     }
 
@@ -986,12 +1119,15 @@ async function onCreateCustomGroup(container) {
     const tree = settings.groupingTree || {};
     const treeKeys = new Set([...Object.keys(tree), ...Object.values(tree)].map(k => normalizeSeriesKey(k)));
     if (treeKeys.has(targetKey)) {
-        toast.warning(`分组 "${trimmed}" 已存在（嵌套树中），请使用其他名称。`);
+        toast.warning(t('Grouping Group Exists', { name: trimmed }));
         return;
     }
 
     // 添加到待建空分组集合，刷新 UI 让其显示为空卡片
+    const keys = [PENDING_GROUPS_STATE_KEY];
+    const before = captureOrganizationState(keys);
     _pendingCustomGroups.add(trimmed);
+    recordOrganizationChange('Grouping Action Create Group', keys, before, container);
     toast.success(t('Grouping New Group Created', { name: escapeHtml(trimmed) }));
     refreshGroupingUI(container);
 }
@@ -1023,7 +1159,7 @@ async function onDeleteCustomGroup(seriesKey, container) {
 
     let confirmHtml = t('Grouping Delete Group Confirm', { name: escapeHtml(displayName) });
     if (childKeys.length > 0) {
-        confirmHtml = `该分组包含 ${childKeys.length} 个子分组，删除后它们将上移一层。确定删除？`;
+        confirmHtml = t('Grouping Delete Children Confirm', { count: childKeys.length });
     }
 
     const ok = await confirmSafe(
@@ -1031,6 +1167,9 @@ async function onDeleteCustomGroup(seriesKey, container) {
         confirmHtml
     );
     if (!ok) return;
+
+    const keys = ['groupingManualOverrides', 'groupingTree', PENDING_GROUPS_STATE_KEY];
+    const before = captureOrganizationState(keys);
 
     // 处理子分组：将它们提升到被删分组的父节点（或成为根节点）
     const deletedParent = tree[seriesKey];
@@ -1061,6 +1200,7 @@ async function onDeleteCustomGroup(seriesKey, container) {
     }
 
     saveGroupingSettings(_gmOverrides, tree);
+    recordOrganizationChange('Grouping Action Delete Group', keys, before, container);
     refreshGroupingUI(container);
 }
 
@@ -1077,13 +1217,13 @@ async function onCreateSubGroup(parentKey, container) {
     // 检查父节点深度
     const parentDepth = getNodeDepth(tree, parentKey);
     if (parentDepth >= nestingMaxDepth - 1) {
-        toast.warning('已达到最大嵌套深度，无法创建子分组。');
+        toast.warning(t('Grouping Subgroup Depth Error'));
         return;
     }
 
     // 弹出输入框
     const inputPopup = createPopupSafe(
-        '新建子分组',
+        t('Grouping New Subgroup'),
         'INPUT',
         { okButton: t('Confirm'), cancelButton: t('Cancel'), rows: 1 },
         ''
@@ -1092,7 +1232,7 @@ async function onCreateSubGroup(parentKey, container) {
     if (inputPopup) {
         try { name = await inputPopup.show(); } catch (_) {}
     } else {
-        name = window.prompt('新建子分组');
+        name = window.prompt(t('Grouping New Subgroup'));
     }
     if (name === null || name === undefined || name === false) return;
     const trimmed = String(name).trim().slice(0, 120);
@@ -1110,14 +1250,17 @@ async function onCreateSubGroup(parentKey, container) {
         existingKeys.add(normalizeSeriesKey(pName));
     }
     if (existingKeys.has(newChildKey)) {
-        toast.warning(`分组 "${trimmed}" 已存在，请使用其他名称。`);
+        toast.warning(t('Grouping Group Exists', { name: trimmed }));
         return;
     }
 
     // 写入分组树
+    const keys = ['groupingTree'];
+    const before = captureOrganizationState(keys);
     tree[newChildKey] = parentKey;
     saveGroupingSettings(_gmOverrides, tree);
-    toast.success(`子分组 "${trimmed}" 已创建`);
+    recordOrganizationChange('Grouping Action Create Subgroup', keys, before, container);
+    toast.success(t('Grouping Subgroup Created', { name: trimmed }));
     refreshGroupingUI(container);
 }
 
@@ -1509,6 +1652,30 @@ function bindClickEvents(container) {
         newGroupBtn.onclick = () => onCreateCustomGroup(container);
     }
 
+    const undoBtn = container.querySelector('.pas-gm-undo-btn');
+    if (undoBtn) undoBtn.onclick = () => undoOrganizationChange(container);
+    const redoBtn = container.querySelector('.pas-gm-redo-btn');
+    if (redoBtn) redoBtn.onclick = () => redoOrganizationChange(container);
+    container.onkeydown = event => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+        if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+        const key = event.key.toLowerCase();
+        const wantsUndo = key === 'z' && !event.shiftKey;
+        const wantsRedo = key === 'y' || (key === 'z' && event.shiftKey);
+        if (!wantsUndo && !wantsRedo) return;
+        event.preventDefault();
+        if (wantsRedo) redoOrganizationChange(container);
+        else undoOrganizationChange(container);
+    };
+    const resetAllBtn = container.querySelector('.pas-gm-reset-all-btn');
+    if (resetAllBtn) {
+        resetAllBtn.onclick = async () => {
+            const ok = await confirmSafe(t('Grouping Reset All'), t('Grouping Reset All Confirm'));
+            if (ok) performResetAll(container);
+        };
+    }
+    updateOrganizationHistoryUI(container);
+
     const searchInput = container.querySelector('.pas-gm-search input');
     if (searchInput) {
         searchInput.oninput = () => {
@@ -1604,6 +1771,7 @@ export async function showGroupingManager(panelCtx) {
     if (_groupingManagerPopup) return;
     _gmPanelCtx = panelCtx;
     _pendingCustomGroups.clear(); // AQ-1: 每次打开弹窗清空临时空分组
+    _gmOrganizationHistory.clear();
 
     // AK-1 重构：只使用 getAllPresetNames() 作为唯一数据源
     // 不再从快照补充——旧逻辑因为 getAllPresetNames() 返回数字索引导致
@@ -1668,22 +1836,11 @@ export async function showGroupingManager(panelCtx) {
     const container = document.querySelector('.pas-gm-popup');
     if (container) {
         bindGroupingEvents(container);
-
-        // 重置全部按钮
-        const resetAllBtn = container.querySelector('.pas-gm-reset-all-btn');
-        if (resetAllBtn) {
-            resetAllBtn.addEventListener('click', async () => {
-                const ok = await confirmSafe(
-                    t('Grouping Reset All'),
-                    t('Grouping Reset All Confirm')
-                );
-                if (ok) performResetAll(container);
-            });
-        }
     }
 
     await promise;
     _groupingManagerPopup = null;
+    _gmOrganizationHistory.clear();
 
     // 弹窗关闭后清理 groupingTree 中的空壳节点
     // 策略：自底向上，反复扫描。节点同时满足（无预设 + 自身不作为父组 + 无 override 指向）→ 删除
@@ -1725,6 +1882,7 @@ export async function showGroupingManager(panelCtx) {
 // =====================================================
 
 export {
+    renderModernGroupingHTML,
     renderNestedGroupingHTML,
     renderGroupingHTML,
     bindGroupingEvents,

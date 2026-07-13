@@ -4523,6 +4523,24 @@ body.pas-light .pas-gm-ctx-separator {
     font-size: .82rem;
     cursor: pointer;
 }
+.pas-gm-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pas-gm-header-actions button:disabled {
+    cursor: not-allowed;
+    opacity: .38;
+}
+.pas-gm-header-actions button:disabled:hover {
+    border-color: var(--pas-border);
+    background: var(--pas-surface-1);
+}
+.pas-gm-undo-btn:not(:disabled),
+.pas-gm-redo-btn:not(:disabled) {
+    color: var(--pas-accent);
+}
+.pas-gm-header-actions .pas-gm-label-short { display: none; }
 .pas-gm-header-actions .pas-gm-new-group-btn {
     border-style: solid;
     border-color: color-mix(in srgb, var(--pas-accent) 52%, transparent);
@@ -4533,6 +4551,17 @@ body.pas-light .pas-gm-ctx-separator {
     border-color: var(--pas-border-strong);
     background: var(--pas-surface-2);
 }
+.pas-gm-history-status {
+    min-height: 30px;
+    padding: 6px 10px;
+    border: 1px solid color-mix(in srgb, var(--pas-accent) 24%, transparent);
+    border-radius: 9px;
+    color: var(--pas-fg-muted);
+    background: color-mix(in srgb, var(--pas-accent) 7%, transparent);
+    font-size: .76rem;
+    line-height: 1.4;
+}
+.pas-gm-history-status[hidden] { display: none; }
 .pas-gm-toolbar {
     display: flex;
     align-items: center;
@@ -4862,15 +4891,28 @@ body.pas-light .pas-gm-ctx-separator {
 
 @media (max-width: 640px) {
     .pas-gm-popup { min-height: 72vh; }
-    .pas-gm-header { gap: 8px; }
+    .pas-gm-header { flex-wrap: wrap; gap: 8px; }
     .pas-gm-title-icon { width: 34px; height: 34px; flex-basis: 34px; }
     .pas-gm-header-left p { display: none; }
-    .pas-gm-header-actions button { width: 36px; min-height: 36px; padding: 0; }
-    .pas-gm-header-actions button span { display: none; }
+    .pas-gm-header-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; }
+    .pas-gm-header-actions button { width: auto; min-width: 44px; min-height: 44px; padding: 0; }
+    .pas-gm-header-actions button { gap: 4px; font-size: .74rem; }
+    .pas-gm-header-actions .pas-gm-label-long { display: none; }
+    .pas-gm-header-actions .pas-gm-label-short { display: inline; }
     .pas-gm-summary { flex-wrap: nowrap; }
     .pas-gm-summary span { flex: 1; justify-content: center; padding-inline: 5px; }
     .pas-gm-series-header { gap: 6px; padding-inline: 7px; }
-    .pas-gm-series-name { flex: 1 1 auto; min-width: 0; }
+    .pas-gm-series-name {
+        display: -webkit-box;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        line-height: 1.3;
+        white-space: normal;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+    }
+    .pas-gm-rename-btn { width: 44px; height: 44px; min-width: 44px; min-height: 44px; opacity: 1; }
     .pas-gm-drag-handle { width: 18px; margin-right: 0; }
     .pas-gm-preset { padding-left: 12px; }
     .pas-gm-origin-manual span { display: none; }
