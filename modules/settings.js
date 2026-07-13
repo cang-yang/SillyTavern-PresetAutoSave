@@ -10,6 +10,7 @@
  */
 
 import { logger } from './logger.js';
+import { getContextSafe } from './compatibility.js';
 
 const MODULE_NAME = 'preset_auto_save';
 
@@ -157,7 +158,8 @@ let _initialized = false;
  */
 export async function initSettings() {
     try {
-        const ctx = SillyTavern.getContext();
+        const ctx = getContextSafe();
+        if (!ctx) throw new Error('SillyTavern context unavailable');
         const allSettings = ctx.extensionSettings;
 
         if (!allSettings) {
@@ -392,7 +394,8 @@ function notifyListeners(key, newValue, oldValue) {
 // =====================================================
 function persistSettings() {
     try {
-        const ctx = SillyTavern.getContext();
+        const ctx = getContextSafe();
+        if (!ctx) throw new Error('SillyTavern context unavailable');
         if (typeof ctx.saveSettingsDebounced === 'function') {
             ctx.saveSettingsDebounced();
         } else {

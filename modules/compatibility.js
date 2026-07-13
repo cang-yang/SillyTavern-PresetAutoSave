@@ -203,6 +203,19 @@ export function safeCall(fn, fallback = null, label = 'call') {
 }
 
 /**
+ * Return the active SillyTavern context without exposing global lookup or
+ * host exceptions to callers. Missing and temporarily unavailable hosts both
+ * fail closed with `null`.
+ */
+export function getContextSafe() {
+    return safeCall(() => {
+        const host = globalThis.SillyTavern || globalThis.window?.SillyTavern;
+        if (typeof host?.getContext !== 'function') return null;
+        return host.getContext();
+    }, null, 'getContext');
+}
+
+/**
  * 安全异步调用
  */
 export async function safeCallAsync(fn, fallback = null, label = 'call') {

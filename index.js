@@ -9,7 +9,7 @@
 import { initLogger, logger, teardownLogger } from './modules/logger.js';
 import {
     initCompatibility, ENV, offAll, on, getEventType,
-    savePresetSafe, getPresetManager,
+    savePresetSafe, getPresetManager, getContextSafe,
 } from './modules/compatibility.js';
 import { initSettings, getSettings, resetSettings } from './modules/settings.js';
 import { initHistoryStore, getAllSnapshots, clearAll as clearAllSnapshots } from './modules/history-store.js';
@@ -201,7 +201,8 @@ export async function onDelete() {
     if (recovery.complete) {
         try {
             resetSettings();
-            const ctx = SillyTavern.getContext();
+            const ctx = getContextSafe();
+            if (!ctx) throw new Error('SillyTavern context unavailable');
             if (ctx.extensionSettings) {
                 delete ctx.extensionSettings['preset_auto_save'];
                 if (typeof ctx.saveSettingsDebounced === 'function') ctx.saveSettingsDebounced();
@@ -251,7 +252,10 @@ function ensureRuntimeReady() {
 export async function onEnable() {
     initLogger();
     logger.info('Enabled - initializing extension runtime');
-    initCompatibility();
+    if (!initCompatibility()) {
+        logger.error('Required SillyTavern capabilities unavailable; enable aborted');
+        return { ready: false };
+    }
     await ensureRuntimeReady();
     const ready = _phase1Done && _takeoverDone && _phase2Done;
     if (!ready) logger.warn('Enable completed with one or more initialization phases unavailable');
@@ -432,17 +436,17 @@ export async function onDisable() {
     initLogger();
     logger.info(`SillyTavern-PresetAutoSave v${VERSION} loading...`);
 
-    if (!window.SillyTavern || typeof window.SillyTavern.getContext !== 'function') {
-        logger.error('SillyTavern context not available, abort.');
+    // 兼容性探测（唯一入口）
+    if (!initCompatibility()) {
+        logger.error('Required SillyTavern capabilities unavailable; startup aborted');
         return;
     }
 
-    // 兼容性探测（唯一入口）
-    if (!initCompatibility()) {
-        logger.error('Compatibility check failed, extension may not work properly');
+    const ctx = getContextSafe();
+    if (!ctx) {
+        logger.error('SillyTavern context not available; startup aborted');
+        return;
     }
-
-    const ctx = SillyTavern.getContext();
     const { eventSource, event_types } = ctx;
 
     // ============ 关键修复：检测当前 ST 是否已经过了 APP_INITIALIZED 阶段 ============

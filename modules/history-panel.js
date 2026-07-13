@@ -1098,7 +1098,6 @@ async function maybePromptForImportAssignment(newName, existingGroups) {
 
     _importPromptInflight = true;
     try {
-        const ctx = SillyTavern.getContext();
         const ok = await confirmSafe(
             t('Grouping Import Detected Title'),
             `<div>${t('Grouping Import Detected Hint', {

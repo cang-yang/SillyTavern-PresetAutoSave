@@ -32,6 +32,7 @@ import {
     createPopupSafe,
     getCurrentApiId,
     getSelectedPresetName,
+    getContextSafe,
 } from './compatibility.js';
 import { saveNow, resetLastSavedHash, beginAtomicRestore, endAtomicRestore } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
@@ -674,7 +675,7 @@ export async function onDeletePreset(presetName, apiId) {
         //   不 emit PRESET_DELETED、不调用 saveSettingsDebounced()。
         //   这两步在 ST openai.js onDeletePresetClick() 中单独完成。
         try {
-            const ctx = SillyTavern.getContext();
+            const ctx = getContextSafe();
             if (ctx?.eventSource?.emit && ctx?.event_types?.PRESET_DELETED) {
                 await ctx.eventSource.emit(ctx.event_types.PRESET_DELETED, { apiId, name: presetName });
             }
@@ -783,7 +784,7 @@ export async function onBatchDeletePresets(presetNames, apiId) {
     // 补全 ST 原生后续动作：emit PRESET_DELETED + saveSettingsDebounced
     if (deletedNames.length > 0) {
         try {
-            const ctx = SillyTavern.getContext();
+            const ctx = getContextSafe();
             if (ctx?.eventSource?.emit && ctx?.event_types?.PRESET_DELETED) {
                 for (const name of deletedNames) {
                     await ctx.eventSource.emit(ctx.event_types.PRESET_DELETED, { apiId, name });
@@ -1052,10 +1053,7 @@ export { showGroupingManager };
 export async function showGroupingFirstScanWizard(opts = {}) {
     const { isRescan = false } = opts;
     if (_firstScanWizardPopup) return;
-    const ctx = (() => {
-        try { return SillyTavern.getContext(); } catch (_) { return null; }
-    })();
-    if (!ctx) return;
+    if (!getContextSafe()) return;
 
     let names = [];
     try {

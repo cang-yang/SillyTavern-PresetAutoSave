@@ -11,3 +11,8 @@ test('all lifecycle entry points share the serialized readiness path', () => {
     assert.match(source, /APP_READY received'[\s\S]{0,120}ensureRuntimeReady\(\)/);
     assert.doesNotMatch(source, /Auto-save phase deferred because its storage\/takeover dependencies are not ready/);
 });
+
+test('startup aborts when required host compatibility is unavailable', () => {
+    assert.match(source, /if \(!initCompatibility\(\)\) \{[\s\S]*?return;[\s\S]*?\}/);
+    assert.doesNotMatch(source, /Compatibility check failed, extension may not work properly/);
+});
