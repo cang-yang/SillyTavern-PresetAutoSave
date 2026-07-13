@@ -6,7 +6,7 @@ import {
     resolveSeriesDisplayName,
     validateSeriesAlias,
 } from '../modules/preset-grouping.js';
-import { DEFAULT_SETTINGS } from '../modules/settings.js';
+import { DEFAULT_SETTINGS, sanitizeSeriesAliasMap } from '../modules/settings.js';
 
 test('resolves a display alias without changing canonical series identity', () => {
     assert.deepEqual(
@@ -67,4 +67,10 @@ test('settings include a separate alias map instead of overloading manual member
     assert.deepEqual(DEFAULT_SETTINGS.groupingSeriesAliases, {});
     assert.deepEqual(DEFAULT_SETTINGS.groupingManualOverrides, {});
     assert.notEqual(DEFAULT_SETTINGS.groupingSeriesAliases, DEFAULT_SETTINGS.groupingManualOverrides);
+});
+
+test('settings count visible Unicode code points instead of UTF-16 units', () => {
+    const validEmojiName = '😀'.repeat(110);
+    assert.equal(sanitizeSeriesAliasMap({ story: validEmojiName }).story, validEmojiName);
+    assert.deepEqual(sanitizeSeriesAliasMap({ story: '😀'.repeat(121) }), {});
 });

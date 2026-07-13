@@ -388,10 +388,12 @@ function persistSettings() {
     }
 }
 
-function sanitizeSeriesAliasMap(v) {
-    const strings = sanitizeStringMap(v);
+export function sanitizeSeriesAliasMap(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
     const out = {};
-    for (const [key, value] of Object.entries(strings)) {
+    for (const [key, value] of Object.entries(v)) {
+        if (typeof key !== 'string' || !key || key.length > 200) continue;
+        if (typeof value !== 'string') continue;
         const trimmed = value.trim();
         if (!trimmed || Array.from(trimmed).length > 120) continue;
         out[key] = trimmed;
