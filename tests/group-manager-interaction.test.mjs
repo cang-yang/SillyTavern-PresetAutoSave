@@ -5,6 +5,13 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../modules/panel-group-manager.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 
+test('the modern group manager renderer is the single active markup path', () => {
+    assert.match(source, /function renderModernGroupingHTML/);
+    assert.doesNotMatch(source, /function renderGroupingHTML/);
+    assert.doesNotMatch(source, /function renderNestedGroupingHTML/);
+    assert.doesNotMatch(source, /renderGroupingHTML,|renderNestedGroupingHTML,/);
+});
+
 test('nested groups expose parent context and visible tree connectors', () => {
     assert.match(source, /parentName: parent\?\.displayName/);
     assert.match(source, /pas-gm-tree-relation/);
