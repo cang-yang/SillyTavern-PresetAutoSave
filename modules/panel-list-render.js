@@ -27,6 +27,7 @@ import {
     buildNestedGroupTree,
     getNodePath,
 } from './preset-grouping.js';
+import { buildSeriesKeyResolver } from './core/series-key-resolver.js';
 import {
     listAllPresetsIncludingDetached,
 } from './preset-takeover.js';
@@ -554,18 +555,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
     //   后续 native list / archives 来的数据如果是另一种大小写/空格形式
     //   （如"Mur 鹿鹿 API"或"mur鹿鹿 API"），必须归到已存在的系列里，
     //   否则面板里会显示成多个独立的一级条目（用户报告的"一级里只有一个版本"假象）。
-    const _normKeyToDisplay = new Map();  // normKey → 显示名（已经在 seriesMap 中）
-    for (const k of seriesMap.keys()) {
-        _normKeyToDisplay.set(normalizeSeriesKey(k), k);
-    }
-    const _resolveSeriesKey = (rawKey) => {
-        const norm = normalizeSeriesKey(rawKey);
-        const existing = _normKeyToDisplay.get(norm);
-        if (existing) return existing;
-        // 第一次出现 → 注册显示名
-        _normKeyToDisplay.set(norm, rawKey);
-        return rawKey;
-    };
+    const _resolveSeriesKey = buildSeriesKeyResolver(seriesMap, normalizeSeriesKey);
 
     // ⭐ 唯一可信数据源：DOM 上的 select.options（用户实际看到的下拉）
     //
