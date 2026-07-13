@@ -1,4 +1,5 @@
 import { enrichSnapshotList, verifyMigratedSnapshotList, HISTORY_SCHEMA_VERSION } from './history-schema.js';
+import { readOptionalHistoryBucket } from './history-bucket-reader.js';
 
 const META_PREFIX = '__history_v2_meta__::';
 
@@ -25,11 +26,11 @@ export class HistoryRepository {
         const marker = await this.v2Store.getItem(migrationMarkerKey(key));
         if (marker?.status === 'deleted') return null;
 
-        const current = await this.v2Store.getItem(key);
-        if (Array.isArray(current)) return current;
+        const current = await readOptionalHistoryBucket(this.v2Store, key);
+        if (current) return current;
 
-        const legacy = await this.legacyStore.getItem(key);
-        if (!Array.isArray(legacy)) return null;
+        const legacy = await readOptionalHistoryBucket(this.legacyStore, key);
+        if (!legacy) return null;
         return this.#migrate(key, legacy);
     }
 
@@ -57,7 +58,7 @@ export class HistoryRepository {
         const enriched = enrichSnapshotList(input);
         const markerKey = migrationMarkerKey(key);
         const [previousData, previousMarker] = await Promise.all([
-            this.v2Store.getItem(key),
+            readOptionalHistoryBucket(this.v2Store, key),
             this.v2Store.getItem(markerKey),
         ]);
         try {

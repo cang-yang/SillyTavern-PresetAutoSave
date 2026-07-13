@@ -26,6 +26,7 @@ import { getSettings } from './settings.js';
 import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, extractCanonicalForDiff, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
 import { createChangeSet, assertExplainableChange } from './core/change-set.js';
 import { HistoryRepository } from './core/history-repository.js';
+import { readHistoryBucket, readHistoryBuckets } from './core/history-bucket-reader.js';
 import { SerialTaskQueue } from './core/serial-task-queue.js';
 import { emitHistoryChange } from './core/history-change-events.js';
 import {
@@ -695,7 +696,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
     }
 
     const key = makeKey(apiId, presetName);
-    const list = (await _store.getItem(key)) || [];
+    const list = await readHistoryBucket(_store, key);
     const settings = getSettings();
     const now = Date.now();
     const presetStr = stableStringify(canonicalPreset);
@@ -835,7 +836,7 @@ async function emergencyCleanup() {
     const keys = await getKeys(true);
     let removed = 0;
     for (const key of keys) {
-        const list = (await _store.getItem(key)) || [];
+        const list = await readHistoryBucket(_store, key);
         if (list.length > 10) {
             const before = list.length;
             trimListWithPinned(list, 10);
@@ -856,8 +857,7 @@ async function emergencyCleanup() {
 export async function getSnapshots(apiId, presetName) {
     await ensureStore();
     const key = makeKey(apiId, presetName);
-    const list = await _store.getItem(key);
-    return Array.isArray(list) ? list : [];
+    return readHistoryBucket(_store, key);
 }
 
 /**
@@ -869,7 +869,7 @@ export async function getAllSnapshots() {
     if (!keys || keys.length === 0) return [];
 
     // 性能优化：并行 getItem，IndexedDB 内部能 batch IO
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await readHistoryBuckets(_store, keys);
     const all = [];
     for (const list of lists) {
         if (Array.isArray(list)) all.push(...list);
@@ -886,7 +886,7 @@ export async function getSnapshotById(snapshotId) {
     if (!keys || keys.length === 0) return null;
 
     // 性能优化：并行查询，更快返回
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await readHistoryBuckets(_store, keys);
     for (const list of lists) {
         if (!Array.isArray(list)) continue;
         const found = list.find(s => s.id === snapshotId);
@@ -904,7 +904,7 @@ export async function getPresetList() {
     const keys = await getKeys();
     if (!keys || keys.length === 0) return [];
 
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await readHistoryBuckets(_store, keys);
     const result = [];
     for (let i = 0; i < keys.length; i++) {
         const parsed = parseKey(keys[i]);
@@ -1011,7 +1011,7 @@ async function deleteSnapshotMutation(snapshotId, options = {}) {
     const force = options && options.force === true;
 
     for (const key of keys) {
-        const list = (await _store.getItem(key)) || [];
+        const list = await readHistoryBucket(_store, key);
         const idx = list.findIndex(s => s.id === snapshotId);
         if (idx >= 0) {
             if (list[idx].pinned && !force) {
@@ -1049,7 +1049,7 @@ async function renameSnapshotMutation(snapshotId, newName) {
     const trimmed = (newName || '').toString().trim().slice(0, 80);
 
     for (const key of keys) {
-        const list = (await _store.getItem(key)) || [];
+        const list = await readHistoryBucket(_store, key);
         const snap = list.find(s => s.id === snapshotId);
         if (snap) {
             if ((snap.name || '') === trimmed) return true;
@@ -1078,7 +1078,7 @@ async function togglePinSnapshotMutation(snapshotId, pinned) {
     const keys = await getKeys();
 
     for (const key of keys) {
-        const list = (await _store.getItem(key)) || [];
+        const list = await readHistoryBucket(_store, key);
         const snap = list.find(s => s.id === snapshotId);
         if (snap) {
             const newVal = (typeof pinned === 'boolean') ? pinned : !snap.pinned;
@@ -1129,8 +1129,8 @@ export function deleteOldSnapshotsForPreset(apiId, presetName, options = {}) {
 async function deleteOldSnapshotsForPresetMutation(apiId, presetName, options = {}) {
     await ensureStore();
     const key = makeKey(apiId, presetName);
-    const list = await _store.getItem(key);
-    if (!Array.isArray(list) || list.length === 0) {
+    const list = await readHistoryBucket(_store, key);
+    if (list.length === 0) {
         return { deleted: 0, kept: 0, total: 0 };
     }
 
@@ -1204,7 +1204,7 @@ async function cleanCorruptSnapshotsMutation() {
     let scanned = 0;
 
     // 性能优化：并行读取，但写入仍按顺序避免并发冲突
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await readHistoryBuckets(_store, keys);
     for (let i = 0; i < keys.length; i++) {
         const list = lists[i] || [];
         scanned += list.length;
@@ -1243,7 +1243,7 @@ async function trimOldSnapshotsMutation(keepPerPreset = null) {
     let trimmed = 0;
 
     // 性能优化：并行读取
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await readHistoryBuckets(_store, keys);
     for (let i = 0; i < keys.length; i++) {
         const list = lists[i] || [];
         if (list.length > keep) {
@@ -1275,7 +1275,7 @@ async function trimByAgeMutation(maxDays) {
     let trimmed = 0;
 
     // 性能优化：并行读取
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await readHistoryBuckets(_store, keys);
     for (let i = 0; i < keys.length; i++) {
         const list = lists[i] || [];
         // pinned 永远不被按年龄裁剪
@@ -1335,7 +1335,7 @@ export async function getStats() {
     }
 
     // 性能优化：并行获取
-    const lists = await Promise.all(keys.map(k => _store.getItem(k).catch(() => null)));
+    const lists = await readHistoryBuckets(_store, keys);
     const all = [];
     for (const list of lists) {
         if (Array.isArray(list) && list.length > 0) all.push(...list);
@@ -1353,7 +1353,7 @@ export async function exportAll() {
     await ensureStore();
     const keys = await _store.keys();
     const data = {};
-    const lists = await Promise.all(keys.map(k => _store.getItem(k)));
+    const lists = await readHistoryBuckets(_store, keys);
     for (let i = 0; i < keys.length; i++) {
         if (Array.isArray(lists[i])) data[keys[i]] = lists[i];
     }

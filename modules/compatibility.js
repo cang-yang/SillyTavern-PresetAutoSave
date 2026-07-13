@@ -10,6 +10,7 @@
  */
 
 import { logger } from './logger.js';
+import { StorageReadError } from './core/storage-integrity.js';
 import { describePresetLookup } from './core/preset-lookup-diagnostics.js';
 import {
     canonicalizePreset,
@@ -18,6 +19,7 @@ import {
 } from './core/preset-schema.js';
 export { escapeHtml, escapeAttr } from './key-utils.js';
 export { formatTime } from './time-utils.js';
+export { StorageReadError } from './core/storage-integrity.js';
 
 // =====================================================
 // 环境能力标识
@@ -1229,7 +1231,7 @@ function createLocalStorageAdapter(prefix) {
         async getItem(key) {
             const v = localStorage.getItem(prefix + ':' + key);
             try { return v ? JSON.parse(v) : null; }
-            catch { return null; }
+            catch (error) { throw new StorageReadError(key, error); }
         },
         async setItem(key, val) {
             try {
