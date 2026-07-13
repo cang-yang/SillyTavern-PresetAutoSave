@@ -4622,6 +4622,84 @@ body.pas-light .pas-gm-ctx-separator {
     background: color-mix(in srgb, var(--pas-accent) 10%, transparent);
 }
 .pas-gm-series-name { font-size: .9rem; }
+.pas-gm-rename-btn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    color: var(--pas-text-muted);
+    background: transparent;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 160ms var(--pas-ease-fast), background 160ms var(--pas-ease-fast), color 160ms var(--pas-ease-fast);
+}
+.pas-gm-series-header:hover .pas-gm-rename-btn,
+.pas-gm-series-header:focus-within .pas-gm-rename-btn,
+.pas-gm-rename-btn:focus-visible {
+    opacity: 1;
+}
+.pas-gm-rename-btn:hover {
+    color: var(--pas-text);
+    background: var(--pas-surface-3);
+}
+.pas-gm-rename-btn:focus-visible,
+.pas-gm-name-input:focus-visible {
+    outline: 2px solid var(--pas-accent);
+    outline-offset: 2px;
+}
+.pas-gm-name-editor {
+    position: relative;
+    display: flex;
+    flex: 1 1 180px;
+    min-width: 100px;
+    max-width: min(420px, 60vw);
+}
+.pas-gm-name-input {
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    padding: 4px 9px;
+    border: 1px solid var(--pas-accent);
+    border-radius: 7px;
+    color: var(--pas-text);
+    background: var(--pas-surface-1);
+    font: inherit;
+    font-weight: 600;
+    user-select: text;
+}
+.pas-gm-name-input[aria-invalid="true"] {
+    border-color: var(--pas-danger, #ef4444);
+}
+.pas-gm-name-error {
+    position: absolute;
+    z-index: 2;
+    top: calc(100% + 5px);
+    left: 0;
+    max-width: min(360px, 72vw);
+    padding: 5px 8px;
+    border-radius: 6px;
+    color: #fff;
+    background: var(--pas-danger, #b42318);
+    box-shadow: var(--pas-shadow-md);
+    font-size: .78rem;
+    line-height: 1.35;
+    white-space: normal;
+}
+.pas-gm-name-error:empty { display: none; }
+@media (hover: none), (pointer: coarse) {
+    .pas-gm-rename-btn {
+        min-width: 44px;
+        min-height: 44px;
+        opacity: 1;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .pas-gm-rename-btn { transition: none; }
+}
 .pas-gm-series-count {
     display: grid;
     place-items: center;

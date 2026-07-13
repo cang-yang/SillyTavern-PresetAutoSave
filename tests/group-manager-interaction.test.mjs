@@ -20,3 +20,13 @@ test('group cards accept presets and persist hover expansion', () => {
     assert.match(source, /data-drop-label=.*Grouping Drag Hint/);
     assert.match(css, /content: attr\(data-drop-label\)/);
 });
+
+test('group names expose an accessible inline rename interaction', () => {
+    assert.match(source, /pas-gm-rename-btn/);
+    assert.match(source, /pas-gm-name-input/);
+    assert.match(source, /aria-describedby=/);
+    assert.match(source, /compositionstart/);
+    assert.match(source, /Grouping Restore Automatic Name/);
+    assert.match(css, /\.pas-gm-rename-btn/);
+    assert.match(css, /min-(?:width|height):\s*44px/);
+});

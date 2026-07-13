@@ -20,6 +20,7 @@ import {
     normalizeSeriesKey,
     buildNestedGroupTree,
     getNodePath,
+    validateSeriesAlias,
 } from './preset-grouping.js';
 import {
     escapeHtml, escapeAttr,
@@ -29,6 +30,7 @@ import {
     filterGroupingNodes,
 } from './core/group-manager-view-model.js';
 import { DragHoverExpander } from './core/drag-hover-expander.js';
+import { createGroupAliasEditor } from './core/group-alias-editor.js';
 
 // =====================================================
 // 常量
@@ -346,6 +348,8 @@ function flattenGroupingNodes(rootNodes) {
         flattened.push({
             key: node.key,
             displayName: node.displayName,
+            automaticName: node.automaticName || node.displayName,
+            customized: !!node.customized,
             depth: node.depth || 0,
             parentKey: parent?.key || null,
             parentName: parent?.displayName || '',
@@ -363,8 +367,10 @@ function flattenGroupingNodes(rootNodes) {
 
 function normalizeGroupingNodes(groups) {
     return (groups || []).map(group => ({
-        key: normalizeSeriesKey(group.series),
-        displayName: group.series,
+        key: group.canonicalKey || normalizeSeriesKey(group.automaticName || group.series),
+        displayName: group.displayName || group.series,
+        automaticName: group.automaticName || group.series,
+        customized: !!group.customized,
         depth: 0,
         items: (group.items || []).map(item => ({
             presetName: item.presetName,
@@ -378,7 +384,7 @@ function appendPendingGroups(nodes) {
     for (const name of _pendingCustomGroups) {
         const key = normalizeSeriesKey(name);
         if (!known.has(key)) {
-            nodes.push({ key, displayName: name, depth: 0, items: [], pending: true });
+            nodes.push({ key, displayName: name, automaticName: name, depth: 0, items: [], pending: true });
         }
     }
     return nodes;
@@ -416,13 +422,18 @@ function renderModernGroupingHTML(nodes) {
         const relationship = indent
             ? `<span class="pas-gm-tree-relation"><i class="fa-solid fa-turn-up"></i><span>${escapeHtml(node.parentName || '')}</span></span>`
             : '';
+        const automaticName = node.automaticName || node.displayName;
+        const automaticTitle = node.customized
+            ? t('Grouping Automatic Name Hint', { name: automaticName })
+            : node.displayName;
         return `<section class="pas-gm-series${expanded ? '' : ' collapsed'}${indent ? ' pas-gm-nested' : ''}"
-            data-series-key="${escapeAttr(node.key)}" data-depth="${indent}" data-drop-label="${escapeAttr(t('Grouping Drag Hint'))}" style="--pas-gm-depth:${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
+            data-series-key="${escapeAttr(node.key)}" data-automatic-name="${escapeAttr(automaticName)}" data-customized="${node.customized ? '1' : '0'}" data-depth="${indent}" data-drop-label="${escapeAttr(t('Grouping Drag Hint'))}" style="--pas-gm-depth:${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
             <div class="pas-gm-series-header" role="button" tabindex="0" aria-expanded="${expanded}">
                 ${relationship}
                 <span class="pas-gm-series-icon"><i class="fa-regular fa-folder${expanded ? '-open' : ''}"></i></span>
                 ${nestingEnabled ? `<span class="pas-gm-drag-handle" draggable="true" title="${escapeAttr(t('Grouping Drag Handle Title'))}"><i class="fa-solid fa-grip-vertical"></i></span>` : ''}
-                <span class="pas-gm-series-name" title="${escapeAttr(node.displayName)}">${escapeHtml(node.displayName)}</span>
+                <span class="pas-gm-series-name" title="${escapeAttr(automaticTitle)}">${escapeHtml(node.displayName)}</span>
+                <button class="pas-gm-rename-btn" type="button" aria-label="${escapeAttr(t('Grouping Rename Inline', { name: node.displayName }))}" title="${escapeAttr(t('Grouping Series Menu Rename'))}"><i class="fa-solid fa-pen"></i></button>
                 ${isCustom ? `<span class="pas-gm-origin" title="${escapeAttr(t('Grouping Custom Badge'))}"><i class="fa-solid fa-wand-magic-sparkles"></i></span>` : ''}
                 <span class="pas-gm-series-count">${node.items.length}</span>
                 <button class="pas-gm-series-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Group Actions'))}"><i class="fa-solid fa-ellipsis"></i></button>
@@ -722,6 +733,110 @@ function refreshGroupingUI(container) {
     bindGroupingEvents(container);
 }
 
+function aliasErrorMessage(reason) {
+    if (reason === 'empty') return t('Grouping Alias Error Empty');
+    if (reason === 'too-long') return t('Grouping Alias Error Too Long');
+    if (reason === 'duplicate') return t('Grouping Alias Error Duplicate');
+    return t('Grouping Alias Error Save');
+}
+
+function visibleGroupingNames(container) {
+    return [...container.querySelectorAll('.pas-gm-series')].map(card => ({
+        canonicalKey: card.getAttribute('data-series-key') || '',
+        displayName: card.querySelector('.pas-gm-series-name')?.textContent || '',
+    }));
+}
+
+function restoreGroupAlias(seriesKey, container) {
+    const aliases = { ...(getSettings().groupingSeriesAliases || {}) };
+    for (const key of Object.keys(aliases)) {
+        if (normalizeSeriesKey(key) === normalizeSeriesKey(seriesKey)) delete aliases[key];
+    }
+    batchUpdate({ groupingSeriesAliases: aliases });
+    refreshTakeover({ force: true });
+    refreshGroupingUI(container);
+    container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-header`)?.focus();
+}
+
+function beginInlineRename(seriesKey, container) {
+    const card = [...container.querySelectorAll('.pas-gm-series')]
+        .find(item => item.getAttribute('data-series-key') === seriesKey);
+    const header = card?.querySelector('.pas-gm-series-header');
+    const nameElement = card?.querySelector('.pas-gm-series-name');
+    const trigger = card?.querySelector('.pas-gm-rename-btn');
+    if (!card || !header || !nameElement || !trigger || card.querySelector('.pas-gm-name-editor')) return;
+
+    const automaticName = card.getAttribute('data-automatic-name') || nameElement.textContent || seriesKey;
+    const currentName = nameElement.textContent || automaticName;
+    const errorId = `pas-gm-name-error-${Math.random().toString(36).slice(2)}`;
+    const editorElement = document.createElement('span');
+    editorElement.className = 'pas-gm-name-editor';
+    editorElement.innerHTML = `<input class="pas-gm-name-input" type="text" value="${escapeAttr(currentName)}" aria-label="${escapeAttr(t('Grouping Alias Input Label'))}" aria-describedby="${escapeAttr(errorId)}" autocomplete="off"><span class="pas-gm-name-error" id="${escapeAttr(errorId)}" role="alert"></span>`;
+    nameElement.hidden = true;
+    trigger.hidden = true;
+    nameElement.after(editorElement);
+
+    const input = editorElement.querySelector('.pas-gm-name-input');
+    const error = editorElement.querySelector('.pas-gm-name-error');
+    let composing = false;
+    let closed = false;
+
+    const closeWithoutRefresh = () => {
+        if (closed) return;
+        closed = true;
+        editorElement.remove();
+        nameElement.hidden = false;
+        trigger.hidden = false;
+        trigger.focus();
+    };
+    const controller = createGroupAliasEditor({
+        validate: value => validateSeriesAlias(value, visibleGroupingNames(container), seriesKey),
+        invalid: reason => {
+            error.textContent = aliasErrorMessage(reason);
+            input.setAttribute('aria-invalid', 'true');
+            input.focus();
+        },
+        cancel: closeWithoutRefresh,
+        save: value => {
+            if (value === currentName) {
+                closeWithoutRefresh();
+                return;
+            }
+            if (closed) return;
+            closed = true;
+            const aliases = { ...(getSettings().groupingSeriesAliases || {}) };
+            for (const key of Object.keys(aliases)) {
+                if (normalizeSeriesKey(key) === normalizeSeriesKey(seriesKey)) delete aliases[key];
+            }
+            if (value !== automaticName) aliases[seriesKey] = value;
+            batchUpdate({ groupingSeriesAliases: aliases });
+            refreshTakeover({ force: true });
+            refreshGroupingUI(container);
+            container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-header`)?.focus();
+        },
+    });
+
+    input.addEventListener('compositionstart', () => { composing = true; });
+    input.addEventListener('compositionend', () => { composing = false; });
+    input.addEventListener('input', () => {
+        error.textContent = '';
+        input.removeAttribute('aria-invalid');
+    });
+    input.addEventListener('keydown', async event => {
+        const handled = await controller.handleKeyDown({ key: event.key, isComposing: composing || event.isComposing }, input.value);
+        if (handled) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    });
+    input.addEventListener('blur', event => {
+        if (closed || event.relatedTarget?.closest?.('.pas-gm-name-editor')) return;
+        queueMicrotask(() => controller.handleBlur(input.value));
+    });
+    input.focus();
+    input.select();
+}
+
 // =====================================================
 // 分组 CRUD 操作
 // =====================================================
@@ -850,80 +965,9 @@ async function onCreateCustomGroup(container) {
     refreshGroupingUI(container);
 }
 
-/**
- * 重命名系列分组（批量更新 overrides + groupingTree 中指向 oldSeriesKey 的值）
- */
-async function onRenameSeriesGroup(oldSeriesKey, container) {
-    const settings = getSettings();
-    const tree = { ...(settings.groupingTree || {}) };
-    const { groups } = buildGroupingData();
-    const group = groups.find(g => normalizeSeriesKey(g.series) === oldSeriesKey);
-    const displayName = group ? group.series : oldSeriesKey;
-
-    const inputPopup = createPopupSafe(
-        t('Grouping Rename Prompt', { name: escapeHtml(displayName) }),
-        'INPUT',
-        { okButton: t('Confirm'), cancelButton: t('Cancel'), rows: 1 },
-        displayName
-    );
-    let newName = null;
-    if (inputPopup) {
-        try { newName = await inputPopup.show(); } catch (_) {}
-    } else {
-        newName = window.prompt(t('Grouping Rename Prompt', { name: displayName }), displayName);
-    }
-    if (newName === null || newName === undefined || newName === false) return;
-    const trimmed = String(newName).trim().slice(0, 120);
-    if (!trimmed || trimmed === displayName) return;
-
-    // 检查是否与其他分组重名
-    const targetKey = normalizeSeriesKey(trimmed);
-    const duplicate = groups.some(g => normalizeSeriesKey(g.series) === targetKey && normalizeSeriesKey(g.series) !== oldSeriesKey)
-        || [..._pendingCustomGroups].some(n => normalizeSeriesKey(n) === targetKey && normalizeSeriesKey(n) !== oldSeriesKey);
-    if (duplicate) {
-        toast.warning(t('Grouping New Group Prompt') + ': ' + escapeHtml(trimmed));
-        return;
-    }
-
-    // 将所有指向 oldSeriesKey 的 overrides 更新为新名
-    for (const [presetName, seriesVal] of Object.entries(_gmOverrides)) {
-        if (normalizeSeriesKey(seriesVal) === oldSeriesKey) {
-            _gmOverrides[presetName] = trimmed;
-        }
-    }
-
-    // 也更新 _pendingCustomGroups
-    for (const pName of _pendingCustomGroups) {
-        if (normalizeSeriesKey(pName) === oldSeriesKey) {
-            _pendingCustomGroups.delete(pName);
-            _pendingCustomGroups.add(trimmed);
-            break;
-        }
-    }
-
-    // 更新 groupingTree：所有 value 为 oldSeriesKey 的条目 → newKey
-    let treeChanged = false;
-    for (const [childKey, parentVal] of Object.entries(tree)) {
-        if (normalizeSeriesKey(parentVal) === oldSeriesKey) {
-            tree[childKey] = trimmed;
-            treeChanged = true;
-        }
-    }
-    // 如果有以 oldSeriesKey 为 child 的条目，更新其 key
-    if (tree[oldSeriesKey]) {
-        const parentVal = tree[oldSeriesKey];
-        delete tree[oldSeriesKey];
-        tree[trimmed] = parentVal;
-        treeChanged = true;
-    }
-
-    if (treeChanged) {
-        saveGroupingSettings(_gmOverrides, tree);
-    } else {
-        saveGroupingSettings(_gmOverrides);
-    }
-    toast.success(t('Grouping Renamed', { name: escapeHtml(trimmed) }));
-    refreshGroupingUI(container);
+/** Enter the inline display-name editor without changing group identity. */
+function onRenameSeriesGroup(oldSeriesKey, container) {
+    beginInlineRename(oldSeriesKey, container);
 }
 
 /**
@@ -1280,6 +1324,8 @@ function bindMenuEvents(container) {
 
             const depthExceeded = seriesCard?.getAttribute('data-depth-exceeded') === '1';
             const nestingEnabled = getSettings().nestingEnabled;
+            const customized = seriesCard?.getAttribute('data-customized') === '1';
+            const automaticName = seriesCard?.getAttribute('data-automatic-name') || seriesKey;
 
             const menu = document.createElement('div');
             menu.className = 'pas-gm-context-menu';
@@ -1300,6 +1346,9 @@ function bindMenuEvents(container) {
                 <div class="pas-gm-ctx-item" data-action="rename">
                     <i class="fa-solid fa-pen-to-square"></i> ${escapeHtml(t('Grouping Series Menu Rename'))}
                 </div>
+                ${customized ? `<div class="pas-gm-ctx-item" data-action="restore-name">
+                    <i class="fa-solid fa-arrow-rotate-left"></i> ${escapeHtml(t('Grouping Restore Automatic Name', { name: automaticName }))}
+                </div>` : ''}
                 <div class="pas-gm-ctx-item" data-action="delete">
                     <i class="fa-solid fa-trash"></i> ${escapeHtml(t('Grouping Series Menu Delete'))}
                 </div>
@@ -1328,6 +1377,8 @@ function bindMenuEvents(container) {
                         await onCreateSubGroup(seriesKey, container);
                     } else if (action === 'rename') {
                         await onRenameSeriesGroup(seriesKey, container);
+                    } else if (action === 'restore-name') {
+                        restoreGroupAlias(seriesKey, container);
                     } else if (action === 'delete') {
                         await onDeleteCustomGroup(seriesKey, container);
                     }
@@ -1439,10 +1490,18 @@ function bindClickEvents(container) {
         };
     }
 
+    container.querySelectorAll('.pas-gm-rename-btn').forEach(button => {
+        button.onclick = event => {
+            event.stopPropagation();
+            const key = button.closest('.pas-gm-series')?.getAttribute('data-series-key');
+            if (key) beginInlineRename(key, container);
+        };
+    });
+
     // --- 折叠/展开系列卡片 ---
     container.querySelectorAll('.pas-gm-series-header').forEach(header => {
         const toggle = (e) => {
-            if (e.target.closest('.pas-gm-menu-btn') || e.target.closest('.pas-gm-series-menu-btn')) return;
+            if (e.target.closest('.pas-gm-menu-btn, .pas-gm-series-menu-btn, .pas-gm-rename-btn, .pas-gm-name-editor')) return;
             const series = header.closest('.pas-gm-series');
             const key = series?.getAttribute('data-series-key');
             if (!key) return;
