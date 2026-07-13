@@ -1,4 +1,5 @@
 import { enrichSnapshotList, HISTORY_SCHEMA_VERSION } from './history-schema.js';
+import { canonicalizePreset } from './preset-schema.js';
 import { stableStringify } from './value-utils.js';
 
 export const HISTORY_BACKUP_VERSION = 2;
@@ -39,11 +40,26 @@ function validateSnapshot(snapshot, key, identity, seenIds) {
         throw new TypeError(`History backup snapshot ${snapshot.id} presetName does not match key ${key}`);
     }
     seenIds.add(snapshot.id);
+    const sanitized = structuredClone(snapshot);
+    const { canonical } = canonicalizePreset(sanitized.preset, { apiId: identity.apiId });
+    sanitized.preset = canonical;
     return {
-        ...structuredClone(snapshot),
+        ...sanitized,
         apiId: identity.apiId,
         presetName: identity.presetName,
     };
+}
+
+function sanitizeBackupData(data) {
+    const sanitized = {};
+    const seenIds = new Set();
+    for (const [key, list] of Object.entries(data)) {
+        const identity = parseHistoryKey(key);
+        if (!identity) throw new TypeError(`Invalid history backup key: ${key}`);
+        if (!Array.isArray(list)) throw new TypeError(`History backup value for ${key} must be an array`);
+        sanitized[key] = list.map(snapshot => validateSnapshot(snapshot, key, identity, seenIds));
+    }
+    return sanitized;
 }
 
 function trimListWithPinned(list, max) {
@@ -79,7 +95,7 @@ export function createHistoryBackup(data, diagnostics = {}, now = () => Date.now
         source: 'PresetAutoSave',
         exportedAt: now(),
         repository: structuredClone(diagnostics ?? {}),
-        data: structuredClone(data),
+        data: sanitizeBackupData(data),
     };
 }
 

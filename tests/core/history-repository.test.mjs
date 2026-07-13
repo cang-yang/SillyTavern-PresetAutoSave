@@ -4,14 +4,19 @@ import assert from 'node:assert/strict';
 import { HistoryRepository, migrationMarkerKey } from '../../modules/core/history-repository.js';
 
 class MemoryStore {
-    constructor(entries = {}, { failSet = false, failRemove = false } = {}) {
+    constructor(entries = {}, { failSet = false, failSetKeyOnce = null, failRemove = false } = {}) {
         this.map = new Map(Object.entries(structuredClone(entries)));
         this.failSet = failSet;
+        this.failSetKeyOnce = failSetKeyOnce;
         this.failRemove = failRemove;
     }
     async getItem(key) { return structuredClone(this.map.get(key) ?? null); }
     async setItem(key, value) {
         if (this.failSet) throw new Error('write failed');
+        if (key === this.failSetKeyOnce) {
+            this.failSetKeyOnce = null;
+            throw new Error('targeted write failed');
+        }
         this.map.set(key, structuredClone(value));
         return value;
     }
@@ -78,6 +83,27 @@ test('writes v2 envelopes and deterministic parent links', async () => {
     assert.equal(stored[1].parentSnapshotId, null);
     assert.equal(stored[0].canonicalHash, 'new-hash');
     assert.equal((await repository.getItem(key))[0].schemaVersion, 2);
+});
+
+test('restores the previous committed bucket when publishing its marker fails', async () => {
+    const key = 'openai::Demo';
+    const markerKey = migrationMarkerKey(key);
+    const previous = [legacySnapshot({ id: 'previous', name: 'must survive' })];
+    const previousMarker = {
+        status: 'active', schemaVersion: 2, count: 1, migratedAt: 5,
+    };
+    const v2 = new MemoryStore({
+        [key]: previous,
+        [markerKey]: previousMarker,
+    }, { failSetKeyOnce: markerKey });
+    const repository = new HistoryRepository({ legacyStore: new MemoryStore(), v2Store: v2 });
+
+    await assert.rejects(
+        repository.setItem(key, [legacySnapshot({ id: 'replacement', name: 'must roll back' })]),
+        /targeted write failed/,
+    );
+    assert.deepEqual(await v2.getItem(key), previous);
+    assert.deepEqual(await v2.getItem(markerKey), previousMarker);
 });
 
 test('lists the union of stores while filtering metadata and tombstoned legacy keys', async () => {

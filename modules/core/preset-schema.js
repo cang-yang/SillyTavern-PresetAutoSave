@@ -145,7 +145,7 @@ export function canonicalizePreset(preset, { apiId = 'openai' } = {}) {
     const canonical = {};
     const ignored = [];
     for (const key of Object.keys(preset).sort()) {
-        if (apiId === 'openai' && CONNECTION_FIELDS.has(key)) {
+        if (CONNECTION_FIELDS.has(key)) {
             ignored.push({ path: key, reason: 'connection-setting' });
             continue;
         }

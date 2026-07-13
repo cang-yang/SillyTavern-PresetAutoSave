@@ -55,6 +55,11 @@ export class HistoryRepository {
 
     async #writeVerified(key, input, status = 'active') {
         const enriched = enrichSnapshotList(input);
+        const markerKey = migrationMarkerKey(key);
+        const [previousData, previousMarker] = await Promise.all([
+            this.v2Store.getItem(key),
+            this.v2Store.getItem(markerKey),
+        ]);
         try {
             await this.v2Store.setItem(key, enriched);
             const readBack = await this.v2Store.getItem(key);
@@ -62,7 +67,7 @@ export class HistoryRepository {
             if (!verification.valid) {
                 throw new Error(`History v2 verification failed for ${key}: ${verification.errors.join('; ')}`);
             }
-            await this.v2Store.setItem(migrationMarkerKey(key), {
+            await this.v2Store.setItem(markerKey, {
                 status,
                 schemaVersion: HISTORY_SCHEMA_VERSION,
                 count: enriched.length,
@@ -70,7 +75,27 @@ export class HistoryRepository {
             });
             return readBack;
         } catch (error) {
-            try { await this.v2Store.removeItem(key); } catch (_) {}
+            const rollbackErrors = [];
+            for (const [rollbackKey, previousValue] of [
+                [key, previousData],
+                [markerKey, previousMarker],
+            ]) {
+                try {
+                    if (previousValue === null || previousValue === undefined) {
+                        await this.v2Store.removeItem(rollbackKey);
+                    } else {
+                        await this.v2Store.setItem(rollbackKey, previousValue);
+                    }
+                } catch (rollbackError) {
+                    rollbackErrors.push(rollbackError);
+                }
+            }
+            if (rollbackErrors.length > 0) {
+                throw new AggregateError(
+                    [error, ...rollbackErrors],
+                    `History write failed and rollback could not be completed for ${key}`,
+                );
+            }
             throw error;
         }
     }

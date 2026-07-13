@@ -111,3 +111,17 @@ test('keeps unknown fields for non-OpenAI preset families without a native field
     assert.deepEqual(result.canonical, { sampler_order: [6, 0, 1], temperature: 0.7 });
     assert.deepEqual(result.ignored, []);
 });
+
+test('removes connection secrets from every preset family', () => {
+    const result = canonicalizePreset({
+        sampler_order: [6, 0, 1],
+        api_key_openai: 'sk-must-not-be-snapshotted',
+        proxy_password: 'proxy-secret',
+    }, { apiId: 'textgenerationwebui' });
+
+    assert.deepEqual(result.canonical, { sampler_order: [6, 0, 1] });
+    assert.deepEqual(result.ignored, [
+        { path: 'api_key_openai', reason: 'connection-setting' },
+        { path: 'proxy_password', reason: 'connection-setting' },
+    ]);
+});

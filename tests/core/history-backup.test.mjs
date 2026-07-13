@@ -91,6 +91,38 @@ test('rejects duplicate snapshot IDs across the complete backup', () => {
     }), /duplicate snapshot id/i);
 });
 
+test('import validation removes connection secrets before creating a write plan', () => {
+    const payload = { version: 2, data: { 'openai::Demo': [snapshot({
+        preset: {
+            temperature: 0.7,
+            prompts: [],
+            api_key_openai: 'sk-import-secret',
+            proxy_password: 'proxy-import-secret',
+        },
+    })] } };
+
+    const plan = buildHistoryImportPlan(payload, new Map(), { mode: 'replace', max: 50 });
+    const importedPreset = plan.data.get('openai::Demo')[0].preset;
+    assert.deepEqual(importedPreset, { prompts: [], temperature: 0.7 });
+    assert.equal(JSON.stringify(importedPreset).includes('sk-import-secret'), false);
+    assert.equal(JSON.stringify(importedPreset).includes('proxy-import-secret'), false);
+});
+
+test('backup creation defensively removes secrets from already stored snapshots', () => {
+    const backup = createHistoryBackup({ 'openai::Demo': [snapshot({
+        preset: {
+            temperature: 0.7,
+            prompts: [],
+            api_key_openai: 'sk-stored-secret',
+            reverse_proxy: 'https://secret-proxy.example',
+        },
+    })] });
+
+    assert.deepEqual(backup.data['openai::Demo'][0].preset, { prompts: [], temperature: 0.7 });
+    assert.equal(JSON.stringify(backup).includes('sk-stored-secret'), false);
+    assert.equal(JSON.stringify(backup).includes('secret-proxy.example'), false);
+});
+
 test('merge planning deduplicates IDs, sorts, trims, and preserves pinned records', () => {
     const existing = new Map([['openai::Demo', [
         snapshot({ id: 'existing-new', timestamp: 30 }),

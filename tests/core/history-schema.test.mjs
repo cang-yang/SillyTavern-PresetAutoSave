@@ -75,3 +75,13 @@ test('verifies identity, user metadata, and hash preservation', () => {
     assert.match(verification.errors.join(' '), /pinned/);
     assert.match(verification.errors.join(' '), /hash/);
 });
+
+test('rejects a migration whose parent snapshot chain was not preserved', () => {
+    const legacy = legacyList();
+    const migrated = enrichSnapshotList(legacy);
+    migrated[0] = { ...migrated[0], parentSnapshotId: null };
+
+    const verification = verifyMigratedSnapshotList(legacy, migrated);
+    assert.equal(verification.valid, false);
+    assert.match(verification.errors.join(' '), /parentSnapshotId/);
+});

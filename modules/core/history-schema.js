@@ -57,6 +57,10 @@ export function verifyMigratedSnapshotList(legacy, migrated) {
         if ((before.name ?? '') !== (after.name ?? '')) errors.push(`${label}: name mismatch`);
         if (Boolean(before.pinned) !== Boolean(after.pinned)) errors.push(`${label}: pinned mismatch`);
         if ((before.hash ?? '') !== (after.canonicalHash ?? after.hash ?? '')) errors.push(`${label}: hash mismatch`);
+        const expectedParentId = legacy[index + 1]?.id ?? null;
+        if ((after.parentSnapshotId ?? null) !== expectedParentId) {
+            errors.push(`${label}: parentSnapshotId mismatch`);
+        }
         if (after.schemaVersion !== HISTORY_SCHEMA_VERSION) errors.push(`${label}: schema version mismatch`);
     }
     return { valid: errors.length === 0, errors };
