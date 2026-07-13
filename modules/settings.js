@@ -43,6 +43,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     groupingFirstScanDone: false,   // 首次扫描向导是否已完成
     groupingPromptOnImport: true,   // 检测到新预设导入时是否提示归属确认
     groupingManualOverrides: {},    // { [presetName]: seriesName } 用户手动覆盖
+    groupingSeriesAliases: {},      // { [normalizedSeriesKey]: displayName } 分组显示别名
     groupingDefaultExpand: 'current', // 'current' | 'all' | 'none' 系列默认展开策略
 
     // 预设分组嵌套
@@ -86,6 +87,7 @@ const VALIDATORS = {
     groupingFirstScanDone: (v) => Boolean(v),
     groupingPromptOnImport: (v) => Boolean(v),
     groupingManualOverrides: (v) => sanitizeStringMap(v),
+    groupingSeriesAliases: (v) => sanitizeSeriesAliasMap(v),
     groupingDefaultExpand: (v) => (v === 'all' || v === 'none' || v === 'current') ? v : 'current',
     nestingEnabled: (v) => Boolean(v),
     nestingMaxDepth: (v) => clamp(toInt(v, 3), 1, 3),
@@ -384,4 +386,15 @@ function persistSettings() {
     } catch (e) {
         logger.error('Failed to persist settings:', e);
     }
+}
+
+function sanitizeSeriesAliasMap(v) {
+    const strings = sanitizeStringMap(v);
+    const out = {};
+    for (const [key, value] of Object.entries(strings)) {
+        const trimmed = value.trim();
+        if (!trimmed || Array.from(trimmed).length > 120) continue;
+        out[key] = trimmed;
+    }
+    return out;
 }

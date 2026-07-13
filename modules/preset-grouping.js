@@ -839,7 +839,7 @@ export function getSeriesInfo(presetName, overrides = null) {
  *  - 但用户看到的"显示名"会保留首次出现时的原始形式
  */
 export function normalizeSeriesKey(seriesKey) {
-    let s = String(seriesKey || '').trim().toLowerCase();
+    let s = normalizeFullwidth(String(seriesKey || '')).trim().toLowerCase();
     // 全角字符已在 parsePresetName 阶段统一过，这里再兜底一次
     s = s.replace(/[\u3000]/g, ' ');                    // 全角空格 → 半角
     s = s.replace(/[‐‑‒–—―−]/g, '-');                    // 各类破折号 → 短横线
@@ -852,6 +852,49 @@ export function normalizeSeriesKey(seriesKey) {
     // 中文之间的空格也消除（"鹿鹿 反重力" 与 "鹿鹿反重力" 视为同一）
     s = s.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
     return s.trim();
+}
+
+/**
+ * Resolve the user-facing name of a stable canonical series.
+ * Aliases are presentation only and never change membership identity.
+ */
+export function resolveSeriesDisplayName(automaticName, aliases = null) {
+    const cleanAutomaticName = String(automaticName || '').trim();
+    const canonicalKey = normalizeSeriesKey(cleanAutomaticName);
+    let displayName = cleanAutomaticName;
+    let customized = false;
+
+    if (aliases && typeof aliases === 'object') {
+        for (const [rawKey, rawValue] of Object.entries(aliases)) {
+            if (normalizeSeriesKey(rawKey) !== canonicalKey) continue;
+            const candidate = typeof rawValue === 'string' ? rawValue.trim() : '';
+            if (!candidate || Array.from(candidate).length > 120) break;
+            displayName = candidate;
+            customized = displayName !== cleanAutomaticName;
+            break;
+        }
+    }
+
+    return { canonicalKey, automaticName: cleanAutomaticName, displayName, customized };
+}
+
+/**
+ * Validate one alias against the names currently visible in the manager.
+ */
+export function validateSeriesAlias(name, groups = [], currentCanonicalKey = '') {
+    const value = String(name ?? '').trim();
+    if (!value) return { ok: false, reason: 'empty' };
+    if (Array.from(value).length > 120) return { ok: false, reason: 'too-long' };
+
+    const target = normalizeSeriesKey(value);
+    const currentKey = normalizeSeriesKey(currentCanonicalKey);
+    const duplicate = (Array.isArray(groups) ? groups : []).some(group => {
+        const groupKey = normalizeSeriesKey(group?.canonicalKey || group?.key || group?.automaticName || '');
+        if (groupKey === currentKey) return false;
+        return normalizeSeriesKey(group?.displayName || group?.series || '') === target;
+    });
+    if (duplicate) return { ok: false, reason: 'duplicate' };
+    return { ok: true, value };
 }
 
 // =====================================================
@@ -941,7 +984,7 @@ export function pickRepresentativeVersion(seriesKey, items, seriesDefaultApply =
  * @param {object} [overrides]
  * @returns {Array<{series:string, items:Array<{presetName:string, version:string, duplicate:string, kind:string}>}>}
  */
-export function groupNamesBySeries(names, overrides = null) {
+export function groupNamesBySeries(names, overrides = null, aliases = null) {
     if (!Array.isArray(names) || names.length === 0) return [];
 
     // normKey -> { displayName, items[] }
@@ -966,9 +1009,18 @@ export function groupNamesBySeries(names, overrides = null) {
 
     // 每个系列内按版本排序（新版本排前面）
     const groups = [];
-    for (const { displayName, items } of map.values()) {
+    for (const [canonicalKey, { displayName: automaticName, items }] of map.entries()) {
         items.sort((a, b) => compareVersion(b.version, a.version));
-        groups.push({ series: displayName, items });
+        const resolved = resolveSeriesDisplayName(automaticName, aliases);
+        groups.push({
+            key: canonicalKey,
+            canonicalKey,
+            automaticName,
+            displayName: resolved.displayName,
+            series: resolved.displayName,
+            customized: resolved.customized,
+            items,
+        });
     }
     // 系列名 A→Z
     groups.sort((a, b) => a.series.localeCompare(b.series));
