@@ -29,6 +29,7 @@ import { HistoryRepository } from './core/history-repository.js';
 import { SerialTaskQueue } from './core/serial-task-queue.js';
 import { emitHistoryChange } from './core/history-change-events.js';
 import {
+    analyzeHistoryImport,
     applyHistoryImportPlan,
     buildHistoryImportPlan,
     captureHistoryImage,
@@ -1367,6 +1368,20 @@ export async function exportAll() {
  */
 export function importAll(payload, mode = 'merge') {
     return _historyMutations.run(() => importAllMutation(payload, mode));
+}
+
+/**
+ * Validate and explain an import against the current repository without
+ * mutating it. The apply path rebuilds the plan so changes made while the user
+ * reads the preview are still handled by the normal verified transaction.
+ */
+export function previewImportAll(payload) {
+    return _historyMutations.run(async () => {
+        await ensureStore();
+        const max = getSettings().maxHistoryPerPreset;
+        const existing = await captureHistoryImage(_store);
+        return analyzeHistoryImport(payload, existing, { max });
+    });
 }
 
 async function importAllMutation(payload, mode = 'merge') {

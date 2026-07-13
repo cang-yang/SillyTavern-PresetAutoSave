@@ -2,6 +2,7 @@ import { buildPanelHTML } from '../../modules/panel-shell.js';
 import { captureFocusAnchor, restoreFocusAnchor } from '../../modules/core/focus-anchor.js';
 import { applyStatusIndicatorPresentation } from '../../modules/core/status-indicator.js';
 import { saveStatusLabelKey, setSaveStatus } from '../../modules/core/save-status.js';
+import { bindHistoryImportPreview, renderHistoryImportPreview } from '../../modules/import-preview.js';
 import { escapeAttr, escapeHtml } from '../../modules/key-utils.js';
 import { buildHarnessScenario } from '../fixtures/browser-harness-model.mjs';
 import { normalizeHarnessOptions } from './config.mjs';
@@ -290,6 +291,53 @@ function showSaveStatus(state) {
     return applyStatusIndicatorPresentation(dot, state, translate(saveStatusLabelKey(state)));
 }
 
+function importPreviewFixture(conflicts = false) {
+    const merge = {
+        available: !conflicts,
+        importedSnapshotCount: conflicts ? 0 : 16,
+        finalPresetCount: 5,
+        finalSnapshotCount: 31,
+        removedPresetCount: 0,
+    };
+    return {
+        sourceVersion: 2,
+        schemaVersion: 2,
+        presetCount: 3,
+        snapshotCount: 18,
+        overlappingPresetCount: 1,
+        duplicateSnapshotCount: 2,
+        conflictCount: conflicts ? 1 : 0,
+        conflicts: conflicts ? [{ key: 'openai::超长预设名称 · Unicode 🦊', snapshotId: 'snap-conflict-1' }] : [],
+        modes: {
+            merge,
+            replace: {
+                available: true,
+                importedSnapshotCount: 18,
+                finalPresetCount: 3,
+                finalSnapshotCount: 18,
+                removedPresetCount: 2,
+            },
+        },
+    };
+}
+
+function showImportPreview({ conflicts = false } = {}) {
+    document.querySelector('.pas-harness-dialog')?.remove();
+    const host = document.createElement('div');
+    host.className = 'pas-harness-dialog';
+    host.innerHTML = renderHistoryImportPreview(importPreviewFixture(conflicts), {
+        t: translate,
+        escapeHtml,
+    });
+    document.body.append(host);
+    bindHistoryImportPreview(host.querySelector('.pas-import-preview'), { translate });
+    return true;
+}
+
+function closeImportPreview() {
+    document.querySelector('.pas-harness-dialog')?.remove();
+}
+
 function isVisible(element) {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -297,11 +345,13 @@ function isVisible(element) {
 }
 
 function collectMetrics() {
+    const metricsRoot = document.querySelector('.pas-harness-dialog') || app;
     const importantSelector = [
         '.pas-btn-snap', '.pas-tools-trigger', '.pas-tab', '.pas-search',
         '.pas-view-btn', '.pas-filter', '.pas-btn-restore', '.pas-btn-apply-version',
+        '.pas-import-confirm', '.pas-import-mode-card',
     ].join(',');
-    const controls = [...app.querySelectorAll('button, input, [role="button"]')].map(element => {
+    const controls = [...metricsRoot.querySelectorAll('button, input, [role="button"], .pas-import-mode-card')].map(element => {
         const rect = element.getBoundingClientRect();
         return {
             selector: selectorFor(element),
@@ -311,10 +361,10 @@ function collectMetrics() {
             height: Number(rect.height.toFixed(2)),
         };
     });
-    const hiddenFocusable = [...app.querySelectorAll('[aria-hidden="true"] button, [aria-hidden="true"] input, [aria-hidden="true"] [tabindex]')]
+    const hiddenFocusable = [...metricsRoot.querySelectorAll('[aria-hidden="true"] button, [aria-hidden="true"] input, [aria-hidden="true"] [tabindex]')]
         .filter(element => element.tabIndex >= 0)
         .map(selectorFor);
-    const requiredLabels = [...app.querySelectorAll('.pas-tab > span:not(.pas-tab-badge), .pas-filter > span')]
+    const requiredLabels = [...metricsRoot.querySelectorAll('.pas-tab > span:not(.pas-tab-badge), .pas-filter > span')]
         .map(element => ({
             selector: `${selectorFor(element.parentElement)} > span`,
             text: element.textContent || '',
@@ -324,7 +374,7 @@ function collectMetrics() {
     return Object.freeze({
         scenario: options.scenario,
         viewport: Object.freeze({ width: window.innerWidth, height: window.innerHeight }),
-        documentWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth, app.scrollWidth),
+        documentWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth, metricsRoot.scrollWidth),
         controls: Object.freeze(controls.map(Object.freeze)),
         requiredLabels: Object.freeze(requiredLabels.map(Object.freeze)),
         hiddenFocusable: Object.freeze(hiddenFocusable),
@@ -339,6 +389,8 @@ window.__PAS_HARNESS__ = Object.freeze({
     scenario: options,
     render: renderList,
     showSaveStatus,
+    showImportPreview,
+    closeImportPreview,
     collectMetrics,
     audit: () => evaluateLayoutAudit(collectMetrics()),
 });

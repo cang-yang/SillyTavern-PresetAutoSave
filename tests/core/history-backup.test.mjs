@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    analyzeHistoryImport,
     applyHistoryImportPlan,
     HISTORY_BACKUP_VERSION,
     buildHistoryImportPlan,
@@ -161,6 +162,56 @@ test('replace planning produces a complete replacement image', () => {
     assert.deepEqual([...plan.data.keys()], ['openai::Demo']);
     assert.equal(plan.imported, 1);
     assert.equal(plan.data.get('openai::Demo')[0].schemaVersion, 2);
+});
+
+test('import analysis reports counts, overlap and conflicts without writing', () => {
+    const duplicate = snapshot({ id: 'duplicate', timestamp: 30 });
+    const existing = new Map([
+        ['openai::Demo', [
+            duplicate,
+            snapshot({ id: 'collision', timestamp: 20, hash: 'old', preset: { temperature: 0.2 } }),
+        ]],
+        ['openai::Existing only', [snapshot({ id: 'existing-only', presetName: 'Existing only' })]],
+    ]);
+    const payload = { version: 2, schemaVersion: 2, data: { 'openai::Demo': [
+        duplicate,
+        snapshot({ id: 'new', timestamp: 40 }),
+        snapshot({ id: 'collision', timestamp: 20, hash: 'new', preset: { temperature: 0.9 } }),
+    ] } };
+
+    const preview = analyzeHistoryImport(payload, existing, { max: 50 });
+
+    assert.equal(preview.sourceVersion, 2);
+    assert.equal(preview.schemaVersion, 2);
+    assert.equal(preview.presetCount, 1);
+    assert.equal(preview.snapshotCount, 3);
+    assert.equal(preview.overlappingPresetCount, 1);
+    assert.equal(preview.duplicateSnapshotCount, 1);
+    assert.equal(preview.conflictCount, 1);
+    assert.deepEqual(preview.conflicts, [{ key: 'openai::Demo', snapshotId: 'collision' }]);
+    assert.equal(preview.modes.merge.available, false);
+    assert.equal(preview.modes.replace.available, true);
+    assert.equal(preview.modes.replace.removedPresetCount, 1);
+    assert.equal(preview.modes.replace.finalPresetCount, 1);
+    assert.equal(preview.modes.replace.finalSnapshotCount, 3);
+    assert.equal(existing.get('openai::Demo').length, 2, 'analysis must not mutate current history');
+});
+
+test('import analysis explains the safe merge result before apply', () => {
+    const existing = new Map([['openai::Demo', [snapshot({ id: 'existing', timestamp: 30 })]]]);
+    const payload = { version: 1, data: {
+        'openai::Demo': [snapshot({ id: 'new', timestamp: 40 })],
+        'openai::Other': [snapshot({ id: 'other', presetName: 'Other', timestamp: 20 })],
+    } };
+
+    const preview = analyzeHistoryImport(payload, existing, { max: 50 });
+
+    assert.equal(preview.conflictCount, 0);
+    assert.equal(preview.modes.merge.available, true);
+    assert.equal(preview.modes.merge.importedSnapshotCount, 2);
+    assert.equal(preview.modes.merge.finalPresetCount, 2);
+    assert.equal(preview.modes.merge.finalSnapshotCount, 3);
+    assert.equal(preview.modes.merge.removedPresetCount, 0);
 });
 
 test('captures an independent repository image', async () => {

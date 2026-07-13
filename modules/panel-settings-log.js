@@ -17,7 +17,7 @@ import {
 } from './settings.js';
 import {
     getStats, computeStatsFromSnapshots, trimOldSnapshots, cleanCorruptSnapshots,
-    exportAll, importAll, clearAll,
+    exportAll, importAll, previewImportAll, clearAll,
 } from './history-store.js';
 import {
     confirmSafe, toast, t,
@@ -25,6 +25,7 @@ import {
 } from './compatibility.js';
 import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { forceReseedSnapshots, refreshTakeover } from './preset-takeover.js';
+import { chooseHistoryImportMode } from './import-preview.js';
 
 // =====================================================
 // 内部工具函数
@@ -463,14 +464,11 @@ export async function onImport(panelCtx) {
                 return;
             }
 
-            const ok = await confirmSafe(
-                t('Import Backup'),
-                `<div>${escapeHtml(t('Import Hint'))}</div>
-                 <div style="margin-top: 8px; color: var(--white50a, #999);">${escapeHtml(t('Import Detail'))}</div>`
-            );
-            if (!ok) return;
+            const preview = await previewImportAll(data);
+            const mode = await chooseHistoryImportMode(preview);
+            if (!mode) return;
 
-            const count = await importAll(data, 'merge');
+            const count = await importAll(data, mode);
             toast.success(t('Import Done', { count }));
             await panelCtx.refreshData();
         } catch (e) {

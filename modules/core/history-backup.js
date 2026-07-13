@@ -87,6 +87,22 @@ function snapshotIdentityContent(snapshot) {
     });
 }
 
+function countSnapshots(data) {
+    let count = 0;
+    for (const list of data.values()) count += Array.isArray(list) ? list.length : 0;
+    return count;
+}
+
+function summarizeImportPlan(plan, existingByKey) {
+    return {
+        available: true,
+        importedSnapshotCount: plan.imported,
+        finalPresetCount: plan.data.size,
+        finalSnapshotCount: countSnapshots(plan.data),
+        removedPresetCount: [...existingByKey.keys()].filter(key => !plan.data.has(key)).length,
+    };
+}
+
 export function createHistoryBackup(data, diagnostics = {}, now = () => Date.now()) {
     if (!isPlainObject(data)) throw new TypeError('History backup data must be an object');
     return {
@@ -120,12 +136,7 @@ export function validateHistoryBackup(payload) {
     return { sourceVersion, data };
 }
 
-export function buildHistoryImportPlan(payload, existingByKey = new Map(), { mode = 'merge', max = 50 } = {}) {
-    if (mode !== 'merge' && mode !== 'replace') throw new TypeError(`Invalid history import mode: ${mode}`);
-    if (!Number.isInteger(max) || max < 1) throw new TypeError(`Invalid history limit: ${max}`);
-    if (!(existingByKey instanceof Map)) throw new TypeError('Existing history image must be a Map');
-
-    const validated = validateHistoryBackup(payload);
+function buildHistoryImportPlanFromValidated(validated, existingByKey, { mode, max }) {
     const data = mode === 'replace'
         ? new Map()
         : new Map([...existingByKey].map(([key, list]) => [key, structuredClone(list)]));
@@ -155,6 +166,70 @@ export function buildHistoryImportPlan(payload, existingByKey = new Map(), { mod
     }
 
     return { mode, sourceVersion: validated.sourceVersion, data, imported };
+}
+
+export function buildHistoryImportPlan(payload, existingByKey = new Map(), { mode = 'merge', max = 50 } = {}) {
+    if (mode !== 'merge' && mode !== 'replace') throw new TypeError(`Invalid history import mode: ${mode}`);
+    if (!Number.isInteger(max) || max < 1) throw new TypeError(`Invalid history limit: ${max}`);
+    if (!(existingByKey instanceof Map)) throw new TypeError('Existing history image must be a Map');
+    return buildHistoryImportPlanFromValidated(validateHistoryBackup(payload), existingByKey, { mode, max });
+}
+
+/**
+ * Build a read-only, user-facing import explanation. This deliberately keeps
+ * conflict discovery separate from the write plan so a valid backup can still
+ * explain why merge is unavailable and what replacement would remove.
+ */
+export function analyzeHistoryImport(payload, existingByKey = new Map(), { max = 50 } = {}) {
+    if (!(existingByKey instanceof Map)) throw new TypeError('Existing history image must be a Map');
+    if (!Number.isInteger(max) || max < 1) throw new TypeError(`Invalid history limit: ${max}`);
+    const validated = validateHistoryBackup(payload);
+    let overlappingPresetCount = 0;
+    let duplicateSnapshotCount = 0;
+    const conflicts = [];
+
+    for (const [key, incoming] of validated.data) {
+        const existing = Array.isArray(existingByKey.get(key)) ? existingByKey.get(key) : [];
+        if (existingByKey.has(key)) overlappingPresetCount++;
+        const existingById = new Map(existing.map(snapshot => [snapshot?.id, snapshot]));
+        for (const snapshot of incoming) {
+            const current = existingById.get(snapshot.id);
+            if (!current) continue;
+            if (snapshotIdentityContent(current) === snapshotIdentityContent(snapshot)) {
+                duplicateSnapshotCount++;
+            } else {
+                conflicts.push({ key, snapshotId: snapshot.id });
+            }
+        }
+    }
+
+    const replacePlan = buildHistoryImportPlanFromValidated(validated, existingByKey, { mode: 'replace', max });
+    const mergeSummary = conflicts.length === 0
+        ? summarizeImportPlan(buildHistoryImportPlanFromValidated(validated, existingByKey, { mode: 'merge', max }), existingByKey)
+        : {
+            available: false,
+            importedSnapshotCount: 0,
+            finalPresetCount: existingByKey.size,
+            finalSnapshotCount: countSnapshots(existingByKey),
+            removedPresetCount: 0,
+        };
+
+    return {
+        sourceVersion: validated.sourceVersion,
+        schemaVersion: Number.isInteger(payload.schemaVersion) ? payload.schemaVersion : null,
+        presetCount: validated.data.size,
+        snapshotCount: countSnapshots(validated.data),
+        existingPresetCount: existingByKey.size,
+        existingSnapshotCount: countSnapshots(existingByKey),
+        overlappingPresetCount,
+        duplicateSnapshotCount,
+        conflictCount: conflicts.length,
+        conflicts,
+        modes: {
+            merge: mergeSummary,
+            replace: summarizeImportPlan(replacePlan, existingByKey),
+        },
+    };
 }
 
 export async function captureHistoryImage(repository) {
