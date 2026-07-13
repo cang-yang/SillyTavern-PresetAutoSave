@@ -106,6 +106,32 @@ test('contains worker failures and continues with later requests', async () => {
     assert.equal(coordinator.getState().status, 'idle');
 });
 
+test('contains state observer failures so they cannot stall queued saves', async () => {
+    const executed = [];
+    const coordinator = new SaveCoordinator({
+        worker: async request => {
+            executed.push(request.presetName);
+            return request.presetName;
+        },
+        onStateChange: () => {
+            throw new Error('broken status renderer');
+        },
+    });
+
+    const first = coordinator.enqueue({ apiId: 'openai', presetName: 'A', revision: 1 });
+    const second = coordinator.enqueue({ apiId: 'openai', presetName: 'B', revision: 1 });
+    const completed = Promise.all([first, second, coordinator.whenIdle()]);
+    const timeout = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('save queue stalled')), 100);
+    });
+
+    const [firstResult, secondResult] = await Promise.race([completed, timeout]);
+    assert.equal(firstResult.status, 'committed');
+    assert.equal(secondResult.status, 'committed');
+    assert.deepEqual(executed, ['A', 'B']);
+    assert.equal(coordinator.getState().status, 'idle');
+});
+
 test('close cancels queued requests, rejects new work, and waits for active work', async () => {
     const gate = deferred();
     const coordinator = new SaveCoordinator({ worker: async () => gate.promise });

@@ -127,6 +127,21 @@ function toInt(v, fallback) {
     return Number.isFinite(n) ? n : fallback;
 }
 
+function sameSettingValue(left, right) {
+    if (Object.is(left, right)) return true;
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+    if (Array.isArray(left) || Array.isArray(right)) {
+        return Array.isArray(left)
+            && Array.isArray(right)
+            && left.length === right.length
+            && left.every((value, index) => sameSettingValue(value, right[index]));
+    }
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return leftKeys.length === rightKeys.length
+        && leftKeys.every(key => Object.hasOwn(right, key) && sameSettingValue(left[key], right[key]));
+}
+
 // =====================================================
 // 状态
 // =====================================================
@@ -190,7 +205,7 @@ export async function initSettings() {
             const validator = VALIDATORS[key];
             if (validator) {
                 const validated = validator(value);
-                if (validated !== value) {
+                if (!sameSettingValue(validated, value)) {
                     allSettings[MODULE_NAME][key] = validated;
                     migrated = true;
                 }
@@ -227,8 +242,7 @@ export async function initSettings() {
 export function getSettings() {
     if (!_initialized) {
         logger.warn('getSettings called before init');
-        // 返回浅拷贝，防止调用方意外修改 frozen 对象抛错
-        return { ...DEFAULT_SETTINGS };
+        return structuredClone(DEFAULT_SETTINGS);
     }
     return _settings;
 }
@@ -245,7 +259,8 @@ export function getSetting(key) {
  * 获取默认值
  */
 export function getDefault(key) {
-    return DEFAULT_SETTINGS[key];
+    const value = DEFAULT_SETTINGS[key];
+    return value && typeof value === 'object' ? structuredClone(value) : value;
 }
 
 // =====================================================
@@ -271,7 +286,7 @@ export function updateSetting(key, value) {
     const validated = validator ? validator(value) : value;
 
     const oldValue = _settings[key];
-    if (oldValue === validated) return false;
+    if (sameSettingValue(oldValue, validated)) return false;
 
     _settings[key] = validated;
 
@@ -305,7 +320,7 @@ export function batchUpdate(updates) {
         const validator = VALIDATORS[key];
         const validated = validator ? validator(value) : value;
         const oldValue = _settings[key];
-        if (oldValue === validated) continue;
+        if (sameSettingValue(oldValue, validated)) continue;
 
         _settings[key] = validated;
         if (key === 'debugMode') logger.setDebugMode(validated);
@@ -333,14 +348,14 @@ export function resetSettings() {
     if (!_initialized) return;
 
     const oldSettings = { ..._settings };
-    Object.assign(_settings, DEFAULT_SETTINGS);
+    Object.assign(_settings, structuredClone(DEFAULT_SETTINGS));
 
     logger.setDebugMode(_settings.debugMode);
     persistSettings();
 
     // 通知所有变化的 key
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
-        if (oldSettings[key] !== _settings[key]) {
+        if (!sameSettingValue(oldSettings[key], _settings[key])) {
             notifyListeners(key, _settings[key], oldSettings[key]);
         }
     }

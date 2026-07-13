@@ -58,6 +58,14 @@ export class SaveCoordinator {
         return new Promise(resolve => this.idleWaiters.push(resolve));
     }
 
+    notifyStateChange() {
+        try {
+            this.onStateChange(this.getState());
+        } catch (_) {
+            // Status observers are UI-only and must never interrupt persistence.
+        }
+    }
+
     close() {
         if (this.closed) return;
         this.closed = true;
@@ -66,7 +74,7 @@ export class SaveCoordinator {
             entry.resolve({ status: 'cancelled', request: entry.request });
         }
         if (!this.running) {
-            this.onStateChange(this.getState());
+            this.notifyStateChange();
             const waiters = this.idleWaiters.splice(0);
             for (const resolve of waiters) resolve();
         }
@@ -75,7 +83,7 @@ export class SaveCoordinator {
     async drain() {
         if (this.running || this.closed) return;
         this.running = true;
-        this.onStateChange(this.getState());
+        this.notifyStateChange();
         try {
             while (!this.closed && this.queue.length > 0) {
                 const entry = this.queue.shift();
@@ -90,7 +98,7 @@ export class SaveCoordinator {
         } finally {
             this.active = null;
             this.running = false;
-            this.onStateChange(this.getState());
+            this.notifyStateChange();
             const waiters = this.idleWaiters.splice(0);
             for (const resolve of waiters) resolve();
         }

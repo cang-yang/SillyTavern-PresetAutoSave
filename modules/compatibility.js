@@ -1076,15 +1076,15 @@ export async function confirmSafe(title, message) {
     }
     // Fallback: native confirm 不支持 HTML，去掉所有标签防止显示原始 markup
     const stripHtml = (s) => String(s || '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#039;/gi, "'")
+        .replace(/&amp;/gi, '&')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<\/p>/gi, '\n')
         .replace(/<[^>]+>/g, '')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&/g, '&')
-        .replace(/</g, '<')
-        .replace(/>/g, '>')
-        .replace(/"/g, '"')
-        .replace(/&#039;/g, "'")
         .replace(/[ \t]+/g, ' ')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
@@ -1186,7 +1186,8 @@ export function t(key, vars = null) {
     // 占位符替换 {{var}}
     if (vars && typeof result === 'string') {
         for (const [k, v] of Object.entries(vars)) {
-            result = result.replace(new RegExp(`{{\\s*${k}\\s*}}`, 'g'), String(v));
+            const escapedKey = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            result = result.replace(new RegExp(`{{\\s*${escapedKey}\\s*}}`, 'g'), () => String(v));
         }
     }
     return result;

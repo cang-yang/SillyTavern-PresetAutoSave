@@ -93,6 +93,11 @@ function detectAndApply() {
  * - 监听 style 属性变化作为辅助
  */
 export function initThemeDetector() {
+    if (_intervalId !== null || _observer !== null) {
+        detectAndApply();
+        return;
+    }
+
     // 立即检测
     detectAndApply();
 
@@ -117,7 +122,7 @@ export function initThemeDetector() {
  * 清理
  */
 export function teardownThemeDetector() {
-    if (_intervalId) {
+    if (_intervalId !== null) {
         clearInterval(_intervalId);
         _intervalId = null;
     }

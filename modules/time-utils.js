@@ -11,6 +11,7 @@ export function formatTime(ts) {
     if (!ts) return '\u2014';
     try {
         const d = new Date(ts);
+        if (!Number.isFinite(d.getTime())) return '\u2014';
         const pad = n => String(n).padStart(2, '0');
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     } catch (_) {

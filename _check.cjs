@@ -8,33 +8,26 @@ const path = require('path');
 const BASE = __dirname;
 const MODULES_DIR = path.join(BASE, 'modules');
 
-// All JS files to check
-const ALL_FILES = [
-  'index.js',
-  'modules/compatibility.js',
-  'modules/key-utils.js',
-  'modules/time-utils.js',
-  'modules/preset-takeover.js',
-  'modules/auto-save.js',
-  'modules/history-panel.js',
-  'modules/panel-summary.js',
-  'modules/panel-settings-log.js',
-  'modules/panel-list-render.js',
-  'modules/panel-actions.js',
-  'modules/panel-group-manager.js',
-  'modules/history-store.js',
-  'modules/preset-grouping.js',
-  'modules/settings.js',
-  'modules/ui-injector.js',
-  'modules/diff-viewer.js',
-  'modules/archive-store.js',
-  'modules/logger.js',
-  'modules/theme-detector.js',
-  'modules/core/value-utils.js',
-  'modules/core/preset-schema.js',
-  'modules/core/change-set.js',
-  'modules/core/save-coordinator.js',
-];
+function collectJavaScriptFiles(directory) {
+  const files = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectJavaScriptFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      files.push(path.relative(BASE, fullPath).replace(/\\/g, '/'));
+    }
+  }
+  return files.sort();
+}
+
+// Discover production modules so new files cannot silently bypass this gate.
+const ALL_FILES = ['index.js', ...collectJavaScriptFiles(MODULES_DIR)];
+
+if (process.argv.includes('--list-files')) {
+  process.stdout.write(JSON.stringify(ALL_FILES));
+  process.exit(0);
+}
 
 let issues = [];
 let warnings = [];

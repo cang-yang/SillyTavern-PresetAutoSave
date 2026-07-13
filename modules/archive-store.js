@@ -55,12 +55,6 @@ function makeKey(apiId, presetName) {
     return `${apiId}::${presetName}`;
 }
 
-function parseKey(key) {
-    const idx = key.indexOf('::');
-    if (idx < 0) return null;
-    return { apiId: key.slice(0, idx), presetName: key.slice(idx + 2) };
-}
-
 async function ensureStore() {
     if (!_initialized) await initArchiveStore();
     return _store;
@@ -191,9 +185,16 @@ export async function getArchiveStats() {
     const byApi = {};
     const bySeries = {};
     let totalSize = 0;
+    let oldestAt = 0;
+    let newestAt = 0;
     for (const e of all) {
         byApi[e.apiId] = (byApi[e.apiId] || 0) + 1;
         bySeries[e.seriesKey] = (bySeries[e.seriesKey] || 0) + 1;
+        const archivedAt = Number(e.archivedAt);
+        if (Number.isFinite(archivedAt) && archivedAt > 0) {
+            oldestAt = oldestAt === 0 ? archivedAt : Math.min(oldestAt, archivedAt);
+            newestAt = Math.max(newestAt, archivedAt);
+        }
         try {
             totalSize += JSON.stringify(e.data || {}).length;
         } catch (_) {}
@@ -203,7 +204,7 @@ export async function getArchiveStats() {
         byApi,
         bySeries,
         totalSize,
-        oldestAt: all.reduce((m, e) => Math.min(m, e.archivedAt || Infinity), Infinity),
-        newestAt: all.reduce((m, e) => Math.max(m, e.archivedAt || 0), 0),
+        oldestAt,
+        newestAt,
     };
 }
