@@ -42,6 +42,7 @@ import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 import { observeNativePresetSaves } from './core/native-preset-save-observer.js';
 import { resolveNativePresetSaveTarget } from './core/native-preset-save-target.js';
 import { PRESET_WATCH_SELECTORS, isInsidePresetWatchArea } from './core/preset-dom-watch.js';
+import { getSaveStatus, setSaveStatus } from './core/save-status.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -65,14 +66,28 @@ const EXCLUDED_ID_PREFIXES = [
 // =====================================================
 // 状态指示器接口（由 ui-injector 注册）
 // =====================================================
-let _setStatus = (_state) => {};
+let _statusSetter = () => {};
+
+function _setStatus(state) {
+    if (!setSaveStatus(state)) return;
+    try {
+        _statusSetter(state);
+    } catch (error) {
+        logger.debug('Status observer failed:', error);
+    }
+}
 
 /**
  * 注册状态指示器更新函数（供 ui-injector 调用）
  */
 export function registerStatusSetter(fn) {
     if (typeof fn === 'function') {
-        _setStatus = fn;
+        _statusSetter = fn;
+        try {
+            fn(getSaveStatus());
+        } catch (error) {
+            logger.debug('Initial status observer failed:', error);
+        }
     }
 }
 

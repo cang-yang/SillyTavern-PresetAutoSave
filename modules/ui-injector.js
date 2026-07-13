@@ -13,7 +13,12 @@ import { getSettings, onSettingChange } from './settings.js';
 import { on, getEventType, t } from './compatibility.js';
 import { registerStatusSetter } from './auto-save.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
-import { applyStatusIndicatorState, STATUS_INDICATOR_STATES } from './core/status-indicator.js';
+import {
+    applyStatusIndicatorPresentation,
+    applyStatusIndicatorState,
+    STATUS_INDICATOR_STATES,
+} from './core/status-indicator.js';
+import { getSaveStatus, saveStatusLabelKey, setSaveStatus } from './core/save-status.js';
 
 // =====================================================
 // 常量
@@ -23,16 +28,8 @@ const STATUS_DOT_CLASS = 'pas-status-dot';
 const HISTORY_BTN_ID_PREFIX = 'pas_history_btn_';
 const STATUS_DOT_ID_PREFIX = 'pas_status_dot_';
 
-const STATUS_KEYS = {
-    idle: 'Status Idle',
-    pending: 'Status Pending',
-    saving: 'Status Saving',
-    saved: 'Status Saved',
-    error: 'Status Error',
-};
-
 function statusLabel(state) {
-    return t(STATUS_KEYS[state] || 'Status Idle');
+    return t(saveStatusLabelKey(state));
 }
 
 // =====================================================
@@ -118,6 +115,7 @@ function scheduleInject() {
 function injectAll() {
     injectHistoryButtons();
     injectStatusDots();
+    syncStatusIndicators(getSaveStatus());
     updateStatusDotVisibility();
 }
 
@@ -262,7 +260,8 @@ function createStatusDot(apiId, dotId) {
     dot.setAttribute('data-api-id', apiId);
     dot.setAttribute('role', 'status');
     dot.setAttribute('aria-live', 'polite');
-    applyStatusIndicatorState(dot, 'idle', statusLabel('idle'));
+    const state = getSaveStatus();
+    applyStatusIndicatorState(dot, state, statusLabel(state));
     return dot;
 }
 
@@ -278,13 +277,9 @@ function updateStatusDotVisibility() {
 // 状态切换（供 auto-save 调用）
 // =====================================================
 export function setStatusDot(state) {
-    if (!STATUS_INDICATOR_STATES.includes(state)) return;
+    if (!STATUS_INDICATOR_STATES.includes(state) || !setSaveStatus(state)) return;
 
-    const label = statusLabel(state);
-    const dots = document.querySelectorAll(`.${STATUS_DOT_CLASS}`);
-    for (const dot of dots) {
-        applyStatusIndicatorState(dot, state, label);
-    }
+    syncStatusIndicators(state);
 
     // saved/error 状态自动恢复 idle
     if (_statusResetTimer) _runtimeTimers.cancel(_statusResetTimer);
@@ -292,6 +287,14 @@ export function setStatusDot(state) {
         _statusResetTimer = _runtimeTimers.schedule(() => setStatusDot('idle'), 2000);
     } else if (state === 'error') {
         _statusResetTimer = _runtimeTimers.schedule(() => setStatusDot('idle'), 4000);
+    }
+}
+
+function syncStatusIndicators(state) {
+    const label = statusLabel(state);
+    const dots = document.querySelectorAll(`.${STATUS_DOT_CLASS}`);
+    for (const dot of dots) {
+        applyStatusIndicatorPresentation(dot, state, label);
     }
 }
 
@@ -389,6 +392,7 @@ function setupObserver() {
 // =====================================================
 export function teardown() {
     _runtimeTimers.clearAll();
+    registerStatusSetter(() => {});
     _injectScheduled = false;
     if (_observer) {
         _observer.disconnect();

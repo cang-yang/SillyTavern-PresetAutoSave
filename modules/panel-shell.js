@@ -1,11 +1,15 @@
+import { SAVE_STATUS_STATES, saveStatusLabelKey } from './core/save-status.js';
+
 /**
  * Pure history-panel shell renderer.
  * Keeping the shell free of DOM and application imports makes its semantic
  * contract cheap to test and keeps history-panel.js focused on orchestration.
  */
-export function buildPanelHTML({ t, escapeHtml, escapeAttr }) {
+export function buildPanelHTML({ t, escapeHtml, escapeAttr, saveStatus = 'idle', saveStatusLabel = null }) {
     const text = (key, vars) => escapeHtml(t(key, vars));
     const attr = (key) => escapeAttr(t(key));
+    const safeStatus = SAVE_STATUS_STATES.includes(saveStatus) ? saveStatus : 'idle';
+    const statusText = escapeHtml(saveStatusLabel ?? t(saveStatusLabelKey(safeStatus)));
 
     return `
 <div class="pas-panel">
@@ -15,8 +19,8 @@ export function buildPanelHTML({ t, escapeHtml, escapeAttr }) {
             <div class="pas-panel-heading">
                 <h3>${text('Preset history records')}</h3>
                 <div class="pas-panel-status" role="status">
-                    <span class="pas-status-dot" aria-hidden="true"></span>
-                    <span>${text('Auto Save Ready')}</span>
+                    <span class="pas-status-dot pas-status-${safeStatus}" data-pas-element="panel-status-dot" data-status="${safeStatus}" aria-hidden="true"></span>
+                    <span data-pas-status-label>${statusText}</span>
                     <span class="pas-panel-stats" id="pas-panel-stats"></span>
                 </div>
             </div>

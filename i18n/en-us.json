@@ -121,7 +121,7 @@
     "Header Stats": "{{count}} records · {{size}}",
     "Saved Toast": "Preset \"{{name}}\" saved",
     "Save Failed Toast": "Auto save failed: {{message}}",
-    "Status Idle": "Idle",
+    "Status Idle": "No pending changes",
     "Status Pending": "Waiting to save...",
     "Status Saving": "Saving...",
     "Status Saved": "Saved ✓",

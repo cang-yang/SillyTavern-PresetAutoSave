@@ -170,7 +170,11 @@ body.pas-light .pas-panel-header { background: rgba(255, 255, 255, .52); }
 .pas-panel-heading { min-width: 0; }
 .pas-panel-heading h3 { margin: 0; overflow: hidden; font-size: 17px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .pas-panel-status { gap: 7px; margin-top: 3px; color: var(--pas-v4-text-muted); font-size: 12px; }
-.pas-panel-status > .pas-status-dot { width: 7px; height: 7px; margin: 0; border-radius: 50%; background: var(--pas-v4-success); box-shadow: 0 0 0 4px rgba(66, 211, 146, .10), 0 0 12px rgba(66, 211, 146, .35); }
+.pas-panel-status > .pas-status-dot { width: 7px; height: 7px; margin: 0; border-radius: 50%; background: var(--pas-v4-text-muted); box-shadow: 0 0 0 4px rgba(157, 167, 186, .08); }
+.pas-panel-status > .pas-status-pending { background: var(--pas-v4-current); box-shadow: 0 0 0 4px rgba(245, 158, 11, .10); }
+.pas-panel-status > .pas-status-saving { background: var(--pas-v4-accent); box-shadow: 0 0 0 4px rgba(139, 92, 246, .11), 0 0 10px rgba(139, 92, 246, .30); }
+.pas-panel-status > .pas-status-saved { background: var(--pas-v4-success); box-shadow: 0 0 0 4px rgba(66, 211, 146, .10), 0 0 10px rgba(66, 211, 146, .28); }
+.pas-panel-status > .pas-status-error { background: var(--pas-v4-danger); box-shadow: 0 0 0 4px rgba(251, 113, 133, .10), 0 0 10px rgba(251, 113, 133, .28); }
 .pas-panel-stats:empty { display: none; }
 .pas-panel-stats:not(:empty)::before { content: '·'; margin-right: 7px; }
 

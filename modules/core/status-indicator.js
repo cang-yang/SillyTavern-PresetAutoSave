@@ -1,10 +1,6 @@
-export const STATUS_INDICATOR_STATES = Object.freeze([
-    'idle',
-    'pending',
-    'saving',
-    'saved',
-    'error',
-]);
+import { SAVE_STATUS_STATES } from './save-status.js';
+
+export const STATUS_INDICATOR_STATES = SAVE_STATUS_STATES;
 
 /**
  * Apply one exclusive status to a dot-like element. Keeping this DOM update
@@ -25,5 +21,12 @@ export function applyStatusIndicatorState(dot, state, label = '') {
     if (dot.dataset) dot.dataset.status = state;
     dot.title = label;
     dot.setAttribute?.('aria-label', label);
+    return true;
+}
+
+export function applyStatusIndicatorPresentation(dot, state, label = '') {
+    if (!applyStatusIndicatorState(dot, state, label)) return false;
+    const panelLabel = dot.closest?.('.pas-panel-status')?.querySelector?.('[data-pas-status-label]');
+    if (panelLabel) panelLabel.textContent = label;
     return true;
 }

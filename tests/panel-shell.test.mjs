@@ -19,6 +19,20 @@ test('panel shell exposes an accessible three-tab workspace', () => {
     assert.match(html, /id="pas-panel-settings"[^>]*hidden/);
 });
 
+test('panel shell renders the current save state instead of a fixed ready claim', () => {
+    const saving = buildPanelHTML({
+        t: (key) => key,
+        escapeHtml: identity,
+        escapeAttr: identity,
+        saveStatus: 'saving',
+        saveStatusLabel: 'Saving now',
+    });
+
+    assert.match(saving, /class="pas-status-dot pas-status-saving"[^>]*data-status="saving"/);
+    assert.match(saving, /data-pas-status-label>Saving now<\/span>/);
+    assert.doesNotMatch(saving, />Auto Save Ready<\/span>/);
+});
+
 test('secondary actions live in one closed tools menu', () => {
     assert.match(html, /class="pas-tools-trigger"[^>]*aria-expanded="false"/);
     assert.match(html, /id="pas-tools-menu"[^>]*role="menu" hidden/);

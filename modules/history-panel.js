@@ -21,6 +21,7 @@ import {
 } from './history-store.js';
 import { onHistoryChange } from './core/history-change-events.js';
 import { captureFocusAnchor, restoreFocusAnchor } from './core/focus-anchor.js';
+import { getSaveStatus, saveStatusLabelKey } from './core/save-status.js';
 import {
     confirmSafe, toast, t,
     getCurrentApiId, getSelectedPresetName,
@@ -278,7 +279,14 @@ export async function showHistoryPanel() {
     const panelStartedAt = performance.now();
 
     // Step 1: 创建 popup（简单操作，不太可能失败）
-    const html = buildPanelShellHTML({ t, escapeHtml, escapeAttr });
+    const saveStatus = getSaveStatus();
+    const html = buildPanelShellHTML({
+        t,
+        escapeHtml,
+        escapeAttr,
+        saveStatus,
+        saveStatusLabel: t(saveStatusLabelKey(saveStatus)),
+    });
 
     // 通过 createPopupSafe 集中防御 ctx / Popup / POPUP_TYPE 缺失
     _popup = createPopupSafe(html, 'DISPLAY', {

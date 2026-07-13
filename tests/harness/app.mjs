@@ -1,5 +1,7 @@
 import { buildPanelHTML } from '../../modules/panel-shell.js';
 import { captureFocusAnchor, restoreFocusAnchor } from '../../modules/core/focus-anchor.js';
+import { applyStatusIndicatorPresentation } from '../../modules/core/status-indicator.js';
+import { saveStatusLabelKey, setSaveStatus } from '../../modules/core/save-status.js';
 import { escapeAttr, escapeHtml } from '../../modules/key-utils.js';
 import { buildHarnessScenario } from '../fixtures/browser-harness-model.mjs';
 import { normalizeHarnessOptions } from './config.mjs';
@@ -282,6 +284,12 @@ function selectorFor(element) {
     return element.tagName.toLowerCase();
 }
 
+function showSaveStatus(state) {
+    if (!setSaveStatus(state)) return false;
+    const dot = app.querySelector('.pas-panel-status .pas-status-dot');
+    return applyStatusIndicatorPresentation(dot, state, translate(saveStatusLabelKey(state)));
+}
+
 function isVisible(element) {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -330,6 +338,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     ready: true,
     scenario: options,
     render: renderList,
+    showSaveStatus,
     collectMetrics,
     audit: () => evaluateLayoutAudit(collectMetrics()),
 });

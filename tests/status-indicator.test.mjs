@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { applyStatusIndicatorState } from '../modules/core/status-indicator.js';
+import { applyStatusIndicatorPresentation, applyStatusIndicatorState } from '../modules/core/status-indicator.js';
 
 function fakeDot(initialClasses = []) {
     const classes = new Set(initialClasses);
@@ -46,4 +46,16 @@ test('preset indicator states are not overridden by panel-only status styling', 
     }
     assert.doesNotMatch(panelCss, /^\.pas-status-dot\s*\{/m);
     assert.match(panelCss, /\.pas-panel-status\s*>\s*\.pas-status-dot\s*\{/);
+});
+
+test('panel presentation updates its readable label with the visual state', () => {
+    const dot = fakeDot(['pas-status-dot']);
+    const label = { textContent: 'stale' };
+    dot.closest = selector => selector === '.pas-panel-status'
+        ? { querySelector: query => query === '[data-pas-status-label]' ? label : null }
+        : null;
+
+    assert.equal(applyStatusIndicatorPresentation(dot, 'saving', 'Saving now'), true);
+    assert.equal(dot.dataset.status, 'saving');
+    assert.equal(label.textContent, 'Saving now');
 });

@@ -121,7 +121,7 @@
     "Header Stats": "{{count}} 条 · {{size}}",
     "Saved Toast": "预设 \"{{name}}\" 已保存",
     "Save Failed Toast": "自动保存失败: {{message}}",
-    "Status Idle": "空闲",
+    "Status Idle": "没有待保存的修改",
     "Status Pending": "等待保存...",
     "Status Saving": "保存中...",
     "Status Saved": "已保存 ✓",
