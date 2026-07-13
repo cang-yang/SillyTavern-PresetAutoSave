@@ -3,6 +3,7 @@
   "type": "module",
   "scripts": {
     "test": "node _test.mjs",
-    "check": "node _check.cjs"
+    "check": "node _check.cjs",
+    "harness": "node tests/harness/server.mjs"
   }
 }

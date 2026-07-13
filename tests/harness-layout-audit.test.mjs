@@ -1,0 +1,105 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { evaluateLayoutAudit } from './harness/layout-audit.mjs';
+
+function cleanMetrics(overrides = {}) {
+    return {
+        scenario: 'ordinary',
+        viewport: { width: 1280, height: 900 },
+        documentWidth: 1280,
+        controls: [{ selector: '.pas-btn-snap', important: true, visible: true, width: 112, height: 44 }],
+        hiddenFocusable: [],
+        consoleErrors: [],
+        renderMs: 80,
+        ...overrides,
+    };
+}
+
+test('clean desktop metrics pass without findings', () => {
+    const result = evaluateLayoutAudit(cleanMetrics());
+    assert.equal(result.passed, true);
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.summary, { errors: 0, warnings: 0 });
+    assert.equal(Object.isFrozen(result.findings), true);
+});
+
+test('horizontal overflow and hidden focus targets are release errors', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        documentWidth: 1304,
+        hiddenFocusable: ['#pas-panel-settings button'],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.findings.map(item => item.code), ['horizontal-overflow', 'hidden-focusable']);
+    assert.ok(result.findings.every(item => item.severity === 'error'));
+});
+
+test('compact layouts reject visible important controls below 44 by 44 pixels', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 390, height: 844 },
+        documentWidth: 390,
+        controls: [
+            { selector: '.pas-btn-snap', important: true, visible: true, width: 43.5, height: 44 },
+            { selector: '.pas-hidden-action', important: true, visible: false, width: 20, height: 20 },
+            { selector: '.pas-secondary', important: false, visible: true, width: 24, height: 24 },
+        ],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.findings.map(item => item.code), ['touch-target']);
+    assert.equal(result.findings[0].selector, '.pas-btn-snap');
+});
+
+test('repeated controls produce one actionable touch-target finding per shape', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 390, height: 844 },
+        documentWidth: 390,
+        controls: [
+            { selector: '.pas-btn-restore', important: true, visible: true, width: 28, height: 28 },
+            { selector: '.pas-btn-restore', important: true, visible: true, width: 28, height: 28 },
+            { selector: '.pas-btn-restore', important: true, visible: true, width: 28, height: 28 },
+        ],
+    }));
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].selector, '.pas-btn-restore');
+});
+
+test('required control labels must remain visible at supported viewports', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        requiredLabels: [
+            { selector: '#pas-tab-list > span', text: '记录', visible: false },
+            { selector: '#pas-tab-logs > span', text: '日志', visible: true },
+        ],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].code, 'required-label-hidden');
+    assert.equal(result.findings[0].selector, '#pas-tab-list > span');
+});
+
+test('console errors and invalid timing fail while slow finite timing is reported', () => {
+    const consoleFailure = evaluateLayoutAudit(cleanMetrics({ consoleErrors: ['Unhandled rejection'] }));
+    assert.equal(consoleFailure.passed, false);
+    assert.equal(consoleFailure.findings[0].code, 'console-error');
+
+    const invalidTiming = evaluateLayoutAudit(cleanMetrics({ renderMs: Number.NaN }));
+    assert.equal(invalidTiming.passed, false);
+    assert.equal(invalidTiming.findings[0].code, 'invalid-render-timing');
+
+    const slowOrdinary = evaluateLayoutAudit(cleanMetrics({ renderMs: 300 }));
+    assert.equal(slowOrdinary.passed, true);
+    assert.equal(slowOrdinary.findings[0].severity, 'warning');
+    assert.equal(slowOrdinary.findings[0].code, 'slow-render');
+
+    const verySlow = evaluateLayoutAudit(cleanMetrics({ scenario: 'performance', renderMs: 1001 }));
+    assert.equal(verySlow.passed, false);
+    assert.equal(verySlow.findings[0].severity, 'error');
+});
+
+test('malformed metrics fail closed with a stable audit finding', () => {
+    const result = evaluateLayoutAudit(null);
+    assert.equal(result.passed, false);
+    assert.equal(result.findings[0].code, 'invalid-metrics');
+});

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Preset Auto Save Browser Harness</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%238b5cf6' d='M2 2h12v12H2z'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="../../styles/index.css">
+    <link rel="stylesheet" href="./harness.css">
+</head>
+<body>
+    <div class="pas-harness-frame">
+        <div class="pas-harness-meta" aria-label="测试场景信息">
+            <strong>Preset Auto Save</strong>
+            <span id="pas-harness-scenario">正在准备测试场景…</span>
+        </div>
+        <select class="pas-harness-native-select" data-preset-manager-for="openai" aria-hidden="true" tabindex="-1"></select>
+        <div id="pas-harness-app"></div>
+    </div>
+    <script type="module" src="./app.mjs"></script>
+</body>
+</html>

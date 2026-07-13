@@ -39,7 +39,7 @@ export function buildVisualScenario({ revisionsPerVersion = 5 } = {}) {
         { key: '星海导航', versions: ['V1.0', 'V1.1', 'V2.0 Beta'] },
         { key: '星海导航 · 创作', versions: ['V1.0', 'V1.2'] },
         { key: '星海导航 · 创作 · 长篇', versions: ['V3.0', 'V3.1'] },
-        { key: '极长名称压力测试：中英文 Mixed_Name_With_Punctuation_以及不会轻易换行的连续字符', versions: ['V2026.06.19', 'V2026.06.20'] },
+        { key: '极长名称压力测试：中英文 Mixed_Name_With_Punctuation_🧭_<script>_以及不会轻易换行的连续字符', versions: ['V2026.06.19', 'V2026.06.20'] },
     ];
     const records = [];
     const overrides = {};

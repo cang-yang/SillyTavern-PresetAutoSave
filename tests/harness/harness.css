@@ -1,0 +1,112 @@
+:root {
+    color-scheme: dark;
+    --SmartThemeBodyColor: #eceef7;
+    --SmartThemeEmColor: #aab1c4;
+    --SmartThemeQuoteColor: #9b87f5;
+    --SmartThemeBlurTintColor: #11141d;
+    --SmartThemeBorderColor: rgba(220, 224, 255, .16);
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+    min-width: 0;
+    min-height: 100%;
+    margin: 0;
+    background: #080a11;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body.pas-light {
+    color-scheme: light;
+    --SmartThemeBodyColor: #25283a;
+    --SmartThemeEmColor: #6e7487;
+    --SmartThemeQuoteColor: #7657d8;
+    --SmartThemeBlurTintColor: #f1f3f8;
+    --SmartThemeBorderColor: rgba(45, 49, 75, .14);
+    background: #e9ebf2;
+}
+
+.pas-harness-frame {
+    width: min(1180px, 100%);
+    min-height: 100svh;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.pas-harness-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 4px 10px;
+    color: var(--SmartThemeEmColor);
+    font-size: 12px;
+}
+
+.pas-harness-meta strong { color: var(--SmartThemeBodyColor); }
+
+.pas-harness-native-select { display: none; }
+
+#pas-harness-app { min-width: 0; }
+
+.pas-harness-state-note {
+    margin: 8px 0 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    color: var(--SmartThemeBodyColor);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 88%, #f59e0b 12%);
+    font-size: 13px;
+}
+
+/* SillyTavern supplies Font Awesome. The standalone harness uses compact
+   Unicode stand-ins so icon-only controls remain legible without network or
+   package dependencies. Product markup and sizing still come from the real UI. */
+.fa-solid::before {
+    content: "◆";
+    display: inline-block;
+    min-width: 1em;
+    text-align: center;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: .9em;
+    font-style: normal;
+    line-height: 1;
+}
+.fa-clock-rotate-left::before { content: "↶"; }
+.fa-camera::before { content: "●"; }
+.fa-ellipsis::before { content: "•••"; letter-spacing: -2px; }
+.fa-list::before { content: "☷"; }
+.fa-bug::before { content: "◇"; }
+.fa-gear::before { content: "⚙"; }
+.fa-magnifying-glass::before { content: "⌕"; }
+.fa-layer-group::before { content: "▱"; }
+.fa-list-ul::before { content: "☷"; }
+.fa-asterisk::before { content: "✦"; }
+.fa-bullseye::before { content: "◎"; }
+.fa-thumbtack::before { content: "⌖"; }
+.fa-calendar-day::before,
+.fa-calendar-week::before { content: "□"; }
+.fa-chevron-down::before { content: "⌄"; }
+.fa-chevron-right::before { content: "›"; }
+.fa-folder::before { content: "▸"; }
+.fa-folder-open::before { content: "▾"; }
+.fa-code-branch::before { content: "⑂"; }
+.fa-circle-dot::before { content: "●"; }
+.fa-circle-check::before { content: "✓"; }
+.fa-trash::before,
+.fa-trash-can::before { content: "×"; }
+.fa-pen::before { content: "✎"; }
+.fa-rotate-left::before { content: "↶"; }
+.fa-eye::before { content: "◉"; }
+.fa-file-export::before { content: "⇧"; }
+.fa-flag::before { content: "⚑"; }
+.fa-code-compare::before { content: "⇄"; }
+.fa-play::before { content: "▶"; }
+.fa-xmark::before { content: "×"; }
+
+@media (max-width: 460px) {
+    .pas-harness-frame { width: 100%; height: 100svh; padding: 0; }
+    .pas-harness-meta { display: none; }
+    #pas-harness-app { height: 100%; }
+}
