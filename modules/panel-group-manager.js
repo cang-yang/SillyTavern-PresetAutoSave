@@ -87,7 +87,7 @@ export function clearGroupingManagerState() {
 function buildGroupingData() {
     const settings = getSettings();
     _gmOverrides = { ...(settings.groupingManualOverrides || {}) };
-    const groups = groupNamesBySeries(_gmAllNames, _gmOverrides);
+    const groups = groupNamesBySeries(_gmAllNames, _gmOverrides, settings.groupingSeriesAliases || {});
     return { groups };
 }
 
@@ -696,7 +696,7 @@ function refreshGroupingUI(container) {
     let html;
     if (settings.nestingEnabled) {
         const tree = settings.groupingTree || {};
-        const rootNodes = buildNestedGroupTree(_gmAllNames, _gmOverrides, tree, settings.nestingMaxDepth);
+        const rootNodes = buildNestedGroupTree(_gmAllNames, _gmOverrides, tree, settings.nestingMaxDepth, settings.groupingSeriesAliases || {});
         html = renderModernGroupingHTML(flattenGroupingNodes(rootNodes));
     } else {
         const { groups } = buildGroupingData();
@@ -1531,7 +1531,7 @@ export async function showGroupingManager(panelCtx) {
     let html;
     if (settings.nestingEnabled) {
         const tree = settings.groupingTree || {};
-        const rootNodes = buildNestedGroupTree(_gmAllNames, _gmOverrides, tree, settings.nestingMaxDepth);
+        const rootNodes = buildNestedGroupTree(_gmAllNames, _gmOverrides, tree, settings.nestingMaxDepth, settings.groupingSeriesAliases || {});
         html = renderModernGroupingHTML(flattenGroupingNodes(rootNodes));
     } else {
         html = renderModernGroupingHTML(normalizeGroupingNodes(groups));

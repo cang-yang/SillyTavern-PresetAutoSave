@@ -1070,7 +1070,7 @@ export async function showGroupingFirstScanWizard(opts = {}) {
 
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
-    const groups = groupNamesBySeries(names, overrides);
+    const groups = groupNamesBySeries(names, overrides, settings.groupingSeriesAliases || {});
     // AT0: 不再过滤单版本组，全部显示；多版本组排前面
     const sortedGroups = [...groups].sort((a, b) => b.items.length - a.items.length);
     const previewHtml = sortedGroups.slice(0, 12).map(g => `

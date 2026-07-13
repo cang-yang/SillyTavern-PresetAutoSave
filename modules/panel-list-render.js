@@ -545,6 +545,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
     } else {
         seriesMap = groupSnapshotsBySeries(filteredByApi, {
             overrides: settings.groupingManualOverrides,
+            aliases: settings.groupingSeriesAliases,
         });
     }
 
@@ -768,12 +769,18 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
         // 构建嵌套树
         const tree = settings.groupingTree || {};
         const maxDepth = settings.nestingMaxDepth || 3;
-        const rootNodes = buildNestedGroupTree(allPresetNames, settings.groupingManualOverrides || {}, tree, maxDepth);
+        const rootNodes = buildNestedGroupTree(
+            allPresetNames,
+            settings.groupingManualOverrides || {},
+            tree,
+            maxDepth,
+            settings.groupingSeriesAliases || {},
+        );
 
         // 构建 normKey → seriesInfo（从 seriesMap 查找版本数据）
         const normKeyToSeries = new Map();
-        for (const [seriesKey, series] of seriesMap) {
-            normKeyToSeries.set(normalizeSeriesKey(seriesKey), series);
+        for (const series of seriesMap.values()) {
+            normKeyToSeries.set(series.canonicalKey || normalizeSeriesKey(series.automaticName || series.series), series);
         }
 
         // 构建 presetName → versionData 快速查找（跨所有系列）

@@ -140,6 +140,7 @@ export async function initPresetTakeover() {
         if (
             key === 'takeoverEnabled'
             || key === 'groupingManualOverrides'
+            || key === 'groupingSeriesAliases'
             || key === 'groupingEnabled'
             || key === 'nestingEnabled'
             || key === 'nestingMaxDepth'
@@ -576,7 +577,7 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     // 2. 构建嵌套树（Bug B: forceTree 优先）
     const tree = forceTree || settings.groupingTree || {};
     const maxDepth = settings.nestingMaxDepth || 3;
-    const rootNodes = buildNestedGroupTree(allPresetNames, overrides, tree, maxDepth);
+    const rootNodes = buildNestedGroupTree(allPresetNames, overrides, tree, maxDepth, settings.groupingSeriesAliases || {});
     //    使用共享函数 getNodePath 获取祖先 key 链，再映射为 displayName 拼接成显示路径
     const keyToDisplay = new Map();
     (function collectDisplayNames(nodes) {

@@ -1056,6 +1056,7 @@ export function groupNamesBySeries(names, overrides = null, aliases = null) {
  */
 export function groupSnapshotsBySeries(snapshots, options = {}) {
     const overrides = options.overrides || null;
+    const aliases = options.aliases || null;
     // seriesMap 的 key 仍然是"显示名"（首次出现的大小写形式）
     // 但归并查找用归一化键，避免 "mur API" 与 "Mur API" 分两组
     const seriesMap = new Map();
@@ -1078,13 +1079,19 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
         if (!normToDisplay.has(normKey)) {
             normToDisplay.set(normKey, rawSeriesKey);
         }
-        const seriesKey = normToDisplay.get(normKey);
+        const automaticName = normToDisplay.get(normKey);
+        const resolved = resolveSeriesDisplayName(automaticName, aliases);
+        const seriesKey = resolved.displayName;
         const versionKey = `${apiId}::${presetName}`;
 
         let series = seriesMap.get(seriesKey);
         if (!series) {
             series = {
                 series: seriesKey,
+                canonicalKey: normKey,
+                automaticName,
+                displayName: seriesKey,
+                customized: resolved.customized,
                 _versionMap: new Map(),
                 versions: [],
                 latestTime: 0,
@@ -1203,18 +1210,20 @@ export function suggestSeriesForName(name, existingSeries = []) {
  * @returns {Array<{key: string, displayName: string, children: Array, items: string[], depth: number}>}
  *   根节点数组，每个节点的 children 已递归填充。节点的 items 为属于该系列的预设名数组。
  */
-export function buildNestedGroupTree(names, overrides = null, tree = null, maxDepth = 3) {
+export function buildNestedGroupTree(names, overrides = null, tree = null, maxDepth = 3, aliases = null) {
     // 防御：确保 maxDepth 合法
     const effectiveMaxDepth = Math.max(1, Math.min(10, Math.floor(Number(maxDepth)) || 3));
 
     // 1. 获取扁平分组
-    const flatGroups = groupNamesBySeries(names, overrides);
+    const flatGroups = groupNamesBySeries(names, overrides, aliases);
     /** @type {Map<string, {displayName: string, items: string[]}>} */
     const flatMap = new Map();
     for (const g of flatGroups) {
-        const normKey = normalizeSeriesKey(g.series);
+        const normKey = g.canonicalKey || normalizeSeriesKey(g.automaticName || g.series);
         flatMap.set(normKey, {
-            displayName: g.series,
+            displayName: g.displayName || g.series,
+            automaticName: g.automaticName || g.series,
+            customized: !!g.customized,
             items: g.items.map(it => it.presetName),
         });
     }
@@ -1245,6 +1254,8 @@ export function buildNestedGroupTree(names, overrides = null, tree = null, maxDe
         nodeMap.set(key, {
             key,
             displayName: flatEntry ? flatEntry.displayName : key,
+            automaticName: flatEntry ? flatEntry.automaticName : key,
+            customized: !!flatEntry?.customized,
             children: [],
             items: flatEntry ? [...flatEntry.items] : [],
             depth: 0,

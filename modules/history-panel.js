@@ -442,7 +442,10 @@ async function loadData({ allowCache = true } = {}) {
         const overrides = settings.groupingManualOverrides;
         // O-1: 默认全部收起（'none'），用户可在设置中改为 'current' 或 'all'
         const expandMode = settings.groupingDefaultExpand || 'none';
-        const seriesMap = groupSnapshotsBySeries(_state.snapshots, { overrides });
+        const seriesMap = groupSnapshotsBySeries(_state.snapshots, {
+            overrides,
+            aliases: settings.groupingSeriesAliases,
+        });
 
         // 性能优化：缓存 seriesMap，避免 _renderListTabImpl → renderSeriesView 重复计算
         _state._cachedSeriesMap = seriesMap;
@@ -821,6 +824,7 @@ function bindEvents() {
             const settings = getSettings();
                 const seriesMap = groupSnapshotsBySeries(filtered, {
                     overrides: settings.groupingManualOverrides,
+                    aliases: settings.groupingSeriesAliases,
                 });
             for (const [seriesKey, info] of seriesMap.entries()) {
                 _state.expandedSeries.add(seriesKey);
@@ -1232,7 +1236,7 @@ async function importWatchTick() {
 
     // 收集现有系列（不含 added 自己）
     const existingNames = Array.from(cur).filter(n => !candidates.includes(n));
-    const existingGroups = groupNamesBySeries(existingNames, overrides);
+    const existingGroups = groupNamesBySeries(existingNames, overrides, getSettings().groupingSeriesAliases);
     const existingSeries = existingGroups.map(g => g.series);
 
     // ⚡ P3 修复：过滤掉与已存在预设同属一个系列的候选

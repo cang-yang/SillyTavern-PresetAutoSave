@@ -394,6 +394,7 @@ export function bindSettingsEvents(container, panelCtx) {
         batchUpdate({
             seedSnapshotsDone: false,
             groupingManualOverrides: {},
+            groupingSeriesAliases: {},
         });
         refreshTakeover({ force: true });
         toast.success(t('Cleared All'));
