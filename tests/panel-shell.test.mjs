@@ -4,10 +4,18 @@ import { readFile } from 'node:fs/promises';
 import { buildPanelHTML } from '../modules/panel-shell.js';
 
 const identity = (value) => String(value);
+const historyPanelSource = await readFile(new URL('../modules/history-panel.js', import.meta.url), 'utf8');
 const html = buildPanelHTML({
     t: (key, vars) => vars ? `${key}:${JSON.stringify(vars)}` : key,
     escapeHtml: identity,
     escapeAttr: identity,
+});
+
+test('history panel uses the pure shell renderer as its single markup path', () => {
+    assert.match(historyPanelSource, /buildPanelHTML as buildPanelShellHTML/);
+    assert.match(historyPanelSource, /const html = buildPanelShellHTML\(/);
+    assert.doesNotMatch(historyPanelSource, /function buildPanelHTML\(/);
+    assert.doesNotMatch(historyPanelSource, /pas-footer-actions/);
 });
 
 test('panel shell exposes an accessible three-tab workspace', () => {
