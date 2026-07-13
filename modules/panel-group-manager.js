@@ -787,20 +787,35 @@ function beginInlineRename(seriesKey, container) {
     editorElement.className = 'pas-gm-name-editor';
     editorElement.innerHTML = `<input class="pas-gm-name-input" type="text" value="${escapeAttr(currentName)}" aria-label="${escapeAttr(t('Grouping Alias Input Label'))}" aria-describedby="${escapeAttr(errorId)}" autocomplete="off"><span class="pas-gm-name-error" id="${escapeAttr(errorId)}" role="alert"></span>`;
     nameElement.hidden = true;
-    trigger.hidden = true;
     nameElement.after(editorElement);
 
     const input = editorElement.querySelector('.pas-gm-name-input');
     const error = editorElement.querySelector('.pas-gm-name-error');
     let composing = false;
     let closed = false;
+    let confirmFromTrigger = null;
+    const idleLabel = trigger.getAttribute('aria-label') || '';
+    const idleTitle = trigger.getAttribute('title') || '';
+
+    trigger.hidden = false;
+    trigger.setAttribute('data-editing', 'true');
+    trigger.classList.add('is-confirm');
+    trigger.innerHTML = '<i class="fa-solid fa-check"></i>';
+    trigger.setAttribute('aria-label', t('Grouping Confirm Rename'));
+    trigger.setAttribute('title', t('Grouping Confirm Rename'));
 
     const closeWithoutRefresh = () => {
         if (closed) return;
         closed = true;
+        if (confirmFromTrigger) trigger.removeEventListener('pas-gm-confirm-rename', confirmFromTrigger);
         editorElement.remove();
         nameElement.hidden = false;
         trigger.hidden = false;
+        trigger.removeAttribute('data-editing');
+        trigger.classList.remove('is-confirm');
+        trigger.innerHTML = '<i class="fa-solid fa-pen"></i>';
+        trigger.setAttribute('aria-label', idleLabel);
+        trigger.setAttribute('title', idleTitle);
         trigger.focus();
     };
     const controller = createGroupAliasEditor({
@@ -829,6 +844,8 @@ function beginInlineRename(seriesKey, container) {
             container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-header`)?.focus();
         },
     });
+    confirmFromTrigger = () => controller.commit(input.value);
+    trigger.addEventListener('pas-gm-confirm-rename', confirmFromTrigger);
 
     input.addEventListener('compositionstart', () => { composing = true; });
     input.addEventListener('compositionend', () => { composing = false; });
@@ -844,7 +861,7 @@ function beginInlineRename(seriesKey, container) {
         }
     });
     input.addEventListener('blur', event => {
-        if (closed || event.relatedTarget?.closest?.('.pas-gm-name-editor')) return;
+        if (closed || event.relatedTarget === trigger || event.relatedTarget?.closest?.('.pas-gm-name-editor')) return;
         queueMicrotask(() => controller.handleBlur(input.value));
     });
     input.focus();
@@ -1507,6 +1524,10 @@ function bindClickEvents(container) {
     container.querySelectorAll('.pas-gm-rename-btn').forEach(button => {
         button.onclick = event => {
             event.stopPropagation();
+            if (button.dataset.editing === 'true') {
+                button.dispatchEvent(new Event('pas-gm-confirm-rename'));
+                return;
+            }
             const key = button.closest('.pas-gm-series')?.getAttribute('data-series-key');
             if (key) beginInlineRename(key, container);
         };

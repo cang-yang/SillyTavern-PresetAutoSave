@@ -504,6 +504,7 @@
     "Grouping Alias Error Too Long": "名称不能超过 120 个字符",
     "Grouping Alias Error Duplicate": "已有同名分组，请换一个名称",
     "Grouping Alias Error Save": "无法保存这个名称，请重试",
+    "Grouping Confirm Rename": "确认名称修改",
     "Grouping Series Menu Delete": "删除分组",
     "Grouping Nesting Max Depth Hint": "已达到最大嵌套深度",
     "Grouping Empty Badge": "空",

@@ -17,6 +17,7 @@ export function createGroupAliasEditor({ validate, save, cancel, invalid }) {
     }
 
     return {
+        commit,
         async handleKeyDown(event, value) {
             if (event?.key === 'Enter' && !event?.isComposing) {
                 await commit(value);

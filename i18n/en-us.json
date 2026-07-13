@@ -504,6 +504,7 @@
     "Grouping Alias Error Too Long": "Use no more than 120 characters",
     "Grouping Alias Error Duplicate": "A group already uses this name",
     "Grouping Alias Error Save": "This name could not be saved. Try again",
+    "Grouping Confirm Rename": "Confirm name change",
     "Grouping Series Menu Delete": "Delete group",
     "Grouping Nesting Max Depth Hint": "Max nesting depth reached",
     "Grouping Empty Badge": "Empty",

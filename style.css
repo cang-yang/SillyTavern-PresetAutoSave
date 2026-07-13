@@ -4646,6 +4646,15 @@ body.pas-light .pas-gm-ctx-separator {
     color: var(--pas-text);
     background: var(--pas-surface-3);
 }
+.pas-gm-rename-btn.is-confirm {
+    color: var(--pas-accent);
+    background: color-mix(in srgb, var(--pas-accent) 16%, transparent);
+    opacity: 1;
+}
+.pas-gm-rename-btn.is-confirm:hover {
+    color: var(--pas-accent);
+    background: color-mix(in srgb, var(--pas-accent) 24%, transparent);
+}
 .pas-gm-rename-btn:focus-visible,
 .pas-gm-name-input:focus-visible {
     outline: 2px solid var(--pas-accent);

@@ -20,6 +20,12 @@ test('Enter saves a valid trimmed alias', async () => {
     assert.deepEqual(events, [['save', 'Creative']]);
 });
 
+test('explicit confirm saves through the same validation path', async () => {
+    const { editor, events } = setup();
+    assert.equal(await editor.commit('  Mobile name  '), true);
+    assert.deepEqual(events, [['save', 'Mobile name']]);
+});
+
 test('Escape cancels without saving', async () => {
     const { editor, events } = setup();
     await editor.handleKeyDown({ key: 'Escape', isComposing: false }, 'Changed');

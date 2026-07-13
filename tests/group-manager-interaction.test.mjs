@@ -31,6 +31,15 @@ test('group names expose an accessible inline rename interaction', () => {
     assert.match(css, /min-(?:width|height):\s*44px/);
 });
 
+test('the rename pencil becomes an explicit confirm button while editing', () => {
+    assert.match(source, /data-editing/);
+    assert.match(source, /fa-check/);
+    assert.match(source, /pas-gm-confirm-rename/);
+    assert.match(source, /controller\.commit\(input\.value\)/);
+    assert.match(source, /Grouping Confirm Rename/);
+    assert.match(css, /\.pas-gm-rename-btn\.is-confirm/);
+});
+
 test('expanded groups expose applicable secondary actions outside the compact header', () => {
     const mobileActionMarkup = source.match(/const mobileActions = \[([\s\S]*?)\]\.filter\(Boolean\)\.join\(''\);/)?.[1] || '';
     assert.match(source, /pas-gm-mobile-actions/);
