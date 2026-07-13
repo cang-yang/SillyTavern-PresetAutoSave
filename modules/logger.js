@@ -61,7 +61,7 @@ const _buffer = [];                  // 环形缓冲区（数组，超出时 shi
 const _listeners = new Set();
 let _persistTimer = null;
 let _seq = 0;
-let _globalHandlersInstalled = false;
+let _globalHandlerTarget = null;
 
 // =====================================================
 // 启动时恢复 localStorage 中的日志（让面板能看到上次会话）
@@ -207,32 +207,62 @@ function notifyListeners(entry) {
     }
 }
 
-function installGlobalHandlers() {
-    if (_globalHandlersInstalled || typeof window === 'undefined') return;
-    _globalHandlersInstalled = true;
-    try {
-        window.addEventListener('error', (ev) => {
-            if (!ev) return;
-            const msg = ev.message || (ev.error && ev.error.message) || 'Unknown error';
-            // 仅捕获我们插件内的脚本错误（避免把整个 ST 报错都收进来）
-            const src = ev.filename || '';
-            if (src && /SillyTavern-PresetAutoSave|\/extensions\/.+PresetAutoSave/i.test(src)) {
-                pushEntry('error', ['[GlobalError]', msg, ev.error?.stack || `${src}:${ev.lineno}:${ev.colno}`]);
-            }
-        });
-        window.addEventListener('unhandledrejection', (ev) => {
-            if (!ev) return;
-            const reason = ev.reason;
-            // 同样限制为我们的栈
-            const stack = (reason && reason.stack) || '';
-            if (/SillyTavern-PresetAutoSave|PresetAutoSave/.test(stack) || /pas-/i.test(String(reason))) {
-                pushEntry('error', ['[UnhandledRejection]', reason?.message || String(reason), stack]);
-            }
-        });
-    } catch (_) {}
+function handleGlobalError(ev) {
+    if (!ev) return;
+    const msg = ev.message || (ev.error && ev.error.message) || 'Unknown error';
+    // 仅捕获我们插件内的脚本错误（避免把整个 ST 报错都收进来）
+    const src = ev.filename || '';
+    if (src && /SillyTavern-PresetAutoSave|\/extensions\/.+PresetAutoSave/i.test(src)) {
+        pushEntry('error', ['[GlobalError]', msg, ev.error?.stack || `${src}:${ev.lineno}:${ev.colno}`]);
+    }
 }
 
-installGlobalHandlers();
+function handleUnhandledRejection(ev) {
+    if (!ev) return;
+    const reason = ev.reason;
+    // 同样限制为我们的栈
+    const stack = (reason && reason.stack) || '';
+    if (/SillyTavern-PresetAutoSave|PresetAutoSave/.test(stack) || /pas-/i.test(String(reason))) {
+        pushEntry('error', ['[UnhandledRejection]', reason?.message || String(reason), stack]);
+    }
+}
+
+/**
+ * Install extension-scoped global error capture for the active runtime.
+ * Repeated calls for the same target are no-ops; switching targets first
+ * detaches the previous handlers so hot reloads cannot accumulate listeners.
+ */
+export function initLogger(target = typeof window !== 'undefined' ? window : null) {
+    if (!target || typeof target.addEventListener !== 'function') return false;
+    if (_globalHandlerTarget === target) return false;
+    if (_globalHandlerTarget) teardownLogger();
+
+    let errorHandlerInstalled = false;
+    try {
+        target.addEventListener('error', handleGlobalError);
+        errorHandlerInstalled = true;
+        target.addEventListener('unhandledrejection', handleUnhandledRejection);
+        _globalHandlerTarget = target;
+        return true;
+    } catch (_) {
+        if (errorHandlerInstalled && typeof target.removeEventListener === 'function') {
+            try { target.removeEventListener('error', handleGlobalError); } catch (_) {}
+        }
+        return false;
+    }
+}
+
+/** Detach exactly the handlers installed by initLogger. */
+export function teardownLogger() {
+    const target = _globalHandlerTarget;
+    if (!target) return false;
+    _globalHandlerTarget = null;
+    if (typeof target.removeEventListener === 'function') {
+        try { target.removeEventListener('error', handleGlobalError); } catch (_) {}
+        try { target.removeEventListener('unhandledrejection', handleUnhandledRejection); } catch (_) {}
+    }
+    return true;
+}
 
 // =====================================================
 // 主 API

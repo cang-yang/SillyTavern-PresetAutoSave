@@ -6,7 +6,7 @@
  * @version 1.0.0
  */
 
-import { logger } from './modules/logger.js';
+import { initLogger, logger, teardownLogger } from './modules/logger.js';
 import {
     initCompatibility, ENV, offAll, on, getEventType,
     savePresetSafe, getPresetManager,
@@ -222,6 +222,7 @@ export async function onDelete() {
 
     if (recovery.complete && settingsCleared) logger.success('onDelete: verified recovery and cleanup complete');
     else logger.warn('onDelete: partial cleanup completed; no unverified recovery data was deleted');
+    teardownLogger();
     return { ...recovery, settingsCleared };
 }
 
@@ -248,6 +249,7 @@ function ensureRuntimeReady() {
 }
 
 export async function onEnable() {
+    initLogger();
     logger.info('Enabled - initializing extension runtime');
     initCompatibility();
     await ensureRuntimeReady();
@@ -419,6 +421,7 @@ export async function onDisable() {
         `${snapshots.written || 0} snapshots written, ${snapshots.skipped || 0} skipped, ` +
         `${(archive.failed || 0) + (archive.cleanupFailed || 0) + (snapshots.failed || 0)} failed`
     );
+    teardownLogger();
     return { complete, archive, snapshots };
 }
 
@@ -426,6 +429,7 @@ export async function onDisable() {
 // 主初始化流程
 // =====================================================
 (async function main() {
+    initLogger();
     logger.info(`SillyTavern-PresetAutoSave v${VERSION} loading...`);
 
     if (!window.SillyTavern || typeof window.SillyTavern.getContext !== 'function') {
