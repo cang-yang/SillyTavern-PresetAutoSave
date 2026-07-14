@@ -13,7 +13,8 @@ const html = buildPanelHTML({
 
 test('history panel uses the pure shell renderer as its single markup path', () => {
     assert.match(historyPanelSource, /buildPanelHTML as buildPanelShellHTML/);
-    assert.match(historyPanelSource, /const html = buildPanelShellHTML\(/);
+    assert.match(historyPanelSource, /function buildHistoryPanelMarkup\(\)[\s\S]*?return buildPanelShellHTML\(/);
+    assert.match(historyPanelSource, /const html = buildHistoryPanelMarkup\(\)/);
     assert.doesNotMatch(historyPanelSource, /function buildPanelHTML\(/);
     assert.doesNotMatch(historyPanelSource, /pas-footer-actions/);
 });

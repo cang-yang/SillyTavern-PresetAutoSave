@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { normalizeHarnessOptions } from './harness/config.mjs';
 import { contentTypeFor, resolveRequestPath } from './harness/server.mjs';
 
-test('browser harness loads production styles, shell and list renderer', async () => {
+test('browser harness loads production styles and runs the production panel controller', async () => {
     const html = await readFile(new URL('./harness/index.html', import.meta.url), 'utf8');
     const app = await readFile(new URL('./harness/app.mjs', import.meta.url), 'utf8');
     const harnessCss = await readFile(new URL('./harness/harness.css', import.meta.url), 'utf8');
@@ -13,16 +13,21 @@ test('browser harness loads production styles, shell and list renderer', async (
     assert.match(html, /href="\.\.\/\.\.\/styles\/index\.css"/);
     assert.match(html, /rel="icon" href="data:image\/svg\+xml,/);
     assert.match(html, /src="\.\/app\.mjs"/);
-    assert.match(app, /from '\.\.\/\.\.\/modules\/panel-shell\.js'/);
-    assert.match(app, /import\('\.\.\/\.\.\/modules\/panel-list-render\.js'\)/);
-    assert.match(app, /from '\.\.\/\.\.\/modules\/core\/focus-anchor\.js'/);
-    assert.match(app, /restoreFocusAnchor\(list, focusAnchor/);
+    assert.match(app, /mountHistoryPanel/);
+    assert.match(app, /renderHistoryPanelShell/);
+    assert.match(app, /disposeHistoryPanelMount/);
+    assert.doesNotMatch(app, /from '\.\.\/\.\.\/modules\/panel-shell\.js'/);
+    assert.doesNotMatch(app, /import\('\.\.\/\.\.\/modules\/panel-list-render\.js'\)/);
+    assert.doesNotMatch(app, /function activateTab/);
+    assert.doesNotMatch(app, /app\.addEventListener\('(click|keydown|input)'/);
+    assert.doesNotMatch(app, /\.pas-search'\)\.addEventListener/);
     assert.match(app, /showSaveStatus/);
     assert.match(app, /renderHistoryImportPreview/);
     assert.match(app, /bindHistoryImportPreview/);
     assert.match(app, /showImportPreview/);
     assert.match(app, /renderModernGroupingHTML/);
     assert.match(app, /showGroupManager/);
+    assert.doesNotMatch(app, /buildPanelHTML/);
     assert.doesNotMatch(app, /class="pas-panel"/);
     assert.doesNotMatch(app, /translate\('Panel Stats'/);
     assert.match(harnessCss, /\.fa-solid::before\s*\{/);

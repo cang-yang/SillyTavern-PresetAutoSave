@@ -84,12 +84,17 @@ let _popup = null;
 let _root = null;
 let _logUnsubscribe = null;
 let _logRefreshTimer = null;
+let _panelSearchTimer = null;
+let _panelLogSearchTimer = null;
+let _panelPresetRefreshTimer = null;
 let _historyRefreshUnsubscribe = null;
 let _historyRefreshTimer = null;
 let _panelDataWarmupPromise = null;
 let _panelDataCache = null;
 let _panelDataCacheAt = 0;
 let _panelDataCacheGeneration = 0;
+let _panelMountGeneration = 0;
+let _activeDatasetLoader = null;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
 let _panelEventBindings = [];  // [{ event, handler }] 用于 popup 关闭时退订
 
@@ -146,8 +151,8 @@ function loadPanelDataset({ allowCache = true } = {}) {
     }
     const generation = _panelDataCacheGeneration;
     const promise = Promise.all([
-        getAllSnapshots().catch(() => []),
-        listArchivedPresets().catch(() => []),
+        getAllSnapshots(),
+        listArchivedPresets(),
     ]).then(([snapshots, archives]) => {
         const dataset = { snapshots: snapshots || [], archives: archives || [] };
         if (generation === _panelDataCacheGeneration) {
@@ -209,6 +214,7 @@ function _panelCtx() {
 function renderPanelLoading(stage = 'loading') {
     const listEl = _root?.querySelector('.pas-snapshot-list');
     if (!listEl) return;
+    listEl.setAttribute('aria-busy', 'true');
     listEl.innerHTML = `<div class="pas-empty pas-panel-loading" data-stage="${escapeAttr(stage)}">
         <i class="fa-solid fa-spinner fa-spin pas-empty-icon"></i>
         <p class="pas-empty-text">${escapeHtml(t('Loading') || 'Loading...')}</p>
@@ -258,6 +264,7 @@ export async function initHistoryPanel() {
  */
 export function teardownHistoryPanel() {
     stopImportWatcher();
+    if (_root) disposeHistoryPanelMount(_root);
     cleanupActionPopups({ includeWizard: true });
     if (_historyRefreshUnsubscribe) {
         _historyRefreshUnsubscribe();
@@ -274,19 +281,136 @@ export function teardownHistoryPanel() {
 // =====================================================
 // 显示面板
 // =====================================================
-export async function showHistoryPanel() {
-    if (_popup) return;
-    const panelStartedAt = performance.now();
-
-    // Step 1: 创建 popup（简单操作，不太可能失败）
+function buildHistoryPanelMarkup() {
     const saveStatus = getSaveStatus();
-    const html = buildPanelShellHTML({
+    return buildPanelShellHTML({
         t,
         escapeHtml,
         escapeAttr,
         saveStatus,
         saveStatusLabel: t(saveStatusLabelKey(saveStatus)),
     });
+}
+
+export function renderHistoryPanelShell(host) {
+    if (!host || typeof host.querySelector !== 'function') {
+        throw new TypeError('renderHistoryPanelShell requires a DOM host element');
+    }
+    host.innerHTML = buildHistoryPanelMarkup();
+    const root = host.querySelector('.pas-panel');
+    if (!root) throw new Error('History panel shell did not render a root element');
+    return root;
+}
+
+function renderPanelError(error, stage) {
+    const listEl = _root?.querySelector('.pas-snapshot-list')
+        || _root?.querySelector('[data-content="list"]');
+    if (!listEl) return;
+    listEl.removeAttribute('aria-busy');
+    listEl.innerHTML = `<div class="pas-empty pas-panel-error" role="alert">
+        <div class="pas-empty-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <p class="pas-empty-text">${escapeHtml(t('Panel Open Failed', { message: error?.message || String(error) }))}</p>
+        <p class="pas-empty-hint" style="opacity:0.7;font-size:0.85em;margin-top:8px;">stage: ${escapeHtml(stage || 'unknown')}</p>
+    </div>`;
+}
+
+async function loadAndRenderMountedPanel(root, generation, panelStartedAt) {
+    let failedStage = null;
+    try {
+        failedStage = 'loadData';
+        const loadStartedAt = performance.now();
+        const loaded = await loadData({ mountGeneration: generation });
+        if (!loaded || _root !== root || generation !== _panelMountGeneration) return false;
+        recordPanelPerf('loadData', loadStartedAt, { snapshots: _state.snapshots.length, archives: _archivedCache.length });
+
+        failedStage = 'renderActiveTab';
+        const renderStartedAt = performance.now();
+        renderActiveTab();
+        root.querySelector('.pas-snapshot-list')?.removeAttribute('aria-busy');
+        recordPanelPerf('renderActiveTab', renderStartedAt, { snapshots: _state.snapshots.length });
+
+        failedStage = 'updateStats';
+        await updateStats(_panelCtx());
+        if (_root !== root || generation !== _panelMountGeneration) return false;
+        failedStage = null;
+        recordPanelPerf('ready', panelStartedAt, { snapshots: _state.snapshots.length, archives: _archivedCache.length });
+        return true;
+    } catch (error) {
+        if (_root !== root || generation !== _panelMountGeneration) return false;
+        logger.error(`[Panel] render failed at stage="${failedStage}":`, error);
+        if (error?.stack) logger.error('[Panel] stack:', error.stack);
+        renderPanelError(error, failedStage);
+        return false;
+    }
+}
+
+export function mountHistoryPanel(root, { loadDataset = loadPanelDataset } = {}) {
+    if (!root || !root.classList?.contains('pas-panel')) {
+        throw new TypeError('mountHistoryPanel requires a .pas-panel root');
+    }
+    if (_root) throw new Error('A history panel is already mounted');
+    if (typeof loadDataset !== 'function') throw new TypeError('loadDataset must be a function');
+
+    resetState();
+    _root = root;
+    _activeDatasetLoader = loadDataset;
+    const generation = ++_panelMountGeneration;
+    const panelStartedAt = performance.now();
+    renderPanelLoading('loading-history');
+    bindEvents();
+    const ready = loadAndRenderMountedPanel(root, generation, panelStartedAt);
+
+    return Object.freeze({
+        root,
+        ready,
+        dispose: () => disposeHistoryPanelMount(root),
+    });
+}
+
+export function disposeHistoryPanelMount(root = _root) {
+    if (!_root || (root && root !== _root)) return false;
+    _panelMountGeneration++;
+    if (_logUnsubscribe) {
+        try { _logUnsubscribe(); } catch (_) {}
+        _logUnsubscribe = null;
+    }
+    if (_logRefreshTimer) {
+        clearTimeout(_logRefreshTimer);
+        _logRefreshTimer = null;
+    }
+    if (_historyRefreshTimer) {
+        clearTimeout(_historyRefreshTimer);
+        _historyRefreshTimer = null;
+    }
+    if (_panelSearchTimer) {
+        clearTimeout(_panelSearchTimer);
+        _panelSearchTimer = null;
+    }
+    if (_panelLogSearchTimer) {
+        clearTimeout(_panelLogSearchTimer);
+        _panelLogSearchTimer = null;
+    }
+    if (_panelPresetRefreshTimer) {
+        clearTimeout(_panelPresetRefreshTimer);
+        _panelPresetRefreshTimer = null;
+    }
+    for (const { event, handler } of _panelEventBindings) {
+        try { offEvent(event, handler); } catch (_) {}
+    }
+    _panelEventBindings = [];
+    cleanupActionPopups();
+    _activeDatasetLoader = null;
+    _root = null;
+    resetState();
+    return true;
+}
+
+export async function showHistoryPanel() {
+    if (_popup) return;
+
+    // Step 1: create the host popup, then delegate all workspace behavior to
+    // the same production mount lifecycle used by browser verification.
+    const html = buildHistoryPanelMarkup();
 
     // 通过 createPopupSafe 集中防御 ctx / Popup / POPUP_TYPE 缺失
     _popup = createPopupSafe(html, 'DISPLAY', {
@@ -308,106 +432,24 @@ export async function showHistoryPanel() {
 
     await waitForDOM();
 
-    _root = document.querySelector('.pas-panel');
+    const root = document.querySelector('.pas-panel');
 
     // ⚡ C3 修复已移除：stopPropagation 会阻止滚动等正常交互。
     //   ST Popup 使用原生 <dialog>.showModal()，关闭是通过 cancel 事件
     //   （Escape / backdrop click）触发的，不依赖 mousedown 事件冒泡，
     //   因此 stopPropagation 既无法阻止弹窗关闭，又会破坏页面滚动。
-    if (!_root) {
+    if (!root) {
         logger.error('Panel root not found');
+        _popup = null;
         return;
     }
-    recordPanelPerf('shell-ready', panelStartedAt);
-    renderPanelLoading('loading-history');
-    bindEvents();
-
-    const loadAndRender = async () => {
-
-    // Step 2: 数据加载和渲染（任一阶段失败都不会让面板成黑屏）
-    //
-    // 拆分成 4 个 stage（loadData / bindEvents / renderActiveTab / updateStats），
-    // 任一阶段抛错时：
-    //   1) 日志写出确切失败 stage + 完整 stack + state 快照（便于诊断同类问题）
-    //   2) 把列表区域换成"打开失败"提示并标注 stage（用户也能看到出错位置）
-    let _failedStage = null;
-    try {
-        _failedStage = 'loadData';
-        const loadStartedAt = performance.now();
-        await loadData();
-        recordPanelPerf('loadData', loadStartedAt, { snapshots: _state.snapshots.length, archives: _archivedCache.length });
-        _failedStage = 'renderActiveTab';
-        const renderStartedAt = performance.now();
-        renderActiveTab();
-        recordPanelPerf('renderActiveTab', renderStartedAt, { snapshots: _state.snapshots.length });
-        _failedStage = 'updateStats';
-        await updateStats(_panelCtx());
-        _failedStage = null;
-        recordPanelPerf('ready', panelStartedAt, { snapshots: _state.snapshots.length, archives: _archivedCache.length });
-    } catch (err) {
-        logger.error(`[Panel] render failed at stage="${_failedStage}":`, err);
-        if (err && err.stack) {
-            logger.error('[Panel] stack:', err.stack);
-        }
-        try {
-            logger.error('[Panel] state snapshot:', JSON.stringify({
-                hasRoot: !!_root,
-                hasState: !!_state,
-                stateTab: _state?.tab,
-                stateFilter: _state?.filter,
-                stateViewMode: _state?.viewMode,
-                snapshotsLen: Array.isArray(_state?.snapshots) ? _state.snapshots.length : 'N/A',
-                hasExpandedSeries: _state?.expandedSeries instanceof Set,
-                hasExpandedVersions: _state?.expandedVersions instanceof Set,
-                hasExpandedPresets: _state?.expandedPresets instanceof Set,
-                hasDiffSel: !!_state?.diffSel,
-                archivedCacheLen: Array.isArray(_archivedCache) ? _archivedCache.length : 'N/A',
-            }));
-        } catch (_) { /* 序列化失败不重要 */ }
-        // 注意：原代码用 `.pas-panel-list`（不存在的 class），fallback 到 `.pas-tab-content`
-        //       会把所有三个 tab 区域全清空。改成精确选择 `.pas-snapshot-list`。
-        const listEl = _root?.querySelector('.pas-snapshot-list')
-            || _root?.querySelector('[data-content="list"]');
-        if (listEl) {
-            listEl.innerHTML = `<div class="pas-empty">
-                <div class="pas-empty-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
-                <p class="pas-empty-text">${t('Panel Open Failed', { message: err?.message || String(err) })}</p>
-                <p class="pas-empty-hint" style="opacity:0.7;font-size:0.85em;margin-top:8px;">stage: ${escapeHtml(_failedStage || 'unknown')}</p>
-            </div>`;
-        }
-    }
-
-    // Step 3: 等待 popup 关闭
-    };
-    setTimeout(() => { loadAndRender(); }, 0);
+    const mount = mountHistoryPanel(root);
 
     try {
         await promise;
     } finally {
-        // 取消日志订阅
-        if (_logUnsubscribe) {
-            try { _logUnsubscribe(); } catch (_) {}
-            _logUnsubscribe = null;
-        }
-        if (_logRefreshTimer) {
-            clearTimeout(_logRefreshTimer);
-            _logRefreshTimer = null;
-        }
-        if (_historyRefreshTimer) {
-            clearTimeout(_historyRefreshTimer);
-            _historyRefreshTimer = null;
-        }
-        // 取消所有面板内的事件订阅（预设切换等）
-        for (const { event, handler } of _panelEventBindings) {
-            try { offEvent(event, handler); } catch (_) {}
-        }
-        _panelEventBindings = [];
+        mount.dispose();
         _popup = null;
-        _root = null;
-        // 关闭可能还开着的子弹窗（viewPopup + groupingManagerPopup）
-        cleanupActionPopups();
-        // 注意：_firstScanWizardPopup 是模块全局，由其自己的 finally 处理，不在此关闭
-        resetState();
     }
 }
 
@@ -429,9 +471,11 @@ function waitForDOM() {
 // =====================================================
 // 数据加载
 // =====================================================
-async function loadData({ allowCache = true } = {}) {
+async function loadData({ allowCache = true, mountGeneration = _panelMountGeneration } = {}) {
     // 并行加载快照 + 归档（数据接管模式下面板要展示完整版本）
-    const { snapshots, archives } = await loadPanelDataset({ allowCache });
+    const loader = _activeDatasetLoader || loadPanelDataset;
+    const { snapshots, archives } = await loader({ allowCache });
+    if (!_root || mountGeneration !== _panelMountGeneration) return false;
     _state.snapshots = snapshots || [];
     _archivedCache = archives || [];
 
@@ -473,6 +517,7 @@ async function loadData({ allowCache = true } = {}) {
         }
         // none → 不预展开
     }
+    return true;
 }
 
 async function refreshData(options = { allowCache: false }) {
@@ -481,7 +526,8 @@ async function refreshData(options = { allowCache: false }) {
         clearTimeout(_historyRefreshTimer);
         _historyRefreshTimer = null;
     }
-    await loadData(options);
+    const loaded = await loadData(options);
+    if (!loaded) return;
     renderActiveTab();
     await updateStats(_panelCtx());
 }
@@ -552,10 +598,10 @@ function bindEvents() {
     // 搜索（列表）
     const search = $('.pas-search');
     if (search) {
-        let timer = null;
         search.addEventListener('input', (e) => {
-            clearTimeout(timer);
-            timer = setTimeout(() => {
+            clearTimeout(_panelSearchTimer);
+            _panelSearchTimer = setTimeout(() => {
+                _panelSearchTimer = null;
                 _state.search = e.target.value.trim();
                 renderListTab();
             }, 200);
@@ -732,10 +778,10 @@ function bindEvents() {
     // ----- 日志 Tab 事件 -----
     const logSearch = $('.pas-log-search');
     if (logSearch) {
-        let timer = null;
         logSearch.addEventListener('input', (e) => {
-            clearTimeout(timer);
-            timer = setTimeout(() => {
+            clearTimeout(_panelLogSearchTimer);
+            _panelLogSearchTimer = setTimeout(() => {
+                _panelLogSearchTimer = null;
                 _state.log.search = e.target.value.trim();
                 renderLogTab(_panelCtx());
             }, 200);
@@ -778,11 +824,10 @@ function bindEvents() {
 
     // ⚡ 订阅预设切换事件 → 实时更新"当前预设"金色高亮
     //   不重新加载所有快照（避免性能问题），只重新渲染列表
-    let _panelRefreshTimer = null;
     const onPresetChanged = () => {
-        if (_panelRefreshTimer) return;
-        _panelRefreshTimer = setTimeout(() => {
-            _panelRefreshTimer = null;
+        if (_panelPresetRefreshTimer) return;
+        _panelPresetRefreshTimer = setTimeout(() => {
+            _panelPresetRefreshTimer = null;
             try {
                 if (_state.tab === 'list') renderListTab();
                 updateStats(_panelCtx());

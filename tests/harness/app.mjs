@@ -1,5 +1,3 @@
-import { buildPanelHTML } from '../../modules/panel-shell.js';
-import { captureFocusAnchor, restoreFocusAnchor } from '../../modules/core/focus-anchor.js';
 import { applyStatusIndicatorPresentation } from '../../modules/core/status-indicator.js';
 import { saveStatusLabelKey, setSaveStatus } from '../../modules/core/save-status.js';
 import { bindHistoryImportPreview, renderHistoryImportPreview } from '../../modules/import-preview.js';
@@ -18,7 +16,8 @@ let lastRenderMs = 0;
 
 const originalConsoleError = console.error.bind(console);
 console.error = (...args) => {
-    consoleErrors.push(args.map(value => value instanceof Error ? value.stack || value.message : String(value)).join(' '));
+    const message = args.map(value => value instanceof Error ? value.stack || value.message : String(value)).join(' ');
+    if (!message.includes('HARNESS_EXPECTED_STORAGE_FAILURE')) consoleErrors.push(message);
     originalConsoleError(...args);
 };
 window.addEventListener('error', event => {
@@ -105,16 +104,15 @@ window.SillyTavern = { version: '1.13.4-harness', getContext: () => context, lib
 window.main_api = scenario.currentApiId;
 window.toastr = { success() {}, info() {}, warning() {}, error() {} };
 
-const [{ initCompatibility }, { initSettings, batchUpdate }, listRenderer, grouping] = await Promise.all([
+const [{ initCompatibility }, { initSettings, batchUpdate }, historyPanel] = await Promise.all([
     import('../../modules/compatibility.js'),
     import('../../modules/settings.js'),
-    import('../../modules/panel-list-render.js'),
-    import('../../modules/preset-grouping.js'),
+    import('../../modules/history-panel.js'),
 ]);
 initCompatibility();
 await initSettings();
 batchUpdate({
-    groupingEnabled: true,
+    groupingEnabled: options.view === 'series',
     groupingFirstScanDone: true,
     groupingDefaultExpand: 'all',
     groupingManualOverrides: scenario.overrides,
@@ -126,157 +124,37 @@ batchUpdate({
     autoSeedOnTakeover: false,
 });
 
-const state = {
-    filter: 'all',
-    search: '',
-    viewMode: options.view,
-    expandedSeries: new Set([
-        ...Object.values(scenario.overrides),
-        ...Object.keys(scenario.tree),
-        ...Object.values(scenario.tree),
-    ]),
-    expandedVersions: new Set(scenario.records.map(record => `${record.apiId}::${record.presetName}`)),
-    expandedPresets: new Set(scenario.records.map(record => `${record.apiId}::${record.presetName}`)),
-    diffSel: { a: null, b: null },
-};
-const panelContext = {
-    state: () => state,
-    archivedCache: () => [],
-};
-const cachedSeriesMap = grouping.groupSnapshotsBySeries(scenario.records, {
-    overrides: scenario.overrides,
-    aliases: {},
-});
-
 const app = document.querySelector('#pas-harness-app');
-app.innerHTML = buildPanelHTML({ t: translate, escapeHtml, escapeAttr });
 const scenarioLabel = document.querySelector('#pas-harness-scenario');
 scenarioLabel.textContent = `${options.scenario} · ${options.theme} · ${options.view}`;
+const { mountHistoryPanel, renderHistoryPanelShell, disposeHistoryPanelMount } = historyPanel;
+let panelRoot = null;
+let panelMount = null;
 
-if (options.scenario === 'loading' || options.scenario === 'error') {
-    const note = document.createElement('div');
-    note.className = 'pas-harness-state-note';
-    note.dataset.harnessState = options.scenario;
-    note.textContent = options.scenario === 'loading'
-        ? '测试主机正在模拟历史记录加载中；当前产品尚无专用结构化加载状态。'
-        : '测试主机正在模拟存储不可用；当前产品尚无专用可恢复错误状态。';
-    app.prepend(note);
+function loadHarnessDataset() {
+    if (options.scenario === 'loading') return new Promise(() => {});
+    if (options.scenario === 'error') {
+        return Promise.reject(new Error('HARNESS_EXPECTED_STORAGE_FAILURE'));
+    }
+    return Promise.resolve({ snapshots: scenario.records, archives: [] });
 }
 
-function filteredRecords() {
-    return listRenderer.applyFiltersAndSearch(scenario.records, panelContext);
-}
-
-function renderList() {
+async function mountProductionPanel({ waitUntilReady = options.scenario !== 'loading' } = {}) {
+    panelRoot = renderHistoryPanelShell(app);
     const started = performance.now();
-    const list = app.querySelector('.pas-snapshot-list');
-    const focusAnchor = captureFocusAnchor(list);
-    list.toggleAttribute('aria-busy', options.scenario === 'loading');
-
-    if (options.scenario === 'loading' || options.scenario === 'error' || scenario.records.length === 0) {
-        list.innerHTML = listRenderer.renderEmptyState(panelContext);
-    } else {
-        const records = filteredRecords();
-        list.innerHTML = state.viewMode === 'flat'
-            ? listRenderer.renderFlatView(records, panelContext)
-            : listRenderer.renderSeriesView(records, panelContext, cachedSeriesMap);
-    }
-
-    const visibleRecords = filteredRecords().length;
-    app.querySelector('#pas-list-badge').textContent = String(visibleRecords);
-    app.querySelector('#pas-panel-stats').textContent = `${visibleRecords} 条快照`;
-    app.querySelector('#pas-footer-stats').textContent = `${visibleRecords} 条快照`;
-    restoreFocusAnchor(list, focusAnchor, app.querySelector('.pas-search'));
+    panelMount = mountHistoryPanel(panelRoot, { loadDataset: loadHarnessDataset });
+    if (waitUntilReady) await panelMount.ready;
     lastRenderMs = performance.now() - started;
-    return lastRenderMs;
+    return panelRoot;
 }
 
-function toggleInSet(set, key) {
-    if (set.has(key)) set.delete(key);
-    else set.add(key);
-    renderList();
+async function remountProductionPanel() {
+    disposeHistoryPanelMount(panelRoot);
+    app.replaceChildren();
+    return mountProductionPanel();
 }
 
-function activateTab(tabName) {
-    for (const tab of app.querySelectorAll('[role="tab"]')) {
-        const active = tab.dataset.tab === tabName;
-        tab.classList.toggle('pas-tab-active', active);
-        tab.setAttribute('aria-selected', String(active));
-        tab.tabIndex = active ? 0 : -1;
-    }
-    for (const panel of app.querySelectorAll('[role="tabpanel"]')) {
-        const active = panel.dataset.content === tabName;
-        panel.hidden = !active;
-        panel.classList.toggle('pas-tab-content-active', active);
-    }
-}
-
-app.addEventListener('click', event => {
-    const target = event.target.closest('button, [data-action]');
-    if (!target || !app.contains(target)) return;
-
-    if (target.matches('[role="tab"]')) {
-        activateTab(target.dataset.tab);
-        return;
-    }
-    if (target.matches('.pas-tools-trigger')) {
-        const menu = app.querySelector('#pas-tools-menu');
-        const open = menu.hidden;
-        menu.hidden = !open;
-        target.setAttribute('aria-expanded', String(open));
-        if (open) menu.querySelector('[role="menuitem"]')?.focus();
-        return;
-    }
-    if (target.matches('.pas-view-btn')) {
-        state.viewMode = target.dataset.view;
-        for (const button of app.querySelectorAll('.pas-view-btn')) {
-            const active = button === target;
-            button.classList.toggle('pas-view-btn-active', active);
-            button.setAttribute('aria-pressed', String(active));
-        }
-        renderList();
-        return;
-    }
-    if (target.matches('.pas-filter')) {
-        state.filter = target.dataset.filter;
-        for (const button of app.querySelectorAll('.pas-filter')) {
-            const active = button === target;
-            button.classList.toggle('pas-filter-active', active);
-            button.setAttribute('aria-pressed', String(active));
-        }
-        renderList();
-        return;
-    }
-
-    const action = target.dataset.action;
-    if (action === 'toggle-series') toggleInSet(state.expandedSeries, target.closest('[data-series-key]')?.dataset.seriesKey);
-    if (action === 'toggle-version') {
-        const group = target.closest('[data-api-id][data-preset-name]');
-        if (group) toggleInSet(state.expandedVersions, `${group.dataset.apiId}::${group.dataset.presetName}`);
-    }
-    if (action === 'toggle-group') toggleInSet(state.expandedPresets, target.closest('[data-preset-key]')?.dataset.presetKey);
-});
-
-app.addEventListener('keydown', event => {
-    if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[role="button"][data-action]')) {
-        event.preventDefault();
-        event.target.click();
-    }
-    if (event.key === 'Escape') {
-        const menu = app.querySelector('#pas-tools-menu');
-        if (!menu.hidden) {
-            menu.hidden = true;
-            const trigger = app.querySelector('.pas-tools-trigger');
-            trigger.setAttribute('aria-expanded', 'false');
-            trigger.focus();
-        }
-    }
-});
-
-app.querySelector('.pas-search').addEventListener('input', event => {
-    state.search = event.target.value.trim();
-    renderList();
-});
+await mountProductionPanel();
 
 function selectorFor(element) {
     if (element.id) return `#${element.id}`;
@@ -424,11 +302,12 @@ function collectMetrics() {
     });
 }
 
-renderList();
 window.__PAS_HARNESS__ = Object.freeze({
     ready: true,
     scenario: options,
-    render: renderList,
+    render: () => panelMount.ready,
+    remount: remountProductionPanel,
+    dispose: () => disposeHistoryPanelMount(panelRoot),
     showSaveStatus,
     showImportPreview,
     closeImportPreview,
