@@ -5,17 +5,13 @@
  * 从 history-panel.js 中提取，包含：
  *   - renderSeriesView / renderFlatView  — 两种列表视图
  *   - renderSeriesGroup / renderVersionGroup / renderPresetGroup — 组件
- *   - renderCard / renderEmptyState — 卡片和空状态
- *   - applyFiltersAndSearch — 过滤和搜索
- *   - groupSnapshotsByPreset / parsePresetKey / presetKey — 数据工具
+ *   - renderEmptyState — 空状态
  *   - startOfToday / startOfWeek — 时间工具
  */
 
 import { logger } from './logger.js';
 import { getSettings } from './settings.js';
-import {
-    TRIGGER_LABEL_KEYS, formatBytes,
-} from './history-store.js';
+import { formatBytes } from './history-store.js';
 import {
     t, getCurrentApiId, getSelectedPresetName,
 } from './compatibility.js';
@@ -32,217 +28,20 @@ import {
     listAllPresetsIncludingDetached,
 } from './preset-takeover.js';
 import {
-    renderSummary, escapeHtml, escapeAttr, formatTime,
+    escapeHtml, escapeAttr, formatTime,
 } from './panel-summary.js';
-import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
 import {
     SNAPSHOT_RENDER_INCREMENT,
     getBoundedSnapshotWindow,
 } from './core/bounded-snapshot-list.js';
+import {
+    presetKey, parsePresetKey, groupSnapshotsByPreset,
+} from './panel-list-model.js';
+import { renderSnapshotCard } from './panel-snapshot-card.js';
 
 // =====================================================
 // 工具函数
 // escapeAttr 已从 panel-summary.js（→ compatibility.js）导入
-
-export function presetKey(apiId, presetName) {
-    return `${apiId}::${presetName}`;
-}
-
-export function parsePresetKey(key) {
-    const idx = key.indexOf('::');
-    if (idx < 0) return { apiId: '', presetName: key };
-    return { apiId: key.slice(0, idx), presetName: key.slice(idx + 2) };
-}
-
-function startOfToday() {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
-function startOfWeek() {
-    const d = new Date();
-    const dow = d.getDay() || 7;
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - (dow - 1) * 86400000;
-}
-
-// =====================================================
-// 数据分组
-// =====================================================
-export function groupSnapshotsByPreset(snapshots) {
-    const map = {};
-    for (const s of snapshots) {
-        const k = presetKey(s.apiId, s.presetName);
-        if (!map[k]) map[k] = [];
-        map[k].push(s);
-    }
-    // 每组内部按时间倒序
-    for (const k of Object.keys(map)) {
-        map[k].sort((a, b) => b.timestamp - a.timestamp);
-    }
-    return map;
-}
-
-// =====================================================
-// 过滤和搜索
-// =====================================================
-
-/**
- * @param {Array} snapshots
- * @param {object} panelCtx - 面板上下文，需提供 state()
- */
-export function applyFiltersAndSearch(snapshots, panelCtx) {
-    const _state = panelCtx.state();
-    let result = [...snapshots];
-
-    if (_state.filter === 'current') {
-        const name = getSelectedPresetName();
-        const api = getCurrentApiId();
-        // series 视图下的"当前预设"= 当前预设所在的整个"系列"
-        // flat 视图下保持原行为：精确到 (apiId, presetName)
-        if (_state.viewMode === 'series' && name) {
-            const settings = getSettings();
-            const overrides = settings.groupingManualOverrides;
-            const curInfo = (() => {
-                try {
-                    return parsePresetName(name);
-                } catch (_) { return { series: name }; }
-            })();
-            // 应用手动覆盖到当前预设
-            let curSeries = curInfo.series || name;
-            if (overrides && Object.hasOwn(overrides, name) && overrides[name]) {
-                curSeries = overrides[name];
-            }
-            result = result.filter(s => {
-                if (s.apiId !== api) return false;
-                const ovr = (overrides && overrides[s.presetName]) || null;
-                if (ovr) return ovr === curSeries;
-                try {
-                    const parsed = parsePresetName(s.presetName || '');
-                    return (parsed.series || s.presetName) === curSeries;
-                } catch (_) {
-                    return s.presetName === name;
-                }
-            });
-        } else {
-            result = result.filter(s => s.presetName === name && s.apiId === api);
-        }
-    } else if (_state.filter === 'pinned') {
-        result = result.filter(s => !!s.pinned);
-    } else if (_state.filter === 'today') {
-        const start = startOfToday();
-        result = result.filter(s => s.timestamp >= start);
-    } else if (_state.filter === 'week') {
-        const start = startOfWeek();
-        result = result.filter(s => s.timestamp >= start);
-    }
-
-    if (_state.search) {
-        const q = _state.search.toLowerCase();
-        // 用解析后的"系列名"参与搜索：用户输入"梦境"也应能命中所有梦境思客版本
-        result = result.filter(s => {
-            if ((s.presetName || '').toLowerCase().includes(q)) return true;
-            if ((s.name || '').toLowerCase().includes(q)) return true;
-            try {
-                const parsed = parsePresetName(s.presetName || '');
-                if ((parsed.series || '').toLowerCase().includes(q)) return true;
-            } catch (_) {}
-            return false;
-        });
-    }
-
-    return result;
-}
-
-// =====================================================
-// 卡片渲染
-// =====================================================
-
-/**
- * @param {object} s - 快照对象
- * @param {object} panelCtx - 面板上下文，需提供 state()
- */
-function renderCard(s, panelCtx) {
-    const _state = panelCtx.state();
-    const triggerLabel = t(TRIGGER_LABEL_KEYS[s.trigger] || 'Trigger Auto');
-    const id = escapeAttr(s.id);
-    const diagnostics = getSnapshotDiagnostics(s);
-    const summaryHtml = renderSummary(getSnapshotSummary(s));
-    const isPinned = !!s.pinned;
-    const isA = _state.diffSel.a === s.id;
-    const isB = _state.diffSel.b === s.id;
-    const customName = (s.name || '').trim();
-
-    const cardCls = [
-        'pas-card',
-        `pas-card-trigger-${escapeAttr(s.trigger)}`,
-        isPinned ? 'pas-card-pinned' : '',
-        isA ? 'pas-card-selected-a' : '',
-        isB ? 'pas-card-selected-b' : '',
-    ].filter(Boolean).join(' ');
-
-    const pinTitle = isPinned ? t('Unpin Snapshot') : t('Pin Snapshot');
-    const aTitle = isA ? t('Diff Clear A') : t('Diff Set A');
-    const bTitle = isB ? t('Diff Clear B') : t('Diff Set B');
-    const statusKey = `Diagnostic Status ${diagnostics.saveStatus}`;
-    const translatedStatus = t(statusKey);
-    const statusLabel = translatedStatus === statusKey ? diagnostics.saveStatus : translatedStatus;
-    const diagnosticsTitle = diagnostics.transactionId
-        ? `${t('Diagnostic Transaction ID')}: ${diagnostics.transactionId}`
-        : t('Diagnostic Details');
-    const schemaBadge = diagnostics.schemaVersion >= 2
-        ? `<span class="pas-schema-badge" title="${escapeAttr(diagnosticsTitle)}">v${diagnostics.schemaVersion} · ${escapeHtml(statusLabel)}</span>`
-        : '';
-
-    // 删除按钮：pinned 快照禁用
-    const deleteAttr = isPinned
-        ? `disabled title="${escapeAttr(t('Cannot Delete Pinned'))}"`
-        : `title="${escapeAttr(t('Delete'))}"`;
-
-    return `
-<div class="${cardCls}" data-snapshot-id="${id}">
-    <div class="pas-card-main">
-        <div class="pas-card-title-row">
-            ${isPinned ? `<i class="fa-solid fa-thumbtack pas-card-pin-icon" title="${escapeAttr(t('Pinned'))}"></i>` : ''}
-            ${customName ? `<span class="pas-card-name-custom" title="${escapeAttr(customName)}">${escapeHtml(customName)}</span>` : ''}
-            <span class="pas-card-time">${formatTime(s.timestamp)}</span>
-            <span class="pas-tag pas-tag-${escapeAttr(s.trigger)}">${escapeHtml(triggerLabel)}</span>
-        </div>
-        ${summaryHtml}
-        <div class="pas-card-meta">
-            <span class="pas-card-size">${formatBytes(s.size || 0)}</span>
-            <span class="pas-divider">\u00b7</span>
-            <span class="pas-card-hash" title="${escapeAttr(t('Diagnostic Canonical Hash'))}">${escapeHtml(diagnostics.canonicalHash)}</span>
-            ${schemaBadge ? `<span class="pas-divider">\u00b7</span>${schemaBadge}` : ''}
-        </div>
-    </div>
-    <div class="pas-card-actions">
-        <button class="pas-btn-action pas-btn-diff-a ${isA ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-a" title="${escapeAttr(aTitle)}" type="button" aria-label="${escapeAttr(aTitle)}">
-            <span style="font-weight:700;font-size:0.85em;">A</span>
-        </button>
-        <button class="pas-btn-action pas-btn-diff-b ${isB ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-b" title="${escapeAttr(bTitle)}" type="button" aria-label="${escapeAttr(bTitle)}">
-            <span style="font-weight:700;font-size:0.85em;">B</span>
-        </button>
-        <button class="pas-btn-action pas-btn-rename" data-id="${id}" data-action="rename" title="${escapeAttr(t('Rename Snapshot'))}" type="button" aria-label="${escapeAttr(t('Rename Snapshot'))}">
-            <i class="fa-solid fa-pen"></i>
-        </button>
-        <button class="pas-btn-action pas-btn-pin ${isPinned ? 'pas-btn-pin-active' : ''}" data-id="${id}" data-action="pin" title="${escapeAttr(pinTitle)}" type="button" aria-label="${escapeAttr(pinTitle)}">
-            <i class="fa-solid fa-thumbtack"></i>
-        </button>
-        <button class="pas-btn-action pas-btn-restore" data-id="${id}" data-action="restore" title="${escapeAttr(t('Restore'))}" type="button" aria-label="${escapeAttr(t('Restore'))}">
-            <i class="fa-solid fa-rotate-left"></i>
-        </button>
-        <button class="pas-btn-action pas-btn-view" data-id="${id}" data-action="view" title="${escapeAttr(t('View'))}" type="button" aria-label="${escapeAttr(t('View'))}">
-            <i class="fa-solid fa-eye"></i>
-        </button>
-        <button class="pas-btn-action pas-btn-export-preset" data-id="${id}" data-action="export" title="${escapeAttr(t('Export Preset'))}" type="button" aria-label="${escapeAttr(t('Export Preset'))}">
-            <i class="fa-solid fa-file-export"></i>
-        </button>
-        <button class="pas-btn-action pas-btn-delete" data-id="${id}" data-action="delete" ${deleteAttr} type="button" aria-label="${escapeAttr(t('Delete'))}">
-            <i class="fa-solid fa-trash"></i>
-        </button>
-    </div>
-</div>`;
-}
 
 // =====================================================
 // 空状态
@@ -313,12 +112,12 @@ function renderPresetGroup(key, snapshots, panelCtx) {
             <span class="pas-divider">\u00b7</span>
             <span class="pas-preset-latest">${formatTime(latestTime)}</span>
             <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
-                <i class="fa-solid fa-trash"></i>
+                <i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Clear History Short'))}</span>
             </button>
         </div>
     </div>
     <div class="pas-preset-body"${isExpanded ? '' : ' hidden'}>
-        ${isExpanded ? snapshotWindow.items.map(s => renderCard(s, panelCtx)).join('') : ''}
+        ${isExpanded ? snapshotWindow.items.map(s => renderSnapshotCard(s, panelCtx)).join('') : ''}
         ${isExpanded ? renderShowMoreSnapshots(key, snapshotWindow.remaining, snapshotWindow.total) : ''}
     </div>
 </div>`;
@@ -438,12 +237,12 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     const applyBtn = ver.archived
         ? ''
         : `<button class="pas-btn-action pas-btn-apply-version" data-action="apply-version" data-preset-name="${safePresetName}" title="${escapeAttr(t('Apply This Version'))}" type="button" aria-label="${escapeAttr(t('Apply This Version'))}">
-            <i class="fa-solid fa-circle-check"></i>
+            <i class="fa-solid fa-circle-check"></i><span class="pas-action-label">${escapeHtml(t('Apply This Version'))}</span>
         </button>`;
 
     // AR-0: 删除预设按钮（当前预设 disabled）
     const deletePresetBtn = `<button class="pas-version-delete-btn" data-action="delete-preset" data-preset-name="${safePresetName}" data-api-id="${escapeAttr(ver.apiId)}" title="${escapeAttr(t('Delete Preset Btn'))}" type="button" aria-label="${escapeAttr(t('Delete Preset Btn'))}" ${isCurrent ? 'disabled' : ''}>
-            <i class="fa-solid fa-trash-can"></i>
+            <i class="fa-solid fa-trash-can"></i><span class="pas-action-label">${escapeHtml(t('Delete Preset Btn'))}</span>
         </button>`;
 
     return `
@@ -469,7 +268,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
             <span class="pas-version-meta-actions">
                 ${applyBtn}
                 <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
-                    <i class="fa-solid fa-trash"></i>
+                    <i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Clear History Short'))}</span>
                 </button>
                 ${deletePresetBtn}
             </span>
@@ -478,7 +277,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     <div class="pas-version-body"${isExpanded ? '' : ' hidden'}>
         ${isExpanded
             ? (ver.snapshots.length > 0
-                ? snapshotWindow.items.map(s => renderCard(s, panelCtx)).join('')
+                ? snapshotWindow.items.map(s => renderSnapshotCard(s, panelCtx)).join('')
                 : `<div class="pas-version-empty-hint">${escapeHtml(t('No Snapshots Yet Hint'))}</div>`)
             : ''}
         ${isExpanded ? renderShowMoreSnapshots(versionKey, snapshotWindow.remaining, snapshotWindow.total) : ''}

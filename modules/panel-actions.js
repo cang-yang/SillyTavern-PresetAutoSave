@@ -49,7 +49,7 @@ import {
     escapeHtml, escapeAttr, formatTime,
     renderSummary,
 } from './panel-summary.js';
-import { parsePresetKey } from './panel-list-render.js';
+import { parsePresetKey } from './panel-list-model.js';
 import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
 import { setDisclosureExpanded } from './panel-disclosure.js';
 import { increaseSnapshotRenderLimit } from './core/bounded-snapshot-list.js';

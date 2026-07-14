@@ -62,10 +62,11 @@ import {
 } from './panel-settings-log.js';
 import { buildPanelHTML as buildPanelShellHTML } from './panel-shell.js';
 import {
-    presetKey, parsePresetKey, groupSnapshotsByPreset,
-    applyFiltersAndSearch, renderSeriesView, renderFlatView,
-    renderEmptyState,
+    renderSeriesView, renderFlatView, renderEmptyState,
 } from './panel-list-render.js';
+import {
+    presetKey, parsePresetKey, groupSnapshotsByPreset, applyFiltersAndSearch,
+} from './panel-list-model.js';
 import {
     handleListClick as _handleListClick,
     updateDiffBar as _updateDiffBar,

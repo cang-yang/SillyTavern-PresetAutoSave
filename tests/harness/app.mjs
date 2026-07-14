@@ -236,6 +236,30 @@ function selectorFor(element) {
     return element.tagName.toLowerCase();
 }
 
+function parseRgb(value) {
+    const channels = String(value || '').match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    return channels?.length === 3 && channels.every(Number.isFinite) ? channels : null;
+}
+
+function relativeLuminance(channels) {
+    const linear = channels.map(channel => {
+        const value = channel / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return (0.2126 * linear[0]) + (0.7152 * linear[1]) + (0.0722 * linear[2]);
+}
+
+function contrastRatio(foreground, background) {
+    const foregroundRgb = parseRgb(foreground);
+    const backgroundRgb = parseRgb(background);
+    if (!foregroundRgb || !backgroundRgb) return Number.NaN;
+    const foregroundLuminance = relativeLuminance(foregroundRgb);
+    const backgroundLuminance = relativeLuminance(backgroundRgb);
+    const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+    const darker = Math.min(foregroundLuminance, backgroundLuminance);
+    return (lighter + 0.05) / (darker + 0.05);
+}
+
 function showSaveStatus(state) {
     if (!setSaveStatus(state)) return false;
     const dot = app.querySelector('.pas-panel-status .pas-status-dot');
@@ -630,9 +654,15 @@ function collectMetrics() {
     const hiddenFocusable = [...metricsRoot.querySelectorAll('[aria-hidden="true"] button, [aria-hidden="true"] input, [aria-hidden="true"] [tabindex]')]
         .filter(element => element.tabIndex >= 0)
         .map(selectorFor);
-    const requiredLabels = [...metricsRoot.querySelectorAll('.pas-tab > span:not(.pas-tab-badge), .pas-filter > span')]
+    const requiredLabelSelector = window.innerWidth <= 460
+        ? '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span, .pas-primary-action > span, .pas-view-btn > span, .pas-btn-clear-preset > .pas-action-label'
+        : '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span';
+    const requiredLabels = [...metricsRoot.querySelectorAll(requiredLabelSelector)]
         .map(element => {
             const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const fontSize = Number.parseFloat(style.fontSize) || 16;
+            const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.2;
             const clippingRoot = element.closest('.pas-filters') || metricsRoot;
             const clippingRect = clippingRoot.getBoundingClientRect();
             const leftEdge = Math.max(0, clippingRect.left);
@@ -642,6 +672,7 @@ function collectMetrics() {
                 text: element.textContent || '',
                 visible: isVisible(element),
                 fullyVisible: rect.left >= leftEdge - 1 && rect.right <= rightEdge + 1,
+                singleLine: rect.height <= lineHeight * 1.25,
             };
         });
     const disclosures = [...metricsRoot.querySelectorAll('[data-action="toggle-series"], [data-action="toggle-version"], [data-action="toggle-group"]')]
@@ -662,6 +693,14 @@ function collectMetrics() {
         rendered: renderedView,
         manageGroupingAvailable: Boolean(manageGrouping && manageGrouping.style.display !== 'none'),
     }) : null;
+    const footer = metricsRoot.querySelector('.pas-panel-footer');
+    const footerStats = metricsRoot.querySelector('#pas-footer-stats');
+    const footerStyle = footer ? getComputedStyle(footer) : null;
+    const footerStatsStyle = footerStats ? getComputedStyle(footerStats) : null;
+    const footerText = footerStyle && footerStatsStyle ? Object.freeze({
+        fontSize: Number.parseFloat(footerStatsStyle.fontSize),
+        contrast: Number(contrastRatio(footerStatsStyle.color, footerStyle.backgroundColor).toFixed(2)),
+    }) : null;
 
     return Object.freeze({
         scenario: options.scenario,
@@ -671,6 +710,7 @@ function collectMetrics() {
         requiredLabels: Object.freeze(requiredLabels.map(Object.freeze)),
         disclosures: Object.freeze(disclosures.map(Object.freeze)),
         viewMode,
+        footerText,
         hiddenFocusable: Object.freeze(hiddenFocusable),
         consoleErrors: Object.freeze([...consoleErrors]),
         renderMs: lastRenderMs,

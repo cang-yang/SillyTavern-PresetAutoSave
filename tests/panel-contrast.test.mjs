@@ -66,3 +66,15 @@ test('empty, loading and recovery text use readable semantic colors in both them
     assert.match(panelCss, /\.pas-panel \.pas-panel-error \.pas-empty-text\s*\{[^}]*color:\s*var\(--pas-v4-danger\)/s);
     assert.match(panelCss, /\.pas-panel \.pas-panel-error \.pas-empty-hint\s*\{[^}]*opacity:\s*1/s);
 });
+
+test('footer statistics retain readable size and contrast in compact light and dark themes', () => {
+    const darkForeground = darkThemeToken('--pas-v4-footer-text');
+    const darkBackground = darkThemeToken('--pas-v4-footer-bg');
+    const lightForeground = lightThemeToken('--pas-v4-footer-text');
+    const lightBackground = lightThemeToken('--pas-v4-footer-bg');
+
+    assert.ok(contrastRatio(darkForeground, darkBackground) >= 4.5);
+    assert.ok(contrastRatio(lightForeground, lightBackground) >= 4.5);
+    assert.match(panelCss, /\.pas-panel-footer \.pas-stats\s*\{[^}]*color:\s*inherit[^}]*font-size:\s*inherit/s);
+    assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel-footer\s*\{[^}]*font-size:\s*12px/s);
+});

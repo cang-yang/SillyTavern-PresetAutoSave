@@ -75,6 +75,13 @@ export function evaluateLayoutAudit(metrics) {
                 `Required control label “${String(label?.text || '').trim()}” is clipped.`,
                 String(label?.selector || ''),
             ));
+        } else if (label?.singleLine === false) {
+            findings.push(finding(
+                'required-label-wrapped',
+                'error',
+                `Required control label “${String(label?.text || '').trim()}” wrapped or collapsed vertically.`,
+                String(label?.selector || ''),
+            ));
         }
     }
 
@@ -96,6 +103,27 @@ export function evaluateLayoutAudit(metrics) {
             'Disclosure aria-expanded contradicts the visibility of its controlled content.',
             String(disclosure.selector || ''),
         ));
+    }
+
+    if (metrics.footerText && typeof metrics.footerText === 'object') {
+        const fontSize = Number(metrics.footerText.fontSize);
+        const contrast = Number(metrics.footerText.contrast);
+        if (!Number.isFinite(fontSize) || fontSize < 12) {
+            findings.push(finding(
+                'footer-text-size',
+                'error',
+                `Footer statistics use ${fontSize}px text; compact normal text requires at least 12px.`,
+                '#pas-footer-stats',
+            ));
+        }
+        if (!Number.isFinite(contrast) || contrast < 4.5) {
+            findings.push(finding(
+                'footer-text-contrast',
+                'error',
+                `Footer statistics contrast is ${contrast}:1; normal text requires at least 4.5:1.`,
+                '#pas-footer-stats',
+            ));
+        }
     }
 
     const viewMode = metrics.viewMode;

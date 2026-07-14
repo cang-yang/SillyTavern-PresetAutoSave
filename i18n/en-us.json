@@ -23,6 +23,7 @@
     "Expand All": "Expand all groups",
     "Collapse All": "Collapse all groups",
     "Clear Preset History": "Clear preset history",
+    "Clear History Short": "Clear history",
     "Clear Preset Confirm": "Clean up history snapshots",
     "Clear Preset Hint": "This will remove old snapshots for <b>{{name}}</b>, keeping the latest version as the current baseline. This cannot be undone.",
     "Clear Preset No History": "No history snapshots to clean up",

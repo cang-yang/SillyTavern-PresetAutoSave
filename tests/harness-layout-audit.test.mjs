@@ -94,6 +94,30 @@ test('required control labels must be fully visible instead of clipped by a scro
     assert.equal(result.findings[0].code, 'required-label-clipped');
 });
 
+test('compact footer statistics must meet normal-text size and contrast', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 360, height: 800 },
+        documentWidth: 360,
+        footerText: { fontSize: 8.2, contrast: 2.35 },
+    }));
+
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.findings.map(item => item.code), ['footer-text-size', 'footer-text-contrast']);
+});
+
+test('compact action labels cannot collapse into wrapped or vertical text', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 360, height: 800 },
+        documentWidth: 360,
+        requiredLabels: [
+            { selector: '.pas-btn-clear-preset > .pas-action-label', text: '清空该预设', visible: true, fullyVisible: true, singleLine: false },
+        ],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings[0].code, 'required-label-wrapped');
+});
+
 test('visible disclosure state must agree with aria-expanded', () => {
     const result = evaluateLayoutAudit(cleanMetrics({
         disclosures: [
