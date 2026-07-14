@@ -90,6 +90,24 @@ export function evaluateLayoutAudit(metrics) {
         ));
     }
 
+    const viewMode = metrics.viewMode;
+    if (viewMode && viewMode.selected !== viewMode.rendered) {
+        findings.push(finding(
+            'view-mode-mismatch',
+            'error',
+            `Selected ${String(viewMode.selected)} view contradicts the rendered ${String(viewMode.rendered)} content.`,
+            '.pas-view-switch',
+        ));
+    }
+    if (viewMode && viewMode.manageGroupingAvailable !== (viewMode.selected === 'series')) {
+        findings.push(finding(
+            'view-tool-scope-mismatch',
+            'error',
+            'The grouping manager visibility contradicts the selected history view.',
+            '.pas-btn-manage-grouping',
+        ));
+    }
+
     for (const message of Array.isArray(metrics.consoleErrors) ? metrics.consoleErrors : []) {
         findings.push(finding('console-error', 'error', String(message || 'Unknown browser console error.')));
     }

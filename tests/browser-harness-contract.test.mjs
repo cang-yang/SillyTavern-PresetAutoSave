@@ -17,6 +17,8 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /mountHistoryPanel/);
     assert.match(app, /initHistoryStore/);
     assert.match(app, /seedHarnessHistory/);
+    assert.match(app, /initAutoSave/);
+    assert.match(app, /teardownAutoSave/);
     assert.match(app, /operationEvents/);
     assert.match(app, /renderHistoryPanelShell/);
     assert.match(app, /disposeHistoryPanelMount/);
@@ -29,8 +31,11 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /renderHistoryImportPreview/);
     assert.match(app, /bindHistoryImportPreview/);
     assert.match(app, /showImportPreview/);
-    assert.match(app, /renderModernGroupingHTML/);
+    assert.match(app, /mountGroupingManager/);
+    assert.match(app, /groupManagerMount\?\.dispose/);
     assert.match(app, /showGroupManager/);
+    assert.match(app, /exerciseCoreOperations/);
+    assert.doesNotMatch(app, /renderModernGroupingHTML/);
     assert.match(app, /exerciseDisclosures/);
     assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true \}\)/);
     assert.doesNotMatch(app, /buildPanelHTML/);

@@ -477,7 +477,8 @@
     "Clear Preset Also Remove From ST Hint": "<p>预设 <b>{{name}}</b> 的快照已清空，但它本身在 SillyTavern 中仍然存在。</p><p>是否一并把它从 SillyTavern 的预设列表中删除？</p><p style=\"opacity:.7;font-size:.92em\">⚠ 此操作不可撤销。如果你不确定，请选择否，仅删除快照历史。</p>",
     "Clear Preset ST Delete Failed": "已清空快照，但从 SillyTavern 删除预设失败",
 
-    "Panel Open Failed": "面板数据加载失败：{{message}}",
+    "Panel Open Failed": "无法加载预设历史。",
+    "Panel Open Recovery Hint": "请关闭后重新打开面板；如果问题仍然存在，请先查看扩展日志，再操作历史数据。",
 
     "Export Preset": "导出预设",
     "Export Preset Success": "预设已导出",

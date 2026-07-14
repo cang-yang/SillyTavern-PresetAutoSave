@@ -9,6 +9,7 @@ function cleanMetrics(overrides = {}) {
         documentWidth: 1280,
         controls: [{ selector: '.pas-btn-snap', important: true, visible: true, width: 112, height: 44 }],
         disclosures: [],
+        viewMode: { selected: 'series', rendered: 'series', manageGroupingAvailable: true },
         hiddenFocusable: [],
         consoleErrors: [],
         renderMs: 80,
@@ -92,6 +93,20 @@ test('visible disclosure state must agree with aria-expanded', () => {
     assert.equal(result.findings.length, 1);
     assert.equal(result.findings[0].code, 'disclosure-state-mismatch');
     assert.equal(result.findings[0].selector, '.pas-series-header');
+});
+
+test('view controls, renderer, and grouping tools must describe the same mode', () => {
+    const wrongSelection = evaluateLayoutAudit(cleanMetrics({
+        viewMode: { selected: 'series', rendered: 'flat', manageGroupingAvailable: true },
+    }));
+    assert.equal(wrongSelection.passed, false);
+    assert.equal(wrongSelection.findings[0].code, 'view-mode-mismatch');
+
+    const wrongTool = evaluateLayoutAudit(cleanMetrics({
+        viewMode: { selected: 'flat', rendered: 'flat', manageGroupingAvailable: true },
+    }));
+    assert.equal(wrongTool.passed, false);
+    assert.equal(wrongTool.findings[0].code, 'view-tool-scope-mismatch');
 });
 
 test('console errors and invalid timing fail while slow finite timing is reported', () => {

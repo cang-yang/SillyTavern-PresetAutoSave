@@ -9,6 +9,14 @@ test('panel dataset failures reach the production error state', () => {
     assert.doesNotMatch(source, /listArchivedPresets\(\)\.catch\(\(\) => \[\]\)/);
     assert.match(source, /pas-panel-error[^]*?role="alert"/);
     assert.match(source, /escapeHtml\(t\('Panel Open Failed'/);
+    const errorRenderer = source.match(/function renderPanelError[^]*?\n}/)?.[0] || '';
+    assert.match(errorRenderer, /t\('Panel Open Recovery Hint'\)/);
+    assert.doesNotMatch(errorRenderer, /error\?\.message|escapeHtml\(stage|stage:/);
+});
+
+test('async dataset loading resynchronizes the persisted view controls before rendering', () => {
+    const loader = source.match(/async function loadAndRenderMountedPanel[^]*?\n}/)?.[0] || '';
+    assert.match(loader, /await loadData[^]*?updateViewToggleUI\(\)[^]*?renderActiveTab/);
 });
 
 test('every deferred controller render is cleared by mount disposal', () => {

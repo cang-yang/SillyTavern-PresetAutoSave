@@ -38,6 +38,24 @@ test('group names expose an accessible inline rename interaction', () => {
     assert.match(css, /min-(?:width|height):\s*44px/);
 });
 
+test('group disclosure is a native sibling button instead of a composite nested button', () => {
+    const cardMarkup = source.match(/return `<section class="pas-gm-series[^]*?<\/section>`;/)?.[0] || '';
+    assert.match(cardMarkup, /<div class="pas-gm-series-header">/);
+    assert.match(cardMarkup, /<button class="pas-gm-series-toggle" type="button"[^>]*aria-expanded=/);
+    assert.doesNotMatch(cardMarkup, /pas-gm-series-header" role="button"|pas-gm-series-header" tabindex=/);
+    assert.match(css, /\.pas-gm-series-toggle:focus-visible/);
+});
+
+test('group manager exposes a reusable controller mount with matching disposal', () => {
+    assert.match(source, /export function mountGroupingManager/);
+    assert.match(source, /export function disposeGroupingManagerMount/);
+});
+
+test('external disposal stops popup cleanup from reinterpreting cleared group state', () => {
+    const popupFlow = source.match(/export async function showGroupingManager[^]*?\n}/)?.[0] || '';
+    assert.match(popupFlow, /await promise[^]*?_groupingManagerRoot !== container[^]*?return/);
+});
+
 test('the rename pencil becomes an explicit confirm button while editing', () => {
     assert.match(source, /data-editing/);
     assert.match(source, /fa-check/);

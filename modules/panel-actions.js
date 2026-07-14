@@ -56,6 +56,7 @@ import { increaseSnapshotRenderLimit } from './core/bounded-snapshot-list.js';
 // --- 从子模块导入分组管理函数（软拆分：panel-group-manager.js） ---
 import {
     clearGroupingManagerState,
+    disposeGroupingManagerMount,
     getGroupingManagerPopup,
     setGroupingManagerPopup,
     showGroupingManager,
@@ -93,6 +94,7 @@ export function cleanupActionPopups({ includeWizard = false } = {}) {
     if (gmPopup) {
         try { gmPopup.completeCancelled?.(); } catch (_) {}
         setGroupingManagerPopup(null);
+        disposeGroupingManagerMount();
         // P1-1: 弹窗关闭时释放模块级状态，防止下次打开时残留旧数据
         clearGroupingManagerState();
     }

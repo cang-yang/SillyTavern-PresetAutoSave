@@ -69,6 +69,28 @@ const selectAdapter = {
 const eventListeners = new Map();
 const popupShow = async () => null;
 popupShow.confirm = async () => confirmResult;
+class HarnessPopup {
+    constructor(html) {
+        this.html = html;
+        this.host = null;
+        this.resolve = null;
+    }
+
+    show() {
+        this.host = document.createElement('div');
+        this.host.className = 'pas-harness-dialog';
+        this.host.innerHTML = this.html;
+        document.body.append(this.host);
+        return new Promise(resolve => { this.resolve = resolve; });
+    }
+
+    completeCancelled() {
+        this.host?.remove();
+        this.resolve?.(false);
+        this.resolve = null;
+    }
+}
+HarnessPopup.show = popupShow;
 const context = {
     mainApi: scenario.currentApiId,
     extensionSettings: {},
@@ -102,7 +124,8 @@ const context = {
     }),
     saveSettingsDebounced: () => {},
     translate,
-    Popup: { show: popupShow },
+    Popup: HarnessPopup,
+    POPUP_TYPE: { DISPLAY: 'display', INPUT: 'input', CONFIRM: 'confirm', TEXT: 'text' },
 };
 window.SillyTavern = { version: '1.13.4-harness', getContext: () => context, libs: {} };
 window.main_api = scenario.currentApiId;
@@ -110,11 +133,13 @@ window.toastr = Object.fromEntries(['success', 'info', 'warning', 'error'].map(l
     operationEvents.push(Object.freeze({ level, message: String(message || '') }));
 }]));
 
-const [{ initCompatibility }, { initSettings, batchUpdate }, historyPanel, historyStore] = await Promise.all([
+const [{ initCompatibility }, { initSettings, batchUpdate }, historyPanel, historyStore, autoSave, groupManager] = await Promise.all([
     import('../../modules/compatibility.js'),
     import('../../modules/settings.js'),
     import('../../modules/history-panel.js'),
     import('../../modules/history-store.js'),
+    import('../../modules/auto-save.js'),
+    import('../../modules/panel-group-manager.js'),
 ]);
 initCompatibility();
 await initSettings();
@@ -127,6 +152,8 @@ batchUpdate({
     nestingEnabled: Object.keys(scenario.tree).length > 0,
     nestingMaxDepth: 3,
     groupingTree: scenario.tree,
+    enabled: true,
+    fallbackPolling: false,
     takeoverEnabled: false,
     autoSeedOnTakeover: false,
 });
@@ -157,6 +184,8 @@ async function seedHarnessHistory() {
 }
 
 await seedHarnessHistory();
+const { initAutoSave, teardown: teardownAutoSave } = autoSave;
+await initAutoSave();
 
 const app = document.querySelector('#pas-harness-app');
 const scenarioLabel = document.querySelector('#pas-harness-scenario');
@@ -164,6 +193,7 @@ scenarioLabel.textContent = `${options.scenario} · ${options.theme} · ${option
 const { mountHistoryPanel, renderHistoryPanelShell, disposeHistoryPanelMount } = historyPanel;
 let panelRoot = null;
 let panelMount = null;
+let groupManagerMount = null;
 
 async function loadHarnessDataset() {
     if (options.scenario === 'loading') return new Promise(() => {});
@@ -256,43 +286,19 @@ function closeImportPreview() {
     document.querySelector('.pas-harness-dialog')?.remove();
 }
 
-async function showGroupManager({ withUndo = true } = {}) {
+async function showGroupManager() {
+    groupManagerMount?.dispose();
+    groupManagerMount = null;
     document.querySelector('.pas-harness-dialog')?.remove();
-    const { renderModernGroupingHTML } = await import('../../modules/panel-group-manager.js');
-    const nodes = [
-        {
-            key: 'primary-writing',
-            displayName: '这是一个很长但仍应完整可读的中文创作预设分组名称 🦊',
-            automaticName: 'primary-writing',
-            customized: true,
-            depth: 0,
-            items: [
-                { presetName: 'Story Alpha v7.1', manualOverride: false },
-                { presetName: 'Story Mobile', manualOverride: true },
-            ],
-        },
-        {
-            key: 'nested-tools',
-            displayName: '嵌套工具组',
-            automaticName: 'nested-tools',
-            customized: false,
-            depth: 1,
-            parentName: '创作预设',
-            items: [{ presetName: 'Summarizer', manualOverride: false }],
-        },
-    ];
+    const { mountGroupingManager } = groupManager;
+    const presetNames = [...nativeSelect.options].map(option => option.textContent).filter(Boolean);
     const host = document.createElement('div');
     host.className = 'pas-harness-dialog pas-harness-group-dialog';
-    host.innerHTML = renderModernGroupingHTML(nodes);
     document.body.append(host);
-    const undo = host.querySelector('.pas-gm-undo-btn');
-    const status = host.querySelector('.pas-gm-history-status');
-    if (withUndo && undo && status) {
-        undo.disabled = false;
-        undo.title = translate('Grouping Undo Action', { action: translate('Grouping Action Move Preset') });
-        status.hidden = false;
-        status.textContent = translate('Grouping Change Saved', { action: translate('Grouping Action Move Preset') });
-    }
+    groupManagerMount = mountGroupingManager(host, {
+        panelCtx: { refreshData: async () => {} },
+        presetNames,
+    });
     return true;
 }
 
@@ -321,6 +327,86 @@ function disclosureState(header) {
 
 function nextPaint() {
     return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+async function waitFor(predicate, timeoutMs = 2500) {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+        const value = await predicate();
+        if (value) return value;
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error('Harness operation timed out');
+}
+
+async function exerciseCoreOperations() {
+    if (options.scenario !== 'ordinary') throw new Error('Core operations require the ordinary scenario');
+    operationEvents.length = 0;
+
+    const snapshotsBefore = (await historyStore.getAllSnapshots()).length;
+    panelRoot.querySelector('.pas-btn-snap')?.click();
+    await waitFor(() => operationEvents.some(event => event.level === 'success' || event.level === 'error'));
+    const snapshotsAfter = (await historyStore.getAllSnapshots()).length;
+    const snapshotSucceeded = operationEvents.some(event => event.level === 'success');
+
+    await showGroupManager({ withUndo: false });
+    const manager = groupManagerMount?.root;
+    const card = manager?.querySelector('.pas-gm-series');
+    const key = card?.getAttribute('data-series-key') || '';
+    const groupName = () => manager?.querySelector(`[data-series-key="${CSS.escape(key)}"] .pas-gm-series-name`)?.textContent || '';
+    const originalName = groupName();
+    card?.querySelector('.pas-gm-rename-btn')?.click();
+    const input = card?.querySelector('.pas-gm-name-input');
+    if (!input) throw new Error('Real grouping controller did not enter rename mode');
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    input.value = `${originalName} QA`;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await nextPaint();
+    const renamedName = groupName();
+
+    manager.querySelector('.pas-gm-undo-btn')?.click();
+    await nextPaint();
+    const undoneName = groupName();
+    manager.querySelector('.pas-gm-redo-btn')?.click();
+    await nextPaint();
+    const redoneName = groupName();
+
+    manager.querySelector(`[data-series-key="${CSS.escape(key)}"] .pas-gm-rename-btn`)?.click();
+    const cancelInput = manager.querySelector(`[data-series-key="${CSS.escape(key)}"] .pas-gm-name-input`);
+    cancelInput.value = `${redoneName} cancelled`;
+    cancelInput.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    cancelInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true }));
+    const imePreserved = Boolean(manager.querySelector(`[data-series-key="${CSS.escape(key)}"] .pas-gm-name-input`));
+    cancelInput.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    cancelInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await nextPaint();
+    const escapeCancelled = groupName() === redoneName;
+
+    groupManagerMount?.dispose();
+    groupManagerMount = null;
+    document.querySelector('.pas-harness-group-dialog')?.remove();
+    return Object.freeze({
+        snapshot: Object.freeze({
+            before: snapshotsBefore,
+            after: snapshotsAfter,
+            committed: snapshotSucceeded && snapshotsAfter >= snapshotsBefore,
+        }),
+        grouping: Object.freeze({
+            originalName,
+            renamedName,
+            undoneName,
+            redoneName,
+            renamed: renamedName !== originalName,
+            undone: undoneName === originalName,
+            redone: redoneName === renamedName,
+            imePreserved,
+            escapeCancelled,
+        }),
+        events: Object.freeze([...operationEvents]),
+        consoleErrors: Object.freeze([...consoleErrors]),
+    });
 }
 
 async function exerciseDisclosures() {
@@ -399,6 +485,16 @@ function collectMetrics() {
                 ...state,
             };
         });
+    const renderedView = panelRoot?.querySelector('.pas-series-group')
+        ? 'series'
+        : panelRoot?.querySelector('.pas-preset-group') ? 'flat' : null;
+    const selectedView = panelRoot?.querySelector('.pas-view-btn[aria-pressed="true"]')?.getAttribute('data-view') || null;
+    const manageGrouping = panelRoot?.querySelector('.pas-btn-manage-grouping');
+    const viewMode = renderedView ? Object.freeze({
+        selected: selectedView,
+        rendered: renderedView,
+        manageGroupingAvailable: Boolean(manageGrouping && manageGrouping.style.display !== 'none'),
+    }) : null;
 
     return Object.freeze({
         scenario: options.scenario,
@@ -407,6 +503,7 @@ function collectMetrics() {
         controls: Object.freeze(controls.map(Object.freeze)),
         requiredLabels: Object.freeze(requiredLabels.map(Object.freeze)),
         disclosures: Object.freeze(disclosures.map(Object.freeze)),
+        viewMode,
         hiddenFocusable: Object.freeze(hiddenFocusable),
         consoleErrors: Object.freeze([...consoleErrors]),
         renderMs: lastRenderMs,
@@ -423,9 +520,16 @@ window.__PAS_HARNESS__ = Object.freeze({
     showImportPreview,
     closeImportPreview,
     showGroupManager,
+    exerciseCoreOperations,
     exerciseDisclosures,
     setConfirmResult: value => { confirmResult = Boolean(value); },
     operationEvents: () => Object.freeze([...operationEvents]),
     collectMetrics,
     audit: () => evaluateLayoutAudit(collectMetrics()),
 });
+
+window.addEventListener('pagehide', () => {
+    groupManagerMount?.dispose();
+    disposeHistoryPanelMount(panelRoot);
+    void teardownAutoSave();
+}, { once: true });

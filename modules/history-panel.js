@@ -306,15 +306,15 @@ export function renderHistoryPanelShell(host) {
     return root;
 }
 
-function renderPanelError(error, stage) {
+function renderPanelError() {
     const listEl = _root?.querySelector('.pas-snapshot-list')
         || _root?.querySelector('[data-content="list"]');
     if (!listEl) return;
     listEl.removeAttribute('aria-busy');
     listEl.innerHTML = `<div class="pas-empty pas-panel-error" role="alert">
         <div class="pas-empty-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
-        <p class="pas-empty-text">${escapeHtml(t('Panel Open Failed', { message: error?.message || String(error) }))}</p>
-        <p class="pas-empty-hint" style="opacity:0.7;font-size:0.85em;margin-top:8px;">stage: ${escapeHtml(stage || 'unknown')}</p>
+        <p class="pas-empty-text">${escapeHtml(t('Panel Open Failed'))}</p>
+        <p class="pas-empty-hint">${escapeHtml(t('Panel Open Recovery Hint'))}</p>
     </div>`;
 }
 
@@ -326,6 +326,7 @@ async function loadAndRenderMountedPanel(root, generation, panelStartedAt) {
         const loaded = await loadData({ mountGeneration: generation });
         if (!loaded || _root !== root || generation !== _panelMountGeneration) return false;
         recordPanelPerf('loadData', loadStartedAt, { snapshots: _state.snapshots.length, archives: _archivedCache.length });
+        updateViewToggleUI();
 
         failedStage = 'renderActiveTab';
         const renderStartedAt = performance.now();
@@ -343,7 +344,7 @@ async function loadAndRenderMountedPanel(root, generation, panelStartedAt) {
         if (_root !== root || generation !== _panelMountGeneration) return false;
         logger.error(`[Panel] render failed at stage="${failedStage}":`, error);
         if (error?.stack) logger.error('[Panel] stack:', error.stack);
-        renderPanelError(error, failedStage);
+        renderPanelError();
         return false;
     }
 }

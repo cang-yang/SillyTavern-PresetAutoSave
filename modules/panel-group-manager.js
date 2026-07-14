@@ -51,6 +51,7 @@ const ORGANIZATION_STATE_KEYS = Object.freeze([
 // 弹窗状态（模块级）
 // =====================================================
 let _groupingManagerPopup = null;
+let _groupingManagerRoot = null;
 
 // --- 模块级状态：分组管理弹窗运行时数据 ---
 let _gmOverrides = {};
@@ -203,16 +204,18 @@ function renderModernGroupingHTML(nodes) {
         ].filter(Boolean).join('');
         return `<section class="pas-gm-series${expanded ? '' : ' collapsed'}${indent ? ' pas-gm-nested' : ''}"
             data-series-key="${escapeAttr(node.key)}" data-automatic-name="${escapeAttr(automaticName)}" data-customized="${node.customized ? '1' : '0'}" data-depth="${indent}" data-depth-exceeded="${depthExceeded ? '1' : '0'}" data-drop-label="${escapeAttr(t('Grouping Drag Hint'))}" style="--pas-gm-depth:${indent}"${isCustom ? ' data-custom-group="1"' : ''}>
-            <div class="pas-gm-series-header" role="button" tabindex="0" aria-expanded="${expanded}">
+            <div class="pas-gm-series-header">
                 ${relationship}
-                <span class="pas-gm-series-icon"><i class="fa-regular fa-folder${expanded ? '-open' : ''}"></i></span>
                 ${nestingEnabled ? `<span class="pas-gm-drag-handle" draggable="true" title="${escapeAttr(t('Grouping Drag Handle Title'))}"><i class="fa-solid fa-grip-vertical"></i></span>` : ''}
-                <span class="pas-gm-series-name" title="${escapeAttr(nameTitle)}">${escapeHtml(node.displayName)}</span>
+                <button class="pas-gm-series-toggle" type="button" aria-expanded="${expanded}">
+                    <span class="pas-gm-series-icon"><i class="fa-regular fa-folder${expanded ? '-open' : ''}"></i></span>
+                    <span class="pas-gm-series-name" title="${escapeAttr(nameTitle)}">${escapeHtml(node.displayName)}</span>
+                    <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
+                </button>
                 <button class="pas-gm-rename-btn" type="button" aria-label="${escapeAttr(t('Grouping Rename Inline', { name: node.displayName }))}" title="${escapeAttr(t('Grouping Series Menu Rename'))}"><i class="fa-solid fa-pen"></i></button>
                 ${isCustom ? `<span class="pas-gm-origin" title="${escapeAttr(t('Grouping Custom Badge'))}"><i class="fa-solid fa-wand-magic-sparkles"></i></span>` : ''}
                 <span class="pas-gm-series-count">${node.items.length}</span>
                 <button class="pas-gm-series-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Group Actions'))}"><i class="fa-solid fa-ellipsis"></i></button>
-                <i class="fa-solid fa-chevron-down pas-gm-chevron"></i>
             </div>
             <div class="pas-gm-series-body">${renderModernPresetRows(node)}</div>
             <div class="pas-gm-mobile-actions">${mobileActions}</div>
@@ -643,6 +646,39 @@ function visibleGroupingNames(container) {
     }));
 }
 
+function normalizePresetNames(names) {
+    const unique = new Map();
+    for (const name of Array.isArray(names) ? names : []) {
+        if (typeof name !== 'string' || !name.trim()) continue;
+        const normalized = name.trim();
+        const key = normalized.toLocaleLowerCase();
+        if (!unique.has(key)) unique.set(key, normalized);
+    }
+    return [...unique.values()].sort((a, b) => a.localeCompare(b));
+}
+
+function renderCurrentGroupingManager() {
+    const { groups } = buildGroupingData();
+    const settings = getSettings();
+    if (!settings.nestingEnabled) return renderModernGroupingHTML(normalizeGroupingNodes(groups));
+
+    const rootNodes = buildNestedGroupTree(
+        _gmAllNames,
+        _gmOverrides,
+        settings.groupingTree || {},
+        settings.nestingMaxDepth,
+        settings.groupingSeriesAliases || {},
+    );
+    return renderModernGroupingHTML(flattenGroupingNodes(rootNodes));
+}
+
+function prepareGroupingManager(panelCtx, presetNames) {
+    clearGroupingManagerState();
+    _gmPanelCtx = panelCtx || null;
+    _gmAllNames = normalizePresetNames(presetNames);
+    return _gmAllNames.length ? renderCurrentGroupingManager() : '';
+}
+
 function restoreGroupAlias(seriesKey, container) {
     const keys = ['groupingSeriesAliases'];
     const before = captureOrganizationState(keys);
@@ -654,13 +690,13 @@ function restoreGroupAlias(seriesKey, container) {
     recordOrganizationChange('Grouping Action Restore Name', keys, before, container);
     refreshTakeover({ force: true });
     refreshGroupingUI(container);
-    container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-header`)?.focus();
+    container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-toggle`)?.focus();
 }
 
 function beginInlineRename(seriesKey, container) {
     const card = [...container.querySelectorAll('.pas-gm-series')]
         .find(item => item.getAttribute('data-series-key') === seriesKey);
-    const header = card?.querySelector('.pas-gm-series-header');
+    const header = card?.querySelector('.pas-gm-series-toggle');
     const nameElement = card?.querySelector('.pas-gm-series-name');
     const trigger = card?.querySelector('.pas-gm-rename-btn');
     if (!card || !header || !nameElement || !trigger || card.querySelector('.pas-gm-name-editor')) return;
@@ -729,7 +765,7 @@ function beginInlineRename(seriesKey, container) {
             recordOrganizationChange('Grouping Action Rename Group', keys, before, container);
             refreshTakeover({ force: true });
             refreshGroupingUI(container);
-            container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-header`)?.focus();
+            container.querySelector(`[data-series-key="${CSS.escape(seriesKey)}"] .pas-gm-series-toggle`)?.focus();
         },
     });
     confirmFromTrigger = () => controller.commit(input.value);
@@ -1026,7 +1062,7 @@ function bindDragEvents(container) {
         if (!key || !card.classList.contains('collapsed')) return;
         _gmExpandedKeys.add(key);
         card.classList.remove('collapsed');
-        card.querySelector('.pas-gm-series-header')?.setAttribute('aria-expanded', 'true');
+        card.querySelector('.pas-gm-series-toggle')?.setAttribute('aria-expanded', 'true');
         const icon = card.querySelector('.pas-gm-series-icon i');
         icon?.classList.remove('fa-folder');
         icon?.classList.add('fa-folder-open');
@@ -1452,22 +1488,15 @@ function bindClickEvents(container) {
     });
 
     // --- 折叠/展开系列卡片 ---
-    container.querySelectorAll('.pas-gm-series-header').forEach(header => {
-        const toggle = (e) => {
-            if (e.target.closest('.pas-gm-menu-btn, .pas-gm-series-menu-btn, .pas-gm-rename-btn, .pas-gm-name-editor, .pas-gm-mobile-actions')) return;
-            const series = header.closest('.pas-gm-series');
+    container.querySelectorAll('.pas-gm-series-toggle').forEach(toggleButton => {
+        toggleButton.onclick = () => {
+            const series = toggleButton.closest('.pas-gm-series');
             const key = series?.getAttribute('data-series-key');
             if (!key) return;
             if (_gmExpandedKeys.has(key)) _gmExpandedKeys.delete(key);
             else _gmExpandedKeys.add(key);
             refreshGroupingUI(container);
         };
-        header.addEventListener('click', toggle);
-        header.addEventListener('keydown', e => {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            e.preventDefault();
-            toggle(e);
-        });
     });
     // --- 右键菜单（同预设级 ⋯ 菜单） ---
     container.querySelectorAll('.pas-gm-preset').forEach(presetEl => {
@@ -1507,6 +1536,49 @@ function bindGroupingEvents(container) {
     bindMenuEvents(container);
 }
 
+/** Mount the production grouping controller into a caller-owned host. */
+export function mountGroupingManager(host, {
+    panelCtx = null,
+    presetNames = null,
+    render = true,
+} = {}) {
+    if (!host || typeof host.querySelector !== 'function') {
+        throw new TypeError('mountGroupingManager requires a DOM host element');
+    }
+    if (_groupingManagerRoot) throw new Error('A grouping manager is already mounted');
+
+    if (render) {
+        const names = presetNames ?? getAllPresetNames();
+        host.innerHTML = prepareGroupingManager(panelCtx, names);
+    }
+    const root = host.matches?.('.pas-gm-popup') ? host : host.querySelector('.pas-gm-popup');
+    if (!root) throw new Error('Grouping manager markup did not render a root element');
+
+    _groupingManagerRoot = root;
+    bindGroupingEvents(root);
+    let disposed = false;
+    return Object.freeze({
+        root,
+        dispose() {
+            if (disposed) return false;
+            disposed = true;
+            return disposeGroupingManagerMount(root);
+        },
+    });
+}
+
+export function disposeGroupingManagerMount(root = _groupingManagerRoot) {
+    if (!_groupingManagerRoot || (root && root !== _groupingManagerRoot)) return false;
+    const mountedRoot = _groupingManagerRoot;
+    _groupingManagerRoot = null;
+    mountedRoot.onkeydown = null;
+    mountedRoot.replaceChildren();
+    _gmAllNames = [];
+    _gmPanelCtx = null;
+    clearGroupingManagerState();
+    return true;
+}
+
 // =====================================================
 // 分组管理弹窗主入口
 // =====================================================
@@ -1520,7 +1592,7 @@ function bindGroupingEvents(container) {
  */
 export async function showGroupingManager(panelCtx) {
     if (_groupingManagerPopup) return;
-    _gmPanelCtx = panelCtx;
+    let presetNames = [];
     _pendingCustomGroups.clear(); // AQ-1: 每次打开弹窗清空临时空分组
     _gmOrganizationHistory.clear();
 
@@ -1528,41 +1600,18 @@ export async function showGroupingManager(panelCtx) {
     // 不再从快照补充——旧逻辑因为 getAllPresetNames() 返回数字索引导致
     // 快照中的真实预设名全被当作"额外"名字加入，造成重复和混乱。
     // 分组管理器只管理当前存在的预设，已删除预设不在此显示。
-    _gmAllNames = [];
     try {
-        const names = getAllPresetNames();
-        if (Array.isArray(names)) {
-            const dedup = new Set();
-            for (const n of names) {
-                if (!n || typeof n !== 'string') continue;
-                const lk = n.toLowerCase();
-                if (!dedup.has(lk)) {
-                    dedup.add(lk);
-                    _gmAllNames.push(n);
-                }
-            }
-        }
+        presetNames = getAllPresetNames();
     } catch (e) {
         logger.warn('[showGroupingManager] getAllPresetNames failed:', e);
     }
 
-    _gmAllNames.sort((a, b) => a.localeCompare(b));
+    const html = prepareGroupingManager(panelCtx, presetNames);
     logger.debug(`[showGroupingManager] ${_gmAllNames.length} presets from getAllPresetNames()`);
 
     if (_gmAllNames.length === 0) {
         toast.info(t('Grouping Empty Series'));
         return;
-    }
-
-    const { groups } = buildGroupingData();
-    const settings = getSettings();
-    let html;
-    if (settings.nestingEnabled) {
-        const tree = settings.groupingTree || {};
-        const rootNodes = buildNestedGroupTree(_gmAllNames, _gmOverrides, tree, settings.nestingMaxDepth, settings.groupingSeriesAliases || {});
-        html = renderModernGroupingHTML(flattenGroupingNodes(rootNodes));
-    } else {
-        html = renderModernGroupingHTML(normalizeGroupingNodes(groups));
     }
 
     _groupingManagerPopup = createPopupSafe(html, 'DISPLAY', {
@@ -1585,12 +1634,14 @@ export async function showGroupingManager(panelCtx) {
     await new Promise(r => requestAnimationFrame(() => setTimeout(r, DOM_BIND_DELAY_MS)));
 
     const container = document.querySelector('.pas-gm-popup');
-    if (container) {
-        bindGroupingEvents(container);
-    }
+    const managerMount = container ? mountGroupingManager(container, { render: false }) : null;
 
     await promise;
     _groupingManagerPopup = null;
+    if (container && _groupingManagerRoot !== container) {
+        _gmPanelCtx = null;
+        return;
+    }
     _gmOrganizationHistory.clear();
 
     // 弹窗关闭后清理 groupingTree 中的空壳节点
@@ -1625,6 +1676,7 @@ export async function showGroupingManager(panelCtx) {
     if (_gmPanelCtx) {
         try { await _gmPanelCtx.refreshData(); } catch (_) {}
     }
+    managerMount?.dispose();
     _gmPanelCtx = null;
 }
 
