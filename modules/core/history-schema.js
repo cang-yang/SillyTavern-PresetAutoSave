@@ -1,6 +1,16 @@
 import { createChangeSet } from './change-set.js';
+import { stableStringify } from './value-utils.js';
 
 export const HISTORY_SCHEMA_VERSION = 2;
+const DERIVED_V2_FIELDS = new Set([
+    'schemaVersion',
+    'canonicalHash',
+    'changeSet',
+    'cause',
+    'transactionId',
+    'parentSnapshotId',
+    'saveStatus',
+]);
 
 function compactChangeSet(parentPreset, preset) {
     if (!parentPreset) {
@@ -51,6 +61,11 @@ export function verifyMigratedSnapshotList(legacy, migrated) {
         const before = legacy[index] ?? {};
         const after = migrated[index] ?? {};
         const label = before.id || `index ${index}`;
+        for (const field of Object.keys(before).filter(field => !DERIVED_V2_FIELDS.has(field))) {
+            if (stableStringify(before[field]) !== stableStringify(after[field])) {
+                errors.push(`${label}: content mismatch (${field})`);
+            }
+        }
         if (before.id !== after.id) errors.push(`${label}: id mismatch`);
         if (before.apiId !== after.apiId) errors.push(`${label}: apiId mismatch`);
         if (before.presetName !== after.presetName) errors.push(`${label}: presetName mismatch`);

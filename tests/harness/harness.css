@@ -74,7 +74,16 @@ body.pas-light {
     line-height: 1;
 }
 .fa-clock-rotate-left::before { content: "↶"; }
-.fa-camera::before { content: "●"; }
+.fa-camera::before {
+    content: "";
+    width: 1em;
+    height: .72em;
+    min-width: 1em;
+    border: 2px solid currentColor;
+    border-radius: .16em;
+    background: radial-gradient(circle, currentColor 0 24%, transparent 29%);
+    vertical-align: -.04em;
+}
 .fa-ellipsis::before { content: "•••"; letter-spacing: -2px; }
 .fa-list::before { content: "☷"; }
 .fa-bug::before { content: "◇"; }

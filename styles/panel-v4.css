@@ -107,6 +107,7 @@ body.pas-light .pas-panel {
     --pas-v4-text: #202436;
     --pas-v4-text-muted: #697086;
     --pas-v4-text-faint: #9299aa;
+    --pas-v4-danger: #b42318;
     --pas-v4-accent-readable: #5b21b6;
     --pas-v4-primary-start: #6d28d9;
     --pas-v4-primary-end: #5b21b6;
@@ -118,6 +119,23 @@ body.pas-light .pas-panel {
 }
 
 .pas-panel [hidden] { display: none !important; }
+
+.pas-panel .pas-empty {
+    color: var(--pas-v4-text-muted);
+}
+
+.pas-panel .pas-empty-hint {
+    opacity: 1;
+}
+
+.pas-panel .pas-panel-error .pas-empty-text {
+    color: var(--pas-v4-danger);
+}
+
+.pas-panel .pas-panel-error .pas-empty-hint {
+    color: var(--pas-v4-text);
+    opacity: 1;
+}
 
 .pas-panel button,
 .pas-panel input,

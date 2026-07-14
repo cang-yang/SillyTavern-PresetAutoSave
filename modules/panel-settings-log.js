@@ -23,7 +23,7 @@ import {
     confirmSafe, toast, t,
     escapeHtml, escapeAttr,
 } from './compatibility.js';
-import { saveNow, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
+import { saveNowDetailed, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { forceReseedSnapshots, refreshTakeover } from './preset-takeover.js';
 import { chooseHistoryImportMode } from './import-preview.js';
 
@@ -516,15 +516,21 @@ export async function onSnapshotNow(panelCtx) {
     try {
         // 重置 lastSavedHash，保证强制写入一份新快照（即使内容看起来"没变"）
         resetLastSavedHash();
-        const snap = await saveNow();
+        const outcome = await saveNowDetailed();
         const tracking = getCurrentTracking();
-        if (snap) {
+        if (outcome.status === 'committed') {
+            const snap = outcome.snapshot;
             toast.success(t('Snapshot Saved', { name: snap.presetName }));
             logger.info(`[Manual snapshot] [${snap.apiId}] ${snap.presetName} hash=${snap.hash}`);
-        } else {
-            // saveNow 内部已 _setStatus，且会在合并窗口/未变化时返回 null
+        } else if (outcome.status === 'unchanged') {
             toast.info(t('Snapshot Skipped'));
             logger.info(`[Manual snapshot] skipped tracking=${JSON.stringify(tracking)}`);
+        } else if (outcome.status === 'failed' || outcome.status === 'partial') {
+            // executeSaveRequest already surfaced the persistence error. Do not
+            // overwrite it with the unrelated "unchanged" explanation.
+            logger.warn(`[Manual snapshot] ${outcome.status} tracking=${JSON.stringify(tracking)}`);
+        } else {
+            logger.info(`[Manual snapshot] unavailable tracking=${JSON.stringify(tracking)}`);
         }
         await panelCtx.refreshData();
     } catch (e) {

@@ -31,6 +31,13 @@ function lightThemeToken(name) {
     return value;
 }
 
+function darkThemeToken(name) {
+    const block = panelCss.match(/\.pas-panel\s*\{(?<declarations>[\s\S]*?)\n\}/)?.groups?.declarations ?? '';
+    const value = block.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, 'i'))?.[1];
+    assert.ok(value, `dark theme must define ${name} as a six-digit hex color`);
+    return value;
+}
+
 test('light theme active controls retain WCAG AA text contrast', () => {
     const foreground = lightThemeToken('--pas-v4-accent-readable');
     const surface = lightThemeToken('--pas-v4-surface-raised');
@@ -48,4 +55,14 @@ test('light theme primary action keeps white text readable across its gradient',
     assert.ok(contrastRatio(white, start) >= 4.5);
     assert.ok(contrastRatio(white, end) >= 4.5);
     assert.match(panelCss, /\.pas-primary-action\s*\{[^}]*linear-gradient\(135deg,\s*var\(--pas-v4-primary-start\),\s*var\(--pas-v4-primary-end\)\)/s);
+});
+
+test('empty, loading and recovery text use readable semantic colors in both themes', () => {
+    assert.ok(contrastRatio(lightThemeToken('--pas-v4-text-muted'), lightThemeToken('--pas-v4-bg')) >= 4.5);
+    assert.ok(contrastRatio(darkThemeToken('--pas-v4-text-muted'), darkThemeToken('--pas-v4-bg')) >= 4.5);
+    assert.ok(contrastRatio(lightThemeToken('--pas-v4-danger'), lightThemeToken('--pas-v4-bg')) >= 4.5);
+    assert.ok(contrastRatio(darkThemeToken('--pas-v4-danger'), darkThemeToken('--pas-v4-bg')) >= 4.5);
+    assert.match(panelCss, /\.pas-panel \.pas-empty\s*\{[^}]*color:\s*var\(--pas-v4-text-muted\)/s);
+    assert.match(panelCss, /\.pas-panel \.pas-panel-error \.pas-empty-text\s*\{[^}]*color:\s*var\(--pas-v4-danger\)/s);
+    assert.match(panelCss, /\.pas-panel \.pas-panel-error \.pas-empty-hint\s*\{[^}]*opacity:\s*1/s);
 });

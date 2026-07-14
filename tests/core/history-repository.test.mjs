@@ -4,11 +4,12 @@ import assert from 'node:assert/strict';
 import { HistoryRepository, migrationMarkerKey } from '../../modules/core/history-repository.js';
 
 class MemoryStore {
-    constructor(entries = {}, { failSet = false, failSetKeyOnce = null, failRemove = false } = {}) {
+    constructor(entries = {}, { failSet = false, failSetKeyOnce = null, failRemove = false, mutateSet = null } = {}) {
         this.map = new Map(Object.entries(structuredClone(entries)));
         this.failSet = failSet;
         this.failSetKeyOnce = failSetKeyOnce;
         this.failRemove = failRemove;
+        this.mutateSet = mutateSet;
     }
     async getItem(key) { return structuredClone(this.map.get(key) ?? null); }
     async setItem(key, value) {
@@ -17,7 +18,9 @@ class MemoryStore {
             this.failSetKeyOnce = null;
             throw new Error('targeted write failed');
         }
-        this.map.set(key, structuredClone(value));
+        const storedValue = structuredClone(value);
+        this.mutateSet?.(key, storedValue);
+        this.map.set(key, storedValue);
         return value;
     }
     async removeItem(key) {
@@ -83,6 +86,47 @@ test('writes v2 envelopes and deterministic parent links', async () => {
     assert.equal(stored[1].parentSnapshotId, null);
     assert.equal(stored[0].canonicalHash, 'new-hash');
     assert.equal((await repository.getItem(key))[0].schemaVersion, 2);
+});
+
+test('active writes may recompute derived v2 metadata while preserving snapshot content', async () => {
+    const key = 'openai::Demo';
+    const v2 = new MemoryStore();
+    const repository = new HistoryRepository({ legacyStore: new MemoryStore(), v2Store: v2 });
+    await repository.setItem(key, [legacySnapshot()]);
+    const current = await repository.getItem(key);
+    const updated = [{
+        ...current[0],
+        timestamp: 20,
+        hash: 'updated-hash',
+        preset: { temperature: 0.8, prompts: [] },
+    }];
+
+    const written = await repository.setItem(key, updated);
+
+    assert.equal(written[0].preset.temperature, 0.8);
+    assert.equal(written[0].canonicalHash, 'updated-hash');
+    assert.equal(written[0].transactionId, 'tx:snap-1:20');
+});
+
+test('migration rejects a store that changes snapshot content while preserving metadata', async () => {
+    const key = 'openai::Demo';
+    const legacyValue = [legacySnapshot()];
+    const legacy = new MemoryStore({ [key]: legacyValue });
+    const v2 = new MemoryStore({}, {
+        mutateSet(storedKey, value) {
+            if (storedKey === key) value[0].preset.temperature = 999;
+        },
+    });
+    const errors = [];
+    const repository = new HistoryRepository({ legacyStore: legacy, v2Store: v2, onError: error => errors.push(error) });
+
+    const result = await repository.getItem(key);
+
+    assert.deepEqual(result, legacyValue, 'failed verification must fall back to the untouched legacy bucket');
+    assert.equal(await v2.getItem(key), null, 'corrupted v2 data must be rolled back');
+    assert.equal(await v2.getItem(migrationMarkerKey(key)), null, 'a migrated marker must not be published');
+    assert.equal(errors.length, 1);
+    assert.match(errors[0].message, /preset|content/i);
 });
 
 test('restores the previous committed bucket when publishing its marker fails', async () => {

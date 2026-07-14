@@ -43,6 +43,7 @@ import { observeNativePresetSaves } from './core/native-preset-save-observer.js'
 import { resolveNativePresetSaveTarget } from './core/native-preset-save-target.js';
 import { PRESET_WATCH_SELECTORS, isInsidePresetWatchArea } from './core/preset-dom-watch.js';
 import { getSaveStatus, setSaveStatus } from './core/save-status.js';
+import { classifyCoordinatorResult } from './core/save-outcome.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -997,9 +998,9 @@ function scheduleFailedSaveRetry(request) {
     }, delay);
 }
 
-async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null) {
+async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null, { detailed = false } = {}) {
     if (!_validateSaveConditions(reason, explicitTarget)) {
-        return null;
+        return detailed ? { status: 'unavailable' } : null;
     }
 
     // 在进入队列前冻结目标和数据。即使等待期间用户切换预设，
@@ -1007,13 +1008,13 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
     await new Promise(resolve => setTimeout(resolve, 0));
     // teardown/disable may run while the capture deferral yields to the event loop.
     // Revalidate here so an old callback cannot create a fresh coordinator afterwards.
-    if (!_validateSaveConditions(reason, explicitTarget)) return null;
+    if (!_validateSaveConditions(reason, explicitTarget)) return detailed ? { status: 'unavailable' } : null;
     const payload = _buildSavePayload(reason, explicitTarget);
-    if (!payload) return null;
-    return await submitSavePayload(payload, trigger, reason);
+    if (!payload) return detailed ? { status: 'unavailable' } : null;
+    return await submitSavePayload(payload, trigger, reason, { detailed });
 }
 
-async function submitSavePayload(payload, trigger, reason) {
+async function submitSavePayload(payload, trigger, reason, { detailed = false } = {}) {
     const key = saveTargetKey(payload);
     if (!String(reason).startsWith('retry:')) _retryAttemptsByTarget.delete(key);
     const revision = ++_saveRevision;
@@ -1024,19 +1025,20 @@ async function submitSavePayload(payload, trigger, reason) {
         reason,
         revision,
     });
-    if (result.status === 'failed') {
-        logger.error('Save coordinator worker failed:', result.error);
+    const outcome = classifyCoordinatorResult(result);
+    if (outcome.status === 'failed' || outcome.status === 'partial') {
+        logger.error('Save coordinator worker failed:', outcome.error);
         if (sameSaveTarget(payload, { apiId: _currentApiId, presetName: _currentPresetName })) {
             _setStatus('error');
         }
-        scheduleFailedSaveRetry(result.request);
-        return null;
+        scheduleFailedSaveRetry(outcome.request || result.request);
+        return detailed ? outcome : null;
     }
-    if (result.status === 'committed') {
+    if (outcome.status === 'committed' || outcome.status === 'unchanged') {
         _retryAttemptsByTarget.delete(key);
-        return result.value;
+        return detailed ? outcome : outcome.snapshot || null;
     }
-    return null;
+    return detailed ? outcome : null;
 }
 
 async function executeSaveRequest(request) {
@@ -1134,6 +1136,11 @@ async function executeSaveRequest(request) {
 export async function saveNow(trigger = TRIGGER.MANUAL) {
     cancelPendingSave();
     return await doSave(trigger, 'manual');
+}
+
+export async function saveNowDetailed(trigger = TRIGGER.MANUAL) {
+    cancelPendingSave();
+    return await doSave(trigger, 'manual', null, { detailed: true });
 }
 
 async function recordNativeManualSave({ apiId, name, preset }) {

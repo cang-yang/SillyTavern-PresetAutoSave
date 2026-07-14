@@ -49,6 +49,8 @@ test('browser harness loads production styles and runs the production panel cont
     assert.doesNotMatch(app, /translate\('Panel Stats'/);
     assert.match(harnessCss, /\.fa-solid::before\s*\{/);
     assert.match(harnessCss, /\.fa-ellipsis::before/);
+    assert.match(harnessCss, /\.fa-camera::before\s*\{[^}]*border:\s*2px solid currentColor/s);
+    assert.doesNotMatch(harnessCss, /\.fa-camera::before\s*\{\s*content:\s*"●"/);
 });
 
 test('harness options are allow-listed and fail back to stable defaults', () => {
