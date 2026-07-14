@@ -1,4 +1,10 @@
-/* Focused dialogs: backup/import is the first workflow moved into this layer. */
+/* Focused dialog layers for import and grouping workflows. */
+
+/* Group search is a primary mobile locator, so the actual input remains touch-safe. */
+.pas-gm-search,
+.pas-gm-search input {
+    min-height: 44px;
+}
 
 dialog:has(.pas-import-preview),
 .popup:has(.pas-import-preview) {

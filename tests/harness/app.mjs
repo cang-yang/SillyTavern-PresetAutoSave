@@ -418,6 +418,28 @@ async function exerciseGroupingMenus() {
     return result;
 }
 
+async function exerciseGroupingLayout() {
+    if (options.scenario !== 'ordinary') throw new Error('Grouping layout checks require the ordinary scenario');
+    await showGroupManager();
+    const input = groupManagerMount?.root?.querySelector('.pas-gm-search input');
+    const rect = input?.getBoundingClientRect();
+    const audit = evaluateLayoutAudit(collectMetrics());
+    const result = Object.freeze({
+        width: Number((rect?.width || 0).toFixed(2)),
+        height: Number((rect?.height || 0).toFixed(2)),
+        audit,
+    });
+
+    groupManagerMount?.dispose();
+    groupManagerMount = null;
+    document.querySelector('.pas-harness-group-dialog')?.remove();
+
+    if (!audit.passed || result.width < 44 || result.height < 44) {
+        throw new Error(`Grouping search touch target failed: ${JSON.stringify(result)}`);
+    }
+    return result;
+}
+
 async function exerciseCoreOperations() {
     if (options.scenario !== 'ordinary') throw new Error('Core operations require the ordinary scenario');
     operationEvents.length = 0;
@@ -563,6 +585,7 @@ function collectMetrics() {
         '.pas-btn-show-more-snapshots',
         '.pas-import-confirm', '.pas-import-mode-card',
         '.pas-gm-header-actions button', '.pas-gm-rename-btn', '.pas-gm-mobile-actions button',
+        '.pas-gm-search input',
     ].join(',');
     const controls = [...metricsRoot.querySelectorAll('button, input, [role="button"], .pas-import-mode-card')].map(element => {
         const rect = element.getBoundingClientRect();
@@ -628,6 +651,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     showGroupManager,
     exerciseCoreOperations,
     exerciseGroupingMenus,
+    exerciseGroupingLayout,
     exerciseDisclosures,
     setConfirmResult: value => { confirmResult = Boolean(value); },
     operationEvents: () => Object.freeze([...operationEvents]),

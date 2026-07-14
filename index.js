@@ -36,6 +36,7 @@ import { runGroupingSelfTest, parsePresetName, groupNamesBySeries } from './modu
 import { initThemeDetector, teardownThemeDetector } from './modules/theme-detector.js';
 import { runDeleteRecovery } from './modules/core/lifecycle-recovery.js';
 import { RuntimeTimerRegistry } from './modules/core/runtime-timers.js';
+import { createDebugInterface } from './modules/debug-interface.js';
 
 const VERSION = '1.0.0';
 
@@ -537,79 +538,24 @@ export async function onDisable() {
 
     // ============ 调试接口 ============
     if (typeof window !== 'undefined') {
-        window.__pas = {
+        window.__pas = createDebugInterface({
             version: VERSION,
-            ENV,
+            env: ENV,
             showHistoryPanel,
             refreshTakeover,
             logger,
-            // 诊断接口：让用户能在控制台快速自查问题
-            debug: {
-                phase1Done: () => _phase1Done,
-                takeoverDone: () => _takeoverDone,
-                phase2Done: () => _phase2Done,
-                listSeries: () => listSeriesFromNativeSelects(),
-                forceInit: async () => {
-                    await ensureRuntimeReady();
-                    return { phase1: _phase1Done, takeover: _takeoverDone, phase2: _phase2Done };
-                },
-                parse: (name) => parsePresetName(name),
-                group: (names) => groupNamesBySeries(names || [], {}, {}),
-                listAllOptions: () => {
-                    const out = [];
-                    try {
-                        for (const s of document.querySelectorAll('select[data-preset-manager-for]')) {
-                            const apiId = s.getAttribute('data-preset-manager-for');
-                            // P1 fix: select.options 在某些 ST 版本/API 类型下可能为 undefined
-                            const optsCol = (s && s.options) ? Array.from(s.options) : [];
-                            // AK-1 fix: 优先 textContent（真实预设名），而非 value（可能是数组索引）
-                            const opts = optsCol
-                                .map(o => {
-                                    if (!o) return '';
-                                    const text = (typeof o.textContent === 'string') ? o.textContent.trim() : '';
-                                    const val = (typeof o.value === 'string') ? o.value : '';
-                                    return text || val;
-                                })
-                                .filter(Boolean);
-                            out.push({ apiId, count: opts.length, presetNames: opts });
-                        }
-                    } catch (e) {
-                        logger.warn('[debug.listAllOptions] failed:', e);
-                    }
-                    return out;
-                },
-                // ⭐ 数据接管诊断：查看归档 + 手动恢复
-                listArchived: () => getArchiveSummary(),
-                restoreArchives: () => restoreAllFromArchive(),
-                // ⭐ 一键清空所有插件数据并重新种子（用户报告残留数据时使用）
-                fullReset: async () => {
-                    logger.warn('[fullReset] clearing all snapshots + archives, then re-seeding...');
-                    try {
-                        await clearAllSnapshots();
-                        const archivesCleared = await clearAllArchived();
-                        if (!archivesCleared) throw new Error('Archive store did not confirm clear');
-                    } catch (e) {
-                        logger.error('[fullReset] clear failed; reseed aborted to avoid mixed old/new state:', e);
-                        return { ok: false, error: e?.message || String(e) };
-                    }
-                    logger.info('[fullReset] data cleared, refreshing takeover and reseeding...');
-                    try {
-                        refreshTakeover();
-                        await forceReseedSnapshots();
-                    } catch (e) {
-                        logger.error('[fullReset] reseed failed:', e);
-                        return { ok: false, error: e?.message || String(e), cleared: true };
-                    }
-                    logger.success('[fullReset] complete · 请刷新页面或重新打开历史面板');
-                    return { ok: true };
-                },
-                // ⭐ 仅重新种子快照（不清数据）
-                reseed: () => forceReseedSnapshots(),
-                // ⭐ 显示当前面板看到的预设列表（用于诊断"乱七八糟数字"等问题）
-                listPanelPresets: () => listAllPresetsIncludingDetached(),
-            },
-        };
+            phaseState: () => ({ phase1: _phase1Done, takeover: _takeoverDone, phase2: _phase2Done }),
+            ensureRuntimeReady,
+            listSeries: listSeriesFromNativeSelects,
+            parsePresetName,
+            groupNamesBySeries,
+            listArchived: getArchiveSummary,
+            restoreArchives: restoreAllFromArchive,
+            reseed: forceReseedSnapshots,
+            listPanelPresets: listAllPresetsIncludingDetached,
+            documentObject: document,
+        });
         logger.debug('Debug interface available at window.__pas');
-        logger.info('Tip: window.__pas.debug.fullReset() 一键清空+重新种子（推荐残留数据时使用） · window.__pas.debug.listPanelPresets() 查看面板能看到的预设 · window.__pas.debug.forceInit() 强制启动');
+        logger.info('Tip: window.__pas.debug.reseed() 补种缺失快照 · window.__pas.debug.listPanelPresets() 查看面板能看到的预设 · window.__pas.debug.forceInit() 强制启动');
     }
 })();
