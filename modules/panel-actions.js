@@ -188,6 +188,13 @@ export async function handleListClick(e, panelCtx) {
         // 优先做原地切换：body 已渲染过则直接切类即可
         const body = group.querySelector(':scope > .pas-series-body');
         if (body) {
+            // Collapsed series intentionally omit their version markup. On the
+            // first expansion, rebuild the list so native presets (including
+            // zero-snapshot presets) are hydrated before the body is shown.
+            if (!wasExpanded && body.childElementCount === 0) {
+                renderListTab();
+                return;
+            }
             setDisclosureExpanded(group, body, !wasExpanded, {
                 headerSelector: '.pas-series-header',
                 chevronSelector: '.pas-series-chevron',

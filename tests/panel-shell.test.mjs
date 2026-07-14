@@ -57,7 +57,7 @@ test('contextual UI starts collapsed and markup contains no mojibake sentinel', 
     assert.doesNotMatch(html, /鈥\?/);
 });
 
-test('manifest loads the layered panel stylesheet and mobile keeps tab labels', async () => {
+test('manifest loads the layered panel stylesheet and mobile keeps labels with scoped touch targets', async () => {
     const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
     const indexCss = await readFile(new URL('../styles/index.css', import.meta.url), 'utf8');
     const panelCss = await readFile(new URL('../styles/panel-v4.css', import.meta.url), 'utf8');
@@ -81,7 +81,8 @@ test('manifest loads the layered panel stylesheet and mobile keeps tab labels', 
     assert.match(panelCss, /height:\s*100svh\s*!important/);
     assert.match(panelCss, /@media \(hover:\s*none\), \(pointer:\s*coarse\)/);
     assert.match(responsiveCss, /@media \(max-width:\s*768px\)[\s\S]*?\.pas-panel \.pas-tab > span:not\(\.pas-tab-badge\)[\s\S]*?display:\s*inline\s*!important/);
-    assert.match(responsiveCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel button\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/s);
+    assert.match(responsiveCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel \.pas-primary-action,[\s\S]*?\.pas-panel \.pas-version-header,[\s\S]*?min-height:\s*44px;/s);
+    assert.doesNotMatch(responsiveCss, /\.pas-panel button\s*\{[^}]*min-(?:width|height):\s*44px/s);
     assert.match(responsiveCss, /\.pas-panel \.pas-card-actions,[\s\S]*?flex-wrap:\s*wrap/);
     assert.match(responsiveCss, /\.pas-panel \.pas-log-actions \.pas-mini-btn\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/s);
     assert.match(panelRenderer, /pas-series-current-node/);

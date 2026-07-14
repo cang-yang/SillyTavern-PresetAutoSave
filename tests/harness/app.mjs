@@ -631,11 +631,62 @@ async function exerciseDisclosures() {
     });
 }
 
+async function exerciseUnusedNativeSeries() {
+    if (options.scenario !== 'ordinary' || options.view !== 'series') {
+        throw new Error('Unused native series checks require the ordinary series scenario');
+    }
+
+    const marker = '未使用预设验证';
+    const names = [`${marker} V1.0`, `${marker} V2.0`];
+    const addedOptions = [];
+    let result;
+
+    try {
+        for (const name of names) {
+            if ([...nativeSelect.options].some(option => option.textContent === name)) continue;
+            const option = document.createElement('option');
+            option.value = String(nativeSelect.options.length);
+            option.textContent = name;
+            nativeSelect.append(option);
+            addedOptions.push(option);
+        }
+
+        await remountProductionPanel();
+        let group = [...panelRoot.querySelectorAll('.pas-series-group')]
+            .find(candidate => candidate.textContent.includes(marker));
+        const header = group?.querySelector(':scope > .pas-series-header');
+        if (!group || !header) throw new Error('Unused native series was not rendered');
+        if (header.getAttribute('aria-expanded') !== 'true') header.click();
+        await nextPaint();
+
+        group = [...panelRoot.querySelectorAll('.pas-series-group')]
+            .find(candidate => candidate.textContent.includes(marker));
+        const body = group?.querySelector(':scope > .pas-series-body');
+        const versions = [...(body?.querySelectorAll(':scope > .pas-version-group') || [])];
+        result = Object.freeze({
+            expanded: group?.querySelector(':scope > .pas-series-header')?.getAttribute('aria-expanded') === 'true',
+            bodyVisible: body?.hidden === false,
+            renderedVersions: versions.length,
+            emptyStates: versions.filter(version => version.querySelector('.pas-tag-empty')).length,
+            collapsedActions: versions.filter(version => version.querySelector('.pas-version-actions')).length,
+        });
+    } finally {
+        for (const option of addedOptions) option.remove();
+        await remountProductionPanel();
+    }
+
+    if (!result.expanded || !result.bodyVisible || result.renderedVersions !== names.length
+        || result.emptyStates !== names.length || result.collapsedActions !== 0) {
+        throw new Error(`Unused native series hydration failed: ${JSON.stringify(result)}`);
+    }
+    return result;
+}
+
 function collectMetrics() {
     const metricsRoot = document.querySelector('.pas-harness-dialog') || app;
     const importantSelector = [
         '.pas-btn-snap', '.pas-tools-trigger', '.pas-tab', '.pas-search',
-        '.pas-view-btn', '.pas-filter', '.pas-btn-restore', '.pas-btn-apply-version',
+        '.pas-view-btn', '.pas-btn-restore', '.pas-btn-apply-version',
         '.pas-btn-show-more-snapshots',
         '.pas-import-confirm', '.pas-import-mode-card',
         '.pas-gm-header-actions button', '.pas-gm-rename-btn', '.pas-gm-mobile-actions button',
@@ -665,6 +716,10 @@ function collectMetrics() {
             const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.2;
             const clippingRoot = element.closest('.pas-filters') || metricsRoot;
             const clippingRect = clippingRoot.getBoundingClientRect();
+            const clippingStyle = getComputedStyle(clippingRoot);
+            const scrollAccessible = clippingRoot.matches('.pas-filters')
+                && clippingRoot.scrollWidth > clippingRoot.clientWidth
+                && ['auto', 'scroll'].includes(clippingStyle.overflowX);
             const leftEdge = Math.max(0, clippingRect.left);
             const rightEdge = Math.min(window.innerWidth, clippingRect.right);
             return {
@@ -672,6 +727,7 @@ function collectMetrics() {
                 text: element.textContent || '',
                 visible: isVisible(element),
                 fullyVisible: rect.left >= leftEdge - 1 && rect.right <= rightEdge + 1,
+                scrollAccessible,
                 singleLine: rect.height <= lineHeight * 1.25,
             };
         });
@@ -683,6 +739,25 @@ function collectMetrics() {
                 ...state,
             };
         });
+    const expandedSeriesContent = [...metricsRoot.querySelectorAll('.pas-series-group')]
+        .map(group => {
+            const header = group.querySelector(':scope > .pas-series-header');
+            if (header?.getAttribute('aria-expanded') !== 'true') return null;
+            const body = group.querySelector(':scope > .pas-series-body');
+            const countText = header.querySelector('.pas-series-version-pill')?.textContent || '';
+            return {
+                selector: `[data-series-key="${group.getAttribute('data-series-key') || ''}"]`,
+                declaredVersions: Number.parseInt(countText.match(/\d+/)?.[0] || '0', 10),
+                renderedVersions: body?.querySelectorAll(':scope > .pas-version-group').length || 0,
+                renderedChildren: body?.querySelectorAll(':scope > .pas-series-group').length || 0,
+            };
+        })
+        .filter(Boolean);
+    const historyFilterRows = new Set(
+        [...metricsRoot.querySelectorAll('#pas-panel-list > .pas-toolbar > .pas-filters .pas-filter')]
+            .filter(isVisible)
+            .map(filter => Math.round(filter.getBoundingClientRect().top)),
+    ).size;
     const renderedView = panelRoot?.querySelector('.pas-series-group')
         ? 'series'
         : panelRoot?.querySelector('.pas-preset-group') ? 'flat' : null;
@@ -709,6 +784,8 @@ function collectMetrics() {
         controls: Object.freeze(controls.map(Object.freeze)),
         requiredLabels: Object.freeze(requiredLabels.map(Object.freeze)),
         disclosures: Object.freeze(disclosures.map(Object.freeze)),
+        expandedSeriesContent: Object.freeze(expandedSeriesContent.map(Object.freeze)),
+        historyFilterRows,
         viewMode,
         footerText,
         hiddenFocusable: Object.freeze(hiddenFocusable),
@@ -732,6 +809,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     exerciseGroupingLayout,
     exerciseHostileTranslations,
     exerciseDisclosures,
+    exerciseUnusedNativeSeries,
     setConfirmResult: value => { confirmResult = Boolean(value); },
     operationEvents: () => Object.freeze([...operationEvents]),
     collectMetrics,

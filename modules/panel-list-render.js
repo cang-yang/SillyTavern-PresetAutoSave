@@ -244,6 +244,13 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     const deletePresetBtn = `<button class="pas-version-delete-btn" data-action="delete-preset" data-preset-name="${safePresetName}" data-api-id="${escapeAttr(ver.apiId)}" title="${escapeAttr(t('Delete Preset Btn'))}" type="button" aria-label="${escapeAttr(t('Delete Preset Btn'))}" ${isCurrent ? 'disabled' : ''}>
             <i class="fa-solid fa-trash-can"></i><span class="pas-action-label">${escapeHtml(t('Delete Preset Btn'))}</span>
         </button>`;
+    const versionActionsHtml = `<div class="pas-version-actions" role="group" aria-label="${escapeAttr(t('Grouping Preset Actions'))}">
+            ${applyBtn}
+            <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
+                <i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Clear History Short'))}</span>
+            </button>
+            ${deletePresetBtn}
+        </div>`;
 
     return `
 <div class="pas-version-group ${isCurrent ? 'pas-version-current' : ''} ${isEmpty ? 'pas-version-empty' : ''} ${ver.archived ? 'pas-version-archived' : ''}" data-version-key="${safeKey}" data-series-key="${safeSeries}" data-preset-name="${safePresetName}">
@@ -265,16 +272,10 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
                 <span class="pas-divider">\u00b7</span>
                 <span class="pas-version-latest" title="${escapeAttr(t('Latest Time'))}">${ver.latestTime ? formatTime(ver.latestTime) : '\u2014'}</span>
             </span>
-            <span class="pas-version-meta-actions">
-                ${applyBtn}
-                <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
-                    <i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Clear History Short'))}</span>
-                </button>
-                ${deletePresetBtn}
-            </span>
         </div>
     </div>
     <div class="pas-version-body"${isExpanded ? '' : ' hidden'}>
+        ${isExpanded ? versionActionsHtml : ''}
         ${isExpanded
             ? (ver.snapshots.length > 0
                 ? snapshotWindow.items.map(s => renderSnapshotCard(s, panelCtx)).join('')
@@ -718,7 +719,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
             // 嵌套模式：使用 inline style 精确控制金色高亮，避免 CSS 后代选择器 .pas-series-current .pas-series-icon
             // 泄漏到平级兄弟节点。不使用 pas-series-current CSS 类。
             const borderLeft = node.depth > 0
-                ? `2px solid ${isCurrent ? 'var(--pas-c-pin)' : 'var(--SmartThemeBorderColor)'}`
+                ? `1px solid ${isCurrent ? 'var(--pas-c-pin)' : 'var(--SmartThemeBorderColor)'}`
                 : 'none';
             const iconStyle = isCurrent ? ' style="color: var(--pas-c-pin)"' : '';
             const pillBgStyle = isCurrent ? ' style="background: rgba(245, 158, 11, 0.16)"' : '';

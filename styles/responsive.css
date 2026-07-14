@@ -10,19 +10,23 @@
 }
 
 @media (max-width: 460px) {
-    .pas-panel button {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
+    .pas-panel .pas-primary-action,
+    .pas-panel .pas-tools-trigger,
+    .pas-panel .pas-tab,
+    .pas-panel .pas-view-btn,
+    .pas-panel .pas-series-header,
+    .pas-panel .pas-version-header,
+    .pas-panel .pas-preset-header,
+    .pas-panel .pas-btn-apply-version,
+    .pas-panel .pas-btn-restore,
+    .pas-panel .pas-btn-show-more-snapshots,
     .pas-panel input.text_pole,
-    .pas-panel select,
-    .pas-panel [role="button"] {
+    .pas-panel select {
         min-height: 44px;
     }
 
     .pas-panel .pas-card-actions,
-    .pas-panel .pas-version-meta-actions,
+    .pas-panel .pas-version-actions,
     .pas-panel .pas-list-actions,
     .pas-panel .pas-batch-toolbar {
         flex-wrap: wrap;

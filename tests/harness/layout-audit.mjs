@@ -68,7 +68,7 @@ export function evaluateLayoutAudit(metrics) {
                 `Required control label “${String(label?.text || '').trim()}” is not visible.`,
                 String(label?.selector || ''),
             ));
-        } else if (label?.fullyVisible === false) {
+        } else if (label?.fullyVisible === false && label?.scrollAccessible !== true) {
             findings.push(finding(
                 'required-label-clipped',
                 'error',
@@ -103,6 +103,31 @@ export function evaluateLayoutAudit(metrics) {
             'Disclosure aria-expanded contradicts the visibility of its controlled content.',
             String(disclosure.selector || ''),
         ));
+    }
+
+    for (const series of Array.isArray(metrics.expandedSeriesContent) ? metrics.expandedSeriesContent : []) {
+        const declaredVersions = Number(series?.declaredVersions);
+        const renderedVersions = Number(series?.renderedVersions);
+        const renderedChildren = Number(series?.renderedChildren);
+        if (declaredVersions <= 0 || renderedVersions > 0 || renderedChildren > 0) continue;
+        findings.push(finding(
+            'expanded-series-empty',
+            'error',
+            `Expanded series declares ${declaredVersions} versions but renders no preset rows.`,
+            String(series?.selector || ''),
+        ));
+    }
+
+    if (Number.isFinite(viewportWidth) && viewportWidth <= COMPACT_MAX_WIDTH) {
+        const historyFilterRows = Number(metrics.historyFilterRows);
+        if (Number.isFinite(historyFilterRows) && historyFilterRows > 1) {
+            findings.push(finding(
+                'compact-filter-wrap',
+                'error',
+                `History filters occupy ${historyFilterRows} rows; compact layouts require one scrollable row.`,
+                '#pas-panel-list > .pas-toolbar > .pas-filters',
+            ));
+        }
     }
 
     if (metrics.footerText && typeof metrics.footerText === 'object') {

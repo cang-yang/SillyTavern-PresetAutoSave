@@ -40,6 +40,8 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /previousSnapshotPreserved/);
     assert.doesNotMatch(app, /renderModernGroupingHTML/);
     assert.match(app, /exerciseDisclosures/);
+    assert.match(app, /exerciseUnusedNativeSeries/);
+    assert.match(app, /expandedSeriesContent/);
     assert.match(app, /exerciseGroupingMenus/);
     assert.match(app, /exerciseGroupingLayout/);
     assert.match(app, /exerciseHostileTranslations/);

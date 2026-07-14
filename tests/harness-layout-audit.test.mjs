@@ -94,6 +94,25 @@ test('required control labels must be fully visible instead of clipped by a scro
     assert.equal(result.findings[0].code, 'required-label-clipped');
 });
 
+test('offscreen filter labels remain valid when their strip is intentionally scrollable', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 360, height: 800 },
+        documentWidth: 360,
+        requiredLabels: [
+            {
+                selector: '.pas-filter[data-filter="week"] > span',
+                text: '本周',
+                visible: true,
+                fullyVisible: false,
+                scrollAccessible: true,
+                singleLine: true,
+            },
+        ],
+    }));
+
+    assert.equal(result.passed, true);
+});
+
 test('compact footer statistics must meet normal-text size and contrast', () => {
     const result = evaluateLayoutAudit(cleanMetrics({
         viewport: { width: 360, height: 800 },
@@ -130,6 +149,28 @@ test('visible disclosure state must agree with aria-expanded', () => {
     assert.equal(result.findings.length, 1);
     assert.equal(result.findings[0].code, 'disclosure-state-mismatch');
     assert.equal(result.findings[0].selector, '.pas-series-header');
+});
+
+test('expanded series with a declared version count cannot expose an empty body', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        expandedSeriesContent: [
+            { selector: '[data-series-key="unused"]', declaredVersions: 2, renderedVersions: 0, renderedChildren: 0 },
+        ],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings[0].code, 'expanded-series-empty');
+});
+
+test('compact history filters remain one row instead of consuming the record viewport', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 390, height: 844 },
+        documentWidth: 390,
+        historyFilterRows: 2,
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings[0].code, 'compact-filter-wrap');
 });
 
 test('view controls, renderer, and grouping tools must describe the same mode', () => {
