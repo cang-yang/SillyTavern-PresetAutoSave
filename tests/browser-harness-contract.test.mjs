@@ -35,6 +35,9 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /groupManagerMount\?\.dispose/);
     assert.match(app, /showGroupManager/);
     assert.match(app, /exerciseCoreOperations/);
+    assert.match(app, /countIncreased/);
+    assert.match(app, /newIdCreated/);
+    assert.match(app, /previousSnapshotPreserved/);
     assert.doesNotMatch(app, /renderModernGroupingHTML/);
     assert.match(app, /exerciseDisclosures/);
     assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true \}\)/);

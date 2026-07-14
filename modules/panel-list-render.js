@@ -368,7 +368,7 @@ function renderSeriesGroup(info, panelCtx) {
         </div>
     </div>
     <div class="pas-series-body"${isExpanded ? '' : ' hidden'}>
-        ${info.versions.map(v => renderVersionGroup(v, seriesKey, info.versions, panelCtx)).join('')}
+        ${isExpanded ? info.versions.map(v => renderVersionGroup(v, seriesKey, info.versions, panelCtx)).join('') : ''}
     </div>
 </div>`;
 }
@@ -861,23 +861,23 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
             // 过滤空壳节点：无预设、无快照、无子组数据 → 跳过
             // 递归子节点（先递归，获取子节点 HTML）
             let childrenHtml = '';
-            if (hasChildren) {
+            if (isExpanded && hasChildren) {
                 childrenHtml = node.children.map(child => renderNode(child)).join('');
             }
 
-            if (!hasItems && !childrenHtml.trim() && !seriesData) return '';
+            if (!hasItems && !hasChildren && !seriesData) return '';
 
             // 构建这个节点下的版本列表
             let versionsHtml = '';
             // 元信息
             let versionCount = 0, snapshotCount = 0, totalSize = 0, latestTime = 0;
-            if (seriesData && seriesData.versions && seriesData.versions.length > 0) {
+            if (isExpanded && seriesData && seriesData.versions && seriesData.versions.length > 0) {
                 versionCount = seriesData.versionCount || seriesData.versions.length;
                 snapshotCount = seriesData.snapshotCount || 0;
                 totalSize = seriesData.totalSize || 0;
                 latestTime = seriesData.latestTime || 0;
                 versionsHtml = seriesData.versions.map(v => renderVersionGroup(v, node.key, seriesData.versions, panelCtx)).join('');
-            } else if (hasItems) {
+            } else if (isExpanded && hasItems) {
                 versionCount = node.items.length;
                 versionsHtml = node.items.map(presetName => {
                     const found = presetToVersion.get(presetName);
@@ -896,6 +896,13 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
                         </div>
                     </div>`;
                 }).join('');
+            } else if (seriesData) {
+                versionCount = seriesData.versionCount || seriesData.versions?.length || 0;
+                snapshotCount = seriesData.snapshotCount || 0;
+                totalSize = seriesData.totalSize || 0;
+                latestTime = seriesData.latestTime || 0;
+            } else {
+                versionCount = node.items?.length || 0;
             }
 
 

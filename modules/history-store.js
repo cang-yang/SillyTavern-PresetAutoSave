@@ -29,6 +29,7 @@ import { HistoryRepository } from './core/history-repository.js';
 import { readHistoryBucket, readHistoryBuckets } from './core/history-bucket-reader.js';
 import { SerialTaskQueue } from './core/serial-task-queue.js';
 import { emitHistoryChange } from './core/history-change-events.js';
+import { canCoalesceSnapshotTrigger } from './core/snapshot-retention-policy.js';
 import {
     analyzeHistoryImport,
     applyHistoryImportPlan,
@@ -724,10 +725,17 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
     const previousSnapshot = list.length > 0 ? list[0] : null;
     const summary = computeChangeSummary(previousSnapshot?.preset, canonicalPreset, apiId);
 
-    // 2. 合并窗口: 在窗口期内且触发类型相同 -> 替换最新
-    //    注意: 锁定（pinned）的快照永远不会被合并覆盖
+    // 2. 合并窗口: 仅合并高频自动观察；显式恢复点永不被覆盖
+    //    manual / switch_guard / restore 均保留独立 ID 和原始内容。
+    //    锁定（pinned）的快照永远不会被合并覆盖。
     const mergeWindowMs = settings.mergeWindowSec * 1000;
-    if (mergeWindowMs > 0 && list.length > 0 && list[0].trigger === trigger && !list[0].pinned) {
+    if (
+        canCoalesceSnapshotTrigger(trigger)
+        && mergeWindowMs > 0
+        && list.length > 0
+        && list[0].trigger === trigger
+        && !list[0].pinned
+    ) {
         const elapsed = now - list[0].timestamp;
         if (elapsed < mergeWindowMs) {
             // 合并时摘要应基于"被合并条之前的那一条"

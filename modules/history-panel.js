@@ -502,17 +502,18 @@ async function loadData({ allowCache = true, mountGeneration = _panelMountGenera
         // 需要手动点击版本头部才展开快照。expandedVersions 仅由用户点击或"全部展开"填充。
     }
 
+    const overrides = settings.groupingManualOverrides;
+    const seriesMap = groupSnapshotsBySeries(_state.snapshots, {
+        overrides,
+        aliases: settings.groupingSeriesAliases,
+    });
+
+    // 两种初始视图都预先建立投影，首次从平铺切到系列时无需在交互路径重复分组。
+    _state._cachedSeriesMap = seriesMap;
+
     if (_state.viewMode === 'series') {
-        const overrides = settings.groupingManualOverrides;
         // O-1: 默认全部收起（'none'），用户可在设置中改为 'current' 或 'all'
         const expandMode = settings.groupingDefaultExpand || 'none';
-        const seriesMap = groupSnapshotsBySeries(_state.snapshots, {
-            overrides,
-            aliases: settings.groupingSeriesAliases,
-        });
-
-        // 性能优化：缓存 seriesMap，避免 _renderListTabImpl → renderSeriesView 重复计算
-        _state._cachedSeriesMap = seriesMap;
 
         if (expandMode === 'all') {
             for (const k of seriesMap.keys()) _state.expandedSeries.add(k);

@@ -343,11 +343,35 @@ async function exerciseCoreOperations() {
     if (options.scenario !== 'ordinary') throw new Error('Core operations require the ordinary scenario');
     operationEvents.length = 0;
 
-    const snapshotsBefore = (await historyStore.getAllSnapshots()).length;
+    const allSnapshotsBefore = await historyStore.getAllSnapshots();
+    const currentPresetName = nativeSelect.options[nativeSelect.selectedIndex]?.textContent || '';
+    const targetSnapshotsBefore = allSnapshotsBefore.filter(snapshot => (
+        snapshot.apiId === scenario.currentApiId && snapshot.presetName === currentPresetName
+    ));
+    const previousSnapshot = structuredClone(targetSnapshotsBefore[0] || null);
+    const previousIds = new Set(targetSnapshotsBefore.map(snapshot => snapshot.id));
     panelRoot.querySelector('.pas-btn-snap')?.click();
     await waitFor(() => operationEvents.some(event => event.level === 'success' || event.level === 'error'));
-    const snapshotsAfter = (await historyStore.getAllSnapshots()).length;
+    const allSnapshotsAfter = await historyStore.getAllSnapshots();
+    const targetSnapshotsAfter = allSnapshotsAfter.filter(snapshot => (
+        snapshot.apiId === scenario.currentApiId && snapshot.presetName === currentPresetName
+    ));
     const snapshotSucceeded = operationEvents.some(event => event.level === 'success');
+    const newestSnapshot = targetSnapshotsAfter[0] || null;
+    const preservedSnapshot = previousSnapshot
+        ? targetSnapshotsAfter.find(snapshot => snapshot.id === previousSnapshot.id)
+        : null;
+    const countIncreased = allSnapshotsAfter.length === allSnapshotsBefore.length + 1
+        && targetSnapshotsAfter.length === targetSnapshotsBefore.length + 1;
+    const newIdCreated = Boolean(newestSnapshot?.id && !previousIds.has(newestSnapshot.id));
+    const previousSnapshotPreserved = !previousSnapshot || Boolean(
+        preservedSnapshot
+        && preservedSnapshot.hash === previousSnapshot.hash
+        && preservedSnapshot.timestamp === previousSnapshot.timestamp
+        && JSON.stringify(preservedSnapshot.preset) === JSON.stringify(previousSnapshot.preset)
+    );
+    const snapshotCommitted = snapshotSucceeded && countIncreased && newIdCreated && previousSnapshotPreserved;
+    if (!snapshotCommitted) throw new Error('Immediate snapshot did not retain a distinct recovery point');
 
     await showGroupManager({ withUndo: false });
     const manager = groupManagerMount?.root;
@@ -389,9 +413,12 @@ async function exerciseCoreOperations() {
     document.querySelector('.pas-harness-group-dialog')?.remove();
     return Object.freeze({
         snapshot: Object.freeze({
-            before: snapshotsBefore,
-            after: snapshotsAfter,
-            committed: snapshotSucceeded && snapshotsAfter >= snapshotsBefore,
+            before: allSnapshotsBefore.length,
+            after: allSnapshotsAfter.length,
+            countIncreased,
+            newIdCreated,
+            previousSnapshotPreserved,
+            committed: snapshotCommitted,
         }),
         grouping: Object.freeze({
             originalName,
