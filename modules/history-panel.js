@@ -79,6 +79,7 @@ import {
 } from './panel-actions.js';
 import { shouldActivateDisclosureFromKeydown } from './panel-disclosure.js';
 import { BULK_SNAPSHOT_RENDER_LIMIT } from './core/bounded-snapshot-list.js';
+import { createPanelViewMarkupCache } from './core/panel-view-markup-cache.js';
 
 // =====================================================
 // 状态
@@ -92,6 +93,7 @@ let _panelSearchTimer = null;
 let _panelLogSearchTimer = null;
 let _panelPresetRefreshTimer = null;
 let _renderListFrame = null;
+let _renderListMayUseViewCache = false;
 let _historyRefreshUnsubscribe = null;
 let _historyRefreshTimer = null;
 let _panelDataWarmupPromise = null;
@@ -102,6 +104,7 @@ let _panelMountGeneration = 0;
 let _activeDatasetLoader = null;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
 let _panelEventBindings = [];  // [{ event, handler }] 用于 popup 关闭时退订
+const _viewMarkupCache = createPanelViewMarkupCache();
 
 // ⚡ 当前面板正在查看的 API（影响 renderSeriesView / renderFlatView 的过滤）
 //   '' 或 null 表示用 getCurrentApiId() 探测
@@ -202,6 +205,7 @@ function newState() {
 }
 
 function resetState() {
+    _viewMarkupCache.clear();
     _state = newState();
 }
 
@@ -405,6 +409,7 @@ export function disposeHistoryPanelMount(root = _root) {
         cancelAnimationFrame(_renderListFrame);
         _renderListFrame = null;
         _renderListScheduled = false;
+        _renderListMayUseViewCache = false;
     }
     for (const { event, handler } of _panelEventBindings) {
         try { offEvent(event, handler); } catch (_) {}
@@ -638,12 +643,16 @@ function bindEvents() {
         btn.addEventListener('click', () => {
             const v = btn.getAttribute('data-view');
             if (!v || v === _state.viewMode) return;
+            const list = _root?.querySelector('.pas-snapshot-list');
+            if (list) {
+                _viewMarkupCache.capture(_state.viewMode, list.innerHTML, list.scrollTop);
+            }
             _state.viewMode = v;
             // 同步到 settings：groupingEnabled
             updateSetting('groupingEnabled', v === 'series');
             $$('.pas-view-btn').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
             updateViewToggleUI();
-            renderListTab();
+            renderListTab({ reuseViewCache: true });
         });
     });
     updateViewToggleUI();
@@ -917,26 +926,35 @@ function renderActiveTab({ immediateList = false } = {}) {
  * 用 rAF 把同步连续触发（filter / 搜索 / view-toggle）合并为一次绘制
  */
 let _renderListScheduled = false;
-function renderListTab() {
-    if (_renderListScheduled) return;
+function renderListTab({ reuseViewCache = false } = {}) {
+    if (!reuseViewCache) _viewMarkupCache.clear();
+    if (_renderListScheduled) {
+        if (!reuseViewCache) _renderListMayUseViewCache = false;
+        return;
+    }
     _renderListScheduled = true;
+    _renderListMayUseViewCache = reuseViewCache;
     _renderListFrame = requestAnimationFrame(() => {
         _renderListFrame = null;
         _renderListScheduled = false;
-        _renderListTabImpl();
+        const mayUseViewCache = _renderListMayUseViewCache;
+        _renderListMayUseViewCache = false;
+        _renderListTabImpl({ reuseViewCache: mayUseViewCache });
     });
 }
 
 function renderListTabImmediately() {
+    _viewMarkupCache.clear();
     if (_renderListFrame !== null) {
         cancelAnimationFrame(_renderListFrame);
         _renderListFrame = null;
         _renderListScheduled = false;
+        _renderListMayUseViewCache = false;
     }
     _renderListTabImpl();
 }
 
-function _renderListTabImpl() {
+function _renderListTabImpl({ reuseViewCache = false } = {}) {
     const list = _root?.querySelector('.pas-snapshot-list');
     if (!list) return;
 
@@ -952,6 +970,17 @@ function _renderListTabImpl() {
         list.innerHTML = renderEmptyState(_panelCtx());
         updateBadge(0);
         restoreInteractionPosition();
+        return;
+    }
+
+    const cachedView = reuseViewCache ? _viewMarkupCache.read(_state.viewMode) : null;
+    if (cachedView) {
+        list.innerHTML = cachedView.markup;
+        list.scrollTop = cachedView.scrollTop;
+        requestAnimationFrame(() => {
+            if (_root?.contains(list)) list.scrollTop = cachedView.scrollTop;
+        });
+        updateBadge(filtered.length);
         return;
     }
 

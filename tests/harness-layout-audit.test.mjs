@@ -173,6 +173,33 @@ test('compact history filters remain one row instead of consuming the record vie
     assert.equal(result.findings[0].code, 'compact-filter-wrap');
 });
 
+test('compact history chrome and expanded actions stay within density budgets', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 390, height: 844 },
+        documentWidth: 390,
+        historyListTop: 224,
+        versionHeaderHeight: 67.9,
+        snapshotActionHeight: 75,
+    }));
+
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.findings.map(item => item.code), [
+        'compact-chrome-too-tall',
+        'compact-version-header-too-tall',
+        'compact-snapshot-actions-too-tall',
+    ]);
+});
+
+test('warmed 500-snapshot view switches stay within one interaction frame', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        scenario: 'performance',
+        viewSwitchMs: 32.8,
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings[0].code, 'slow-view-switch');
+});
+
 test('view controls, renderer, and grouping tools must describe the same mode', () => {
     const wrongSelection = evaluateLayoutAudit(cleanMetrics({
         viewMode: { selected: 'series', rendered: 'flat', manageGroupingAvailable: true },

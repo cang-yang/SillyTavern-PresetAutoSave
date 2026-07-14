@@ -228,9 +228,6 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         ver.archived ? `<span class="pas-tag pas-tag-archived" title="${escapeAttr(t('Archived Version Title'))}"><i class="fa-solid fa-box-archive"></i> ${escapeHtml(t('Archived Version'))}</span>` : '',
         isEmpty ? `<span class="pas-tag pas-tag-empty" title="${escapeAttr(t('No Snapshots Yet Title'))}">${escapeHtml(t('No Snapshots Yet'))}</span>` : '',
     ].filter(Boolean).join('');
-    const tagsRowHtml = tagsHtml
-        ? `<div class="pas-version-header-row pas-version-header-row-tags">${tagsHtml}</div>`
-        : '';
 
 
     // 应用版本按钮（已归档版本不可应用）
@@ -263,8 +260,8 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
             ${dupHtml}
             <span class="pas-version-api">${escapeHtml(ver.apiId)}</span>
         </div>
-        ${tagsRowHtml}
         <div class="pas-version-header-row pas-version-header-row-meta">
+            ${tagsHtml ? `<span class="pas-version-header-tags">${tagsHtml}</span>` : ''}
             <span class="pas-version-meta-stats">
                 <span class="pas-version-count" title="${escapeAttr(t('Snapshots Count'))}"><i class="fa-solid fa-camera"></i> ${ver.snapshotCount}</span>
                 <span class="pas-divider">\u00b7</span>

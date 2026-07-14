@@ -15,6 +15,7 @@ const consoleErrors = [];
 const operationEvents = [];
 const translationOverrides = Object.create(null);
 let lastRenderMs = 0;
+let lastViewSwitchMs = null;
 let confirmResult = true;
 
 const originalConsoleError = console.error.bind(console);
@@ -682,6 +683,52 @@ async function exerciseUnusedNativeSeries() {
     return result;
 }
 
+async function exerciseViewSwitchPerformance() {
+    if (options.scenario !== 'performance') {
+        throw new Error('View-switch performance checks require the performance scenario');
+    }
+
+    const samples = [];
+    const nextView = target => [...panelRoot.querySelectorAll('.pas-view-btn')]
+        .find(button => button.dataset.view === target);
+
+    // Prime both view-only markup entries before timing the common repeated
+    // navigation path. Cold construction is covered by the panel-open budget.
+    nextView('flat')?.click();
+    await nextPaint();
+    nextView('series')?.click();
+    await nextPaint();
+
+    for (const target of ['flat', 'series', 'flat', 'series', 'flat', 'series']) {
+        const callbackDurations = [];
+        const originalRequestAnimationFrame = window.requestAnimationFrame;
+        window.requestAnimationFrame = callback => originalRequestAnimationFrame.call(window, timestamp => {
+            const startedAt = performance.now();
+            try {
+                return callback(timestamp);
+            } finally {
+                callbackDurations.push(performance.now() - startedAt);
+            }
+        });
+        try {
+            nextView(target)?.click();
+            await nextPaint();
+        } finally {
+            window.requestAnimationFrame = originalRequestAnimationFrame;
+        }
+        samples.push(Object.freeze({
+            target,
+            renderCallbackMs: Math.max(0, ...callbackDurations),
+        }));
+    }
+
+    lastViewSwitchMs = Math.max(0, ...samples.map(sample => sample.renderCallbackMs));
+    return Object.freeze({
+        maxRenderCallbackMs: lastViewSwitchMs,
+        samples: Object.freeze(samples),
+    });
+}
+
 function collectMetrics() {
     const metricsRoot = document.querySelector('.pas-harness-dialog') || app;
     const importantSelector = [
@@ -709,6 +756,7 @@ function collectMetrics() {
         ? '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span, .pas-primary-action > span, .pas-view-btn > span, .pas-btn-clear-preset > .pas-action-label'
         : '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span';
     const requiredLabels = [...metricsRoot.querySelectorAll(requiredLabelSelector)]
+        .filter(element => isVisible(element.parentElement))
         .map(element => {
             const rect = element.getBoundingClientRect();
             const style = getComputedStyle(element);
@@ -758,6 +806,17 @@ function collectMetrics() {
             .filter(isVisible)
             .map(filter => Math.round(filter.getBoundingClientRect().top)),
     ).size;
+    const historyListTop = metricsRoot.querySelector('.pas-snapshot-list')?.getBoundingClientRect().top;
+    const visibleVersionHeaders = [...metricsRoot.querySelectorAll('.pas-version-header')].filter(isVisible);
+    const visibleSnapshotActions = [...metricsRoot.querySelectorAll('.pas-card-actions')]
+        .filter(actions => !actions.querySelector('.pas-card-tools[open]'))
+        .filter(isVisible);
+    const versionHeaderHeight = visibleVersionHeaders.length > 0
+        ? Math.max(...visibleVersionHeaders.map(header => header.getBoundingClientRect().height))
+        : null;
+    const snapshotActionHeight = visibleSnapshotActions.length > 0
+        ? Math.max(...visibleSnapshotActions.map(actions => actions.getBoundingClientRect().height))
+        : null;
     const renderedView = panelRoot?.querySelector('.pas-series-group')
         ? 'series'
         : panelRoot?.querySelector('.pas-preset-group') ? 'flat' : null;
@@ -786,6 +845,10 @@ function collectMetrics() {
         disclosures: Object.freeze(disclosures.map(Object.freeze)),
         expandedSeriesContent: Object.freeze(expandedSeriesContent.map(Object.freeze)),
         historyFilterRows,
+        historyListTop,
+        versionHeaderHeight,
+        snapshotActionHeight,
+        viewSwitchMs: lastViewSwitchMs,
         viewMode,
         footerText,
         hiddenFocusable: Object.freeze(hiddenFocusable),
@@ -810,6 +873,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     exerciseHostileTranslations,
     exerciseDisclosures,
     exerciseUnusedNativeSeries,
+    exerciseViewSwitchPerformance,
     setConfirmResult: value => { confirmResult = Boolean(value); },
     operationEvents: () => Object.freeze([...operationEvents]),
     collectMetrics,

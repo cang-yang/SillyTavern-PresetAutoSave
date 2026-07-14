@@ -319,6 +319,12 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 .pas-snapshot-list,
 .pas-log-view,
 .pas-settings { min-height: 0; flex: 1 1 auto; overflow: auto; padding: 2px 4px 18px 2px; scrollbar-width: thin; }
+.pas-series-group,
+.pas-preset-group {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 56px;
+}
+
 .pas-preset-group,
 .pas-series-group { border: 1px solid var(--pas-v4-border); border-radius: 12px; background: var(--pas-v4-surface); box-shadow: none; }
 .pas-series-group.pas-series-current,
@@ -333,8 +339,8 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 .pas-series-header:hover,
 .pas-version-header:hover { background: var(--pas-v4-accent-softer); }
 
-.pas-card { border: 1px solid var(--pas-v4-border); border-left: 2px solid rgba(139, 92, 246, .28); border-radius: 12px; background: var(--pas-v4-surface-raised); box-shadow: 0 4px 14px rgba(0, 0, 0, .07); transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s cubic-bezier(.2,.8,.2,1); }
-.pas-card:hover { border-color: rgba(139, 92, 246, .24); border-left-color: var(--pas-v4-accent); background: var(--pas-v4-surface-hover); box-shadow: 0 9px 26px rgba(0, 0, 0, .16); transform: translateY(-1px); }
+.pas-card { border: 1px solid var(--pas-v4-border); border-radius: 10px; background: var(--pas-v4-surface-raised); box-shadow: none; transition: border-color .16s ease, background .16s ease; }
+.pas-card:hover { border-color: rgba(139, 92, 246, .28); background: var(--pas-v4-surface-hover); box-shadow: none; transform: none; }
 .pas-card.pas-card-pinned { border-color: rgba(139, 92, 246, .32); background: rgba(139, 92, 246, .075); }
 .pas-series-version-pill,
 .pas-version-pill { border-color: rgba(139, 92, 246, .25); background: rgba(139, 92, 246, .10); color: #c4b5fd; }
@@ -387,6 +393,32 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     background: var(--pas-v4-accent-soft);
     color: var(--pas-v4-accent-readable);
 }
+.pas-version-header-tags,
+.pas-card-primary-actions,
+.pas-card-tools-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.pas-version-header-tags { min-width: 0; }
+.pas-card-tools { display: contents; }
+.pas-card-tools-trigger {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 5px 8px;
+    border: 1px solid var(--pas-v4-border);
+    border-radius: 8px;
+    color: var(--pas-v4-text-muted);
+    cursor: pointer;
+    list-style: none;
+}
+.pas-card-tools-trigger::-webkit-details-marker { display: none; }
+.pas-card-tools-trigger:focus-visible { outline: 2px solid var(--pas-v4-accent); outline-offset: 2px; }
+.pas-card-tools > .pas-card-tools-actions { display: flex !important; }
 
 .pas-panel ::-webkit-scrollbar { width: 8px; height: 8px; }
 .pas-panel ::-webkit-scrollbar-track { background: transparent; }
@@ -414,8 +446,6 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-snapshot-list,
     .pas-log-view,
     .pas-settings { overscroll-behavior: contain; }
-    .pas-preset-group,
-    .pas-series-group,
     .pas-grouping-row,
     .pas-log-entry { content-visibility: visible; contain-intrinsic-size: none; }
     .pas-toolbar-primary { align-items: stretch; }
@@ -447,27 +477,33 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     body.pas-light dialog:has(.pas-panel),
     body.pas-light .popup:has(.pas-panel) { background: #f4f6fb; }
     .pas-panel { width: 100%; height: 100%; min-height: 100%; max-height: 100%; border-width: 0; border-radius: 0; }
-    .pas-panel-header { gap: 6px; padding: 8px 12px; }
+    .pas-panel-header { min-height: 52px; gap: 5px; padding: 4px 10px; }
     .pas-header-actions { gap: 5px; margin-right: 34px; }
     .pas-panel-heading h3 { max-width: 142px; font-size: 14px; }
     .pas-panel-status { gap: 5px; margin-top: 1px; font-size: 10px; }
     .pas-panel-status > .pas-status-dot { width: 6px; height: 6px; box-shadow: 0 0 0 3px rgba(66, 211, 146, .09); }
     .pas-panel-status .pas-panel-stats { display: none; }
     .pas-primary-action,
-    .pas-tools-trigger { min-width: 36px; min-height: 36px; padding: 0 10px; border-radius: 10px; }
+    .pas-tools-trigger { min-width: 36px; padding: 0 9px; border-radius: 9px; box-shadow: none; }
+    .pas-primary-action {
+        border-color: transparent;
+        background: linear-gradient(135deg, var(--pas-v4-primary-start), var(--pas-v4-primary-end)) center / 100% calc(100% - 8px) no-repeat;
+    }
     .pas-tools-menu { position: absolute; top: calc(100% + 8px); right: 0; bottom: auto; left: auto; width: min(340px, calc(100vw - 28px)); max-height: calc(100svh - 110px); overflow-y: auto; padding: 10px; border-radius: 16px; }
     .pas-tools-section { grid-template-columns: 1fr 1fr; }
     .pas-tool-item { min-height: 48px; }
-    .pas-panel-tabs { gap: 2px; margin: 0 10px; padding: 2px; border-radius: 11px; }
-    .pas-tab { min-height: 34px; gap: 5px; padding: 4px 5px; border-radius: 8px; font-size: 12px; }
+    .pas-panel-tabs { gap: 1px; margin: 0 8px; padding: 0; border: 0; border-radius: 9px; }
+    .pas-tab { gap: 4px; padding: 3px 4px; border-radius: 7px; font-size: 12px; }
+    .pas-tab-active { background: transparent; box-shadow: none; }
     .pas-tab-active::after { bottom: -3px; }
     .pas-tab-badge { padding-inline: 5px; }
-    .pas-panel-body { padding: 8px 10px 0; }
-    .pas-toolbar { gap: 6px; padding-bottom: 6px; }
-    .pas-toolbar-primary { gap: 6px; }
-    .pas-search-wrap input.text_pole { min-height: 38px; margin: 0; padding-block: 6px; border-radius: 10px; }
-    .pas-view-toggle { gap: 2px; padding: 2px; border-radius: 10px; }
-    .pas-view-btn { min-width: 36px; min-height: 34px; padding-inline: 8px; }
+    .pas-panel-body { padding: 1px 8px 0; }
+    .pas-toolbar { gap: 4px; padding-bottom: 4px; }
+    .pas-toolbar-primary { gap: 4px; }
+    .pas-search-wrap input.text_pole { margin: 0; padding-block: 5px; border-radius: 8px; }
+    .pas-view-toggle { gap: 1px; padding: 0; border: 0; border-radius: 8px; background: transparent; }
+    .pas-view-btn { min-width: 40px; padding-inline: 7px; border-radius: 7px; }
+    .pas-panel .pas-view-btn.pas-view-btn-active { background: transparent; box-shadow: inset 0 -2px var(--pas-v4-accent); }
     .pas-filters {
         min-width: 0;
         flex-wrap: nowrap;
@@ -497,16 +533,45 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-card-actions,
     .pas-version-actions,
     .pas-preset-header-meta { flex-wrap: wrap; }
-    .pas-card-actions { justify-content: flex-start; }
-    .pas-version-header-row-meta {
-        padding-left: 24px;
+    .pas-card { gap: 4px; padding: 6px 7px; border-radius: 8px; }
+    .pas-card-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        min-height: 44px;
+        align-items: center;
+        gap: 4px;
     }
+    .pas-card-primary-actions { min-width: 0; gap: 3px; }
+    .pas-card-primary-actions .pas-btn-action,
+    .pas-card-tools-trigger { width: auto; min-width: 30px; height: 30px; min-height: 30px; padding: 4px 7px; }
+    .pas-card-primary-actions .pas-btn-restore { min-height: 44px; padding-inline: 9px; }
+    .pas-card-tools { display: block; }
+    .pas-card-tools-trigger { display: flex; }
+    .pas-card-tools:not([open]) > .pas-card-tools-actions { display: none !important; }
+    .pas-card-tools[open] { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; }
+    .pas-card-tools[open] > .pas-card-tools-trigger { grid-column: 2; justify-self: end; }
+    .pas-card-tools[open] > .pas-card-tools-actions {
+        display: grid !important;
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 4px;
+    }
+    .pas-card-tools-actions .pas-btn-action { width: 100%; height: 32px; min-width: 0; gap: 4px; padding-inline: 5px; overflow: hidden; font-size: 11px; }
+    .pas-card-tools-actions .pas-action-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pas-version-header-row-meta { min-width: 0; gap: 5px; padding-left: 24px; overflow: hidden; }
+    .pas-version-header-tags { flex: 1 1 auto; overflow: hidden; }
+    .pas-version-header-tags .pas-tag { height: 15px; padding-inline: 5px; overflow: hidden; font-size: 9px; text-overflow: ellipsis; }
+    .pas-version-meta-stats { flex: 0 0 auto; }
+    .pas-version-api,
+    .pas-version-latest,
+    .pas-version-meta-stats .pas-divider:last-of-type { display: none; }
     .pas-version-actions {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto auto;
         width: 100%;
         gap: 4px;
-        padding-bottom: 5px;
+        min-height: 44px;
+        padding: 0;
     }
     .pas-card-actions .pas-btn-action,
     .pas-version-actions .pas-btn-action,
@@ -518,15 +583,21 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
         font-size: 12px;
         white-space: nowrap;
     }
-    .pas-version-actions .pas-btn-apply-version { width: 100%; min-width: 0; margin-right: 0; }
+    .pas-version-actions .pas-btn-apply-version {
+        width: 100%;
+        min-width: 0;
+        margin-right: 0;
+        border-color: transparent;
+        background: linear-gradient(var(--pas-v4-accent-soft), var(--pas-v4-accent-soft)) center / 100% calc(100% - 8px) no-repeat;
+    }
     .pas-series-group { margin-bottom: 6px; border-radius: 10px; }
     .pas-series-body { gap: 0; padding: 0 6px 6px; background: transparent; }
     .pas-series-body > .pas-version-group { border-width: 1px 0 0; border-radius: 0; background: transparent; }
     .pas-series-body > .pas-version-group:last-of-type { border-bottom-width: 1px; border-radius: 0 0 8px 8px; }
-    .pas-version-header { padding: 8px 6px 7px; }
-    .pas-version-body { padding: 6px; }
+    .pas-version-header { gap: 2px; padding: 4px 6px; }
+    .pas-version-body { padding: 4px 6px 6px; }
     .pas-filter,
-    .pas-log-filter { min-height: 32px; padding: 4px 9px; scroll-snap-align: start; }
+    .pas-log-filter { min-height: 28px; padding: 3px 8px; scroll-snap-align: start; }
     .pas-diff-bar { grid-template-columns: 1fr; }
     .pas-diff-bar-label { grid-column: auto; }
     .pas-diff-bar-actions { justify-self: stretch; }

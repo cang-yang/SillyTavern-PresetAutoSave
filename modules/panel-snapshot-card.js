@@ -55,14 +55,23 @@ export function renderSnapshotCard(snapshot, panelCtx) {
         </div>
     </div>
     <div class="pas-card-actions">
-        <button class="pas-btn-action pas-btn-diff-a ${isA ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-a" title="${escapeAttr(aTitle)}" type="button" aria-label="${escapeAttr(aTitle)}"><span style="font-weight:700;font-size:0.85em;">A</span></button>
-        <button class="pas-btn-action pas-btn-diff-b ${isB ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-b" title="${escapeAttr(bTitle)}" type="button" aria-label="${escapeAttr(bTitle)}"><span style="font-weight:700;font-size:0.85em;">B</span></button>
-        <button class="pas-btn-action pas-btn-rename" data-id="${id}" data-action="rename" title="${escapeAttr(t('Rename Snapshot'))}" type="button" aria-label="${escapeAttr(t('Rename Snapshot'))}"><i class="fa-solid fa-pen"></i><span class="pas-action-label">${escapeHtml(t('Rename Snapshot'))}</span></button>
-        <button class="pas-btn-action pas-btn-pin ${isPinned ? 'pas-btn-pin-active' : ''}" data-id="${id}" data-action="pin" title="${escapeAttr(pinTitle)}" type="button" aria-label="${escapeAttr(pinTitle)}"><i class="fa-solid fa-thumbtack"></i><span class="pas-action-label">${escapeHtml(pinTitle)}</span></button>
-        <button class="pas-btn-action pas-btn-restore" data-id="${id}" data-action="restore" title="${escapeAttr(t('Restore'))}" type="button" aria-label="${escapeAttr(t('Restore'))}"><i class="fa-solid fa-rotate-left"></i><span class="pas-action-label">${escapeHtml(t('Restore'))}</span></button>
-        <button class="pas-btn-action pas-btn-view" data-id="${id}" data-action="view" title="${escapeAttr(t('View'))}" type="button" aria-label="${escapeAttr(t('View'))}"><i class="fa-solid fa-eye"></i><span class="pas-action-label">${escapeHtml(t('View'))}</span></button>
-        <button class="pas-btn-action pas-btn-export-preset" data-id="${id}" data-action="export" title="${escapeAttr(t('Export Preset'))}" type="button" aria-label="${escapeAttr(t('Export Preset'))}"><i class="fa-solid fa-file-export"></i><span class="pas-action-label">${escapeHtml(t('Export Preset'))}</span></button>
-        <button class="pas-btn-action pas-btn-delete" data-id="${id}" data-action="delete" ${deleteAttributes} type="button" aria-label="${escapeAttr(t('Delete'))}"><i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Delete'))}</span></button>
+        <div class="pas-card-primary-actions">
+            <button class="pas-btn-action pas-btn-diff-a ${isA ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-a" title="${escapeAttr(aTitle)}" type="button" aria-label="${escapeAttr(aTitle)}"><span style="font-weight:700;font-size:0.85em;">A</span></button>
+            <button class="pas-btn-action pas-btn-diff-b ${isB ? 'pas-btn-diff-active' : ''}" data-id="${id}" data-action="diff-b" title="${escapeAttr(bTitle)}" type="button" aria-label="${escapeAttr(bTitle)}"><span style="font-weight:700;font-size:0.85em;">B</span></button>
+            <button class="pas-btn-action pas-btn-restore" data-id="${id}" data-action="restore" title="${escapeAttr(t('Restore'))}" type="button" aria-label="${escapeAttr(t('Restore'))}"><i class="fa-solid fa-rotate-left"></i><span class="pas-action-label">${escapeHtml(t('Restore'))}</span></button>
+            <button class="pas-btn-action pas-btn-view" data-id="${id}" data-action="view" title="${escapeAttr(t('View'))}" type="button" aria-label="${escapeAttr(t('View'))}"><i class="fa-solid fa-eye"></i><span class="pas-action-label">${escapeHtml(t('View'))}</span></button>
+        </div>
+        <details class="pas-card-tools">
+            <summary class="pas-card-tools-trigger" title="${escapeAttr(t('Panel Tools'))}" aria-label="${escapeAttr(t('Panel Tools'))}">
+                <i class="fa-solid fa-ellipsis"></i><span class="pas-action-label">${escapeHtml(t('Panel Tools'))}</span>
+            </summary>
+            <div class="pas-card-tools-actions">
+                <button class="pas-btn-action pas-btn-rename" data-id="${id}" data-action="rename" title="${escapeAttr(t('Rename Snapshot'))}" type="button" aria-label="${escapeAttr(t('Rename Snapshot'))}"><i class="fa-solid fa-pen"></i><span class="pas-action-label">${escapeHtml(t('Rename Snapshot'))}</span></button>
+                <button class="pas-btn-action pas-btn-pin ${isPinned ? 'pas-btn-pin-active' : ''}" data-id="${id}" data-action="pin" title="${escapeAttr(pinTitle)}" type="button" aria-label="${escapeAttr(pinTitle)}"><i class="fa-solid fa-thumbtack"></i><span class="pas-action-label">${escapeHtml(pinTitle)}</span></button>
+                <button class="pas-btn-action pas-btn-export-preset" data-id="${id}" data-action="export" title="${escapeAttr(t('Export Preset'))}" type="button" aria-label="${escapeAttr(t('Export Preset'))}"><i class="fa-solid fa-file-export"></i><span class="pas-action-label">${escapeHtml(t('Export Preset'))}</span></button>
+                <button class="pas-btn-action pas-btn-delete" data-id="${id}" data-action="delete" ${deleteAttributes} type="button" aria-label="${escapeAttr(t('Delete'))}"><i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Delete'))}</span></button>
+            </div>
+        </details>
     </div>
 </div>`;
 }

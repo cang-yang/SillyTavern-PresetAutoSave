@@ -97,9 +97,9 @@ test('mobile workspace keeps controls dense without wrapping or starving log mes
     const panelCss = await readFile(new URL('../styles/panel-v4.css', import.meta.url), 'utf8');
 
     assert.match(panelCss, /\.pas-panel\s*\{[\s\S]*?gap:\s*0;/);
-    assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel-header\s*\{[^}]*padding:\s*8px 12px/s);
-    assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel-tabs\s*\{[^}]*margin:\s*0 10px[^}]*padding:\s*2px/s);
-    assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-toolbar\s*\{[^}]*gap:\s*6px[^}]*padding-bottom:\s*6px/s);
+    assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel-header\s*\{[^}]*min-height:\s*52px[^}]*padding:\s*4px 10px/s);
+    assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel-tabs\s*\{[^}]*margin:\s*0 8px[^}]*padding:\s*0/s);
+    assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-toolbar\s*\{[^}]*gap:\s*4px[^}]*padding-bottom:\s*4px/s);
     assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-search-wrap input\.text_pole\s*\{[^}]*margin:\s*0/s);
     assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-filters\s*\{[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/s);
     assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-log-toolbar\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto/s);

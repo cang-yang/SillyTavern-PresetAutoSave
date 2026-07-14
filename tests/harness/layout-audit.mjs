@@ -1,6 +1,10 @@
 const COMPACT_MAX_WIDTH = 460;
 const MIN_TOUCH_TARGET = 44;
 const OVERFLOW_TOLERANCE = 1;
+const MAX_COMPACT_HISTORY_TOP = 190;
+const MAX_COMPACT_VERSION_HEADER = 54;
+const MAX_COMPACT_SNAPSHOT_ACTIONS = 44;
+const MAX_WARMED_VIEW_SWITCH_MS = 20;
 
 function finding(code, severity, message, selector = '') {
     return Object.freeze({ code, severity, message, selector });
@@ -128,6 +132,46 @@ export function evaluateLayoutAudit(metrics) {
                 '#pas-panel-list > .pas-toolbar > .pas-filters',
             ));
         }
+
+        const historyListTop = Number(metrics.historyListTop);
+        if (Number.isFinite(historyListTop) && historyListTop > MAX_COMPACT_HISTORY_TOP) {
+            findings.push(finding(
+                'compact-chrome-too-tall',
+                'error',
+                `History content starts at ${Math.round(historyListTop)}px; compact workspace chrome must end by ${MAX_COMPACT_HISTORY_TOP}px.`,
+                '.pas-snapshot-list',
+            ));
+        }
+
+        const versionHeaderHeight = Number(metrics.versionHeaderHeight);
+        if (Number.isFinite(versionHeaderHeight) && versionHeaderHeight > MAX_COMPACT_VERSION_HEADER) {
+            findings.push(finding(
+                'compact-version-header-too-tall',
+                'error',
+                `Version header is ${Math.round(versionHeaderHeight)}px high; compact rows must stay within ${MAX_COMPACT_VERSION_HEADER}px.`,
+                '.pas-version-header',
+            ));
+        }
+
+        const snapshotActionHeight = Number(metrics.snapshotActionHeight);
+        if (Number.isFinite(snapshotActionHeight) && snapshotActionHeight > MAX_COMPACT_SNAPSHOT_ACTIONS) {
+            findings.push(finding(
+                'compact-snapshot-actions-too-tall',
+                'error',
+                `Snapshot actions are ${Math.round(snapshotActionHeight)}px high before secondary tools are expanded; the compact budget is ${MAX_COMPACT_SNAPSHOT_ACTIONS}px.`,
+                '.pas-card-actions',
+            ));
+        }
+    }
+
+    const viewSwitchMs = Number(metrics.viewSwitchMs);
+    if (Number.isFinite(viewSwitchMs) && viewSwitchMs > MAX_WARMED_VIEW_SWITCH_MS) {
+        findings.push(finding(
+            'slow-view-switch',
+            'error',
+            `Warmed history view switch took ${Math.round(viewSwitchMs)}ms; the interaction-frame budget is ${MAX_WARMED_VIEW_SWITCH_MS}ms.`,
+            '.pas-view-toggle',
+        ));
     }
 
     if (metrics.footerText && typeof metrics.footerText === 'object') {
