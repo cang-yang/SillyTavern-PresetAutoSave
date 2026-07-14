@@ -325,7 +325,7 @@ async function loadAndRenderMountedPanel(root, generation, panelStartedAt) {
 
         failedStage = 'renderActiveTab';
         const renderStartedAt = performance.now();
-        renderActiveTab();
+        renderActiveTab({ immediateList: true });
         root.querySelector('.pas-snapshot-list')?.removeAttribute('aria-busy');
         recordPanelPerf('renderActiveTab', renderStartedAt, { snapshots: _state.snapshots.length });
 
@@ -878,10 +878,13 @@ function switchTab(tabName) {
     renderActiveTab();
 }
 
-function renderActiveTab() {
+function renderActiveTab({ immediateList = false } = {}) {
     if (!_root) return;
     const ctx = _panelCtx();
-    if (_state.tab === 'list') renderListTab();
+    if (_state.tab === 'list') {
+        if (immediateList) _renderListTabImpl();
+        else renderListTab();
+    }
     else if (_state.tab === 'logs') renderLogTab(ctx);
     else if (_state.tab === 'settings') renderSettingsTab(ctx);
     updateStats(ctx);

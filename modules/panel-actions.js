@@ -50,6 +50,7 @@ import {
 } from './panel-summary.js';
 import { parsePresetKey } from './panel-list-render.js';
 import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
+import { setDisclosureExpanded } from './panel-disclosure.js';
 
 // --- 从子模块导入分组管理函数（软拆分：panel-group-manager.js） ---
 import {
@@ -167,7 +168,11 @@ export async function handleListClick(e, panelCtx) {
         // 优先做原地切换：body 已渲染过则直接切类即可
         const body = group.querySelector(':scope > .pas-series-body');
         if (body) {
-            toggleGroupVisualState(group, body, !wasExpanded, '.pas-series-chevron', '.pas-series-icon');
+            setDisclosureExpanded(group, body, !wasExpanded, {
+                headerSelector: '.pas-series-header',
+                chevronSelector: '.pas-series-chevron',
+                iconSelector: '.pas-series-icon',
+            });
             return;
         }
         renderListTab();
@@ -191,7 +196,10 @@ export async function handleListClick(e, panelCtx) {
                 renderListTab();
                 return;
             }
-            toggleGroupVisualState(group, body, !wasExpanded, '.pas-version-chevron');
+            setDisclosureExpanded(group, body, !wasExpanded, {
+                headerSelector: '.pas-version-header',
+                chevronSelector: '.pas-version-chevron',
+            });
             return;
         }
         renderListTab();
@@ -212,7 +220,10 @@ export async function handleListClick(e, panelCtx) {
                 renderListTab();
                 return;
             }
-            toggleGroupVisualState(group, body, !wasExpanded, '.pas-preset-chevron');
+            setDisclosureExpanded(group, body, !wasExpanded, {
+                headerSelector: '.pas-preset-header',
+                chevronSelector: '.pas-preset-chevron',
+            });
             return;
         }
         renderListTab();
@@ -244,36 +255,6 @@ export async function handleListClick(e, panelCtx) {
             else if (btn.classList.contains('pas-btn-view')) await onView(id);
             else if (btn.classList.contains('pas-btn-export-preset')) await onExportPreset(id);
             else if (btn.classList.contains('pas-btn-delete')) await onDelete(id, panelCtx);
-    }
-}
-
-/**
- * ⚡ 性能优化：原地切换分组的展开状态（不重建 innerHTML）
- *
- * 仅切换：
- *   - body 的 hidden（CSS [hidden] 已支持）
- *   - chevron 的图标 class（fa-chevron-right ↔ fa-chevron-down）
- *   - 可选 folder 图标（fa-folder ↔ fa-folder-open）
- *
- * 大幅降低 DOM 重建成本：
- *   - 一个有 50 个系列 / 200 个版本的面板，原本每次点击会重建数千 DOM 节点
- *   - 改成原地切换后，开销 ≈ 0
- */
-function toggleGroupVisualState(group, body, expanded, chevronSel, iconSel = null) {
-    if (body) body.hidden = !expanded;
-    if (chevronSel) {
-        const chev = group.querySelector(chevronSel);
-        if (chev) {
-            chev.classList.toggle('fa-chevron-down', expanded);
-            chev.classList.toggle('fa-chevron-right', !expanded);
-        }
-    }
-    if (iconSel) {
-        const ic = group.querySelector(iconSel);
-        if (ic) {
-            ic.classList.toggle('fa-folder-open', expanded);
-            ic.classList.toggle('fa-folder', !expanded);
-        }
     }
 }
 

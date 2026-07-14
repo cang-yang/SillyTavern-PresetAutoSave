@@ -262,6 +262,67 @@ function isVisible(element) {
     return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
 }
 
+const DISCLOSURE_BODIES = Object.freeze({
+    'toggle-series': ['.pas-series-group', '.pas-series-body'],
+    'toggle-version': ['.pas-version-group', '.pas-version-body'],
+    'toggle-group': ['.pas-preset-group', '.pas-preset-body'],
+});
+
+function disclosureState(header) {
+    const [groupSelector, bodySelector] = DISCLOSURE_BODIES[header?.dataset.action] || [];
+    const body = groupSelector && bodySelector
+        ? header.closest(groupSelector)?.querySelector(`:scope > ${bodySelector}`)
+        : null;
+    return {
+        expanded: header?.getAttribute('aria-expanded') === 'true',
+        bodyHidden: body ? body.hidden : null,
+    };
+}
+
+function nextPaint() {
+    return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+async function exerciseDisclosures() {
+    const checks = [];
+    const actions = ['toggle-series', 'toggle-version', 'toggle-group'];
+    const activations = ['Enter', ' ', 'click'];
+
+    for (const action of actions) {
+        const findHeader = () => [...panelRoot.querySelectorAll(`[data-action="${action}"]`)].find(isVisible) || null;
+        const initialHeader = findHeader();
+        if (!initialHeader) continue;
+        const initialExpanded = disclosureState(initialHeader).expanded;
+
+        for (const activation of activations) {
+            const header = findHeader();
+            const before = disclosureState(header);
+            if (activation === 'click') header.click();
+            else header.dispatchEvent(new KeyboardEvent('keydown', { key: activation, bubbles: true, cancelable: true }));
+            await nextPaint();
+            const after = disclosureState(findHeader());
+            checks.push(Object.freeze({
+                action,
+                activation: activation === ' ' ? 'Space' : activation,
+                changed: before.expanded !== after.expanded,
+                synchronized: after.bodyHidden !== null && after.expanded === !after.bodyHidden,
+            }));
+        }
+
+        const currentHeader = findHeader();
+        if (currentHeader && disclosureState(currentHeader).expanded !== initialExpanded) {
+            currentHeader.click();
+            await nextPaint();
+        }
+    }
+
+    return Object.freeze({
+        passed: checks.length > 0 && checks.every(check => check.changed && check.synchronized),
+        checks: Object.freeze(checks),
+        audit: evaluateLayoutAudit(collectMetrics()),
+    });
+}
+
 function collectMetrics() {
     const metricsRoot = document.querySelector('.pas-harness-dialog') || app;
     const importantSelector = [
@@ -289,6 +350,14 @@ function collectMetrics() {
             text: element.textContent || '',
             visible: isVisible(element),
         }));
+    const disclosures = [...metricsRoot.querySelectorAll('[data-action="toggle-series"], [data-action="toggle-version"], [data-action="toggle-group"]')]
+        .map(header => {
+            const state = disclosureState(header);
+            return {
+                selector: selectorFor(header),
+                ...state,
+            };
+        });
 
     return Object.freeze({
         scenario: options.scenario,
@@ -296,6 +365,7 @@ function collectMetrics() {
         documentWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth, metricsRoot.scrollWidth),
         controls: Object.freeze(controls.map(Object.freeze)),
         requiredLabels: Object.freeze(requiredLabels.map(Object.freeze)),
+        disclosures: Object.freeze(disclosures.map(Object.freeze)),
         hiddenFocusable: Object.freeze(hiddenFocusable),
         consoleErrors: Object.freeze([...consoleErrors]),
         renderMs: lastRenderMs,
@@ -312,6 +382,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     showImportPreview,
     closeImportPreview,
     showGroupManager,
+    exerciseDisclosures,
     collectMetrics,
     audit: () => evaluateLayoutAudit(collectMetrics()),
 });

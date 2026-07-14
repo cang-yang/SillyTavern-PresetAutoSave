@@ -8,6 +8,7 @@ function cleanMetrics(overrides = {}) {
         viewport: { width: 1280, height: 900 },
         documentWidth: 1280,
         controls: [{ selector: '.pas-btn-snap', important: true, visible: true, width: 112, height: 44 }],
+        disclosures: [],
         hiddenFocusable: [],
         consoleErrors: [],
         renderMs: 80,
@@ -77,6 +78,20 @@ test('required control labels must remain visible at supported viewports', () =>
     assert.equal(result.findings.length, 1);
     assert.equal(result.findings[0].code, 'required-label-hidden');
     assert.equal(result.findings[0].selector, '#pas-tab-list > span');
+});
+
+test('visible disclosure state must agree with aria-expanded', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        disclosures: [
+            { selector: '.pas-series-header', expanded: false, bodyHidden: false },
+            { selector: '.pas-version-header', expanded: true, bodyHidden: false },
+        ],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].code, 'disclosure-state-mismatch');
+    assert.equal(result.findings[0].selector, '.pas-series-header');
 });
 
 test('console errors and invalid timing fail while slow finite timing is reported', () => {

@@ -8,6 +8,7 @@ import { contentTypeFor, resolveRequestPath } from './harness/server.mjs';
 test('browser harness loads production styles and runs the production panel controller', async () => {
     const html = await readFile(new URL('./harness/index.html', import.meta.url), 'utf8');
     const app = await readFile(new URL('./harness/app.mjs', import.meta.url), 'utf8');
+    const historyPanel = await readFile(new URL('../modules/history-panel.js', import.meta.url), 'utf8');
     const harnessCss = await readFile(new URL('./harness/harness.css', import.meta.url), 'utf8');
 
     assert.match(html, /href="\.\.\/\.\.\/styles\/index\.css"/);
@@ -27,6 +28,8 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /showImportPreview/);
     assert.match(app, /renderModernGroupingHTML/);
     assert.match(app, /showGroupManager/);
+    assert.match(app, /exerciseDisclosures/);
+    assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true \}\)/);
     assert.doesNotMatch(app, /buildPanelHTML/);
     assert.doesNotMatch(app, /class="pas-panel"/);
     assert.doesNotMatch(app, /translate\('Panel Stats'/);

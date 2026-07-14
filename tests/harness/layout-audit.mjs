@@ -79,6 +79,17 @@ export function evaluateLayoutAudit(metrics) {
         ));
     }
 
+    for (const disclosure of Array.isArray(metrics.disclosures) ? metrics.disclosures : []) {
+        if (typeof disclosure?.expanded !== 'boolean' || typeof disclosure?.bodyHidden !== 'boolean') continue;
+        if (disclosure.expanded === !disclosure.bodyHidden) continue;
+        findings.push(finding(
+            'disclosure-state-mismatch',
+            'error',
+            'Disclosure aria-expanded contradicts the visibility of its controlled content.',
+            String(disclosure.selector || ''),
+        ));
+    }
+
     for (const message of Array.isArray(metrics.consoleErrors) ? metrics.consoleErrors : []) {
         findings.push(finding('console-error', 'error', String(message || 'Unknown browser console error.')));
     }
