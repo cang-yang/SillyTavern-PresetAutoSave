@@ -339,6 +339,85 @@ async function waitFor(predicate, timeoutMs = 2500) {
     throw new Error('Harness operation timed out');
 }
 
+async function exerciseGroupingMenus() {
+    if (options.scenario !== 'ordinary') throw new Error('Grouping menu operations require the ordinary scenario');
+    await showGroupManager();
+    const manager = groupManagerMount?.root;
+    let firstSeries = manager?.querySelector('.pas-gm-series');
+    const firstSeriesKey = firstSeries?.getAttribute('data-series-key');
+    if (firstSeries?.classList.contains('collapsed')) {
+        firstSeries.querySelector('.pas-gm-series-toggle')?.click();
+        firstSeries = manager.querySelector(`[data-series-key="${CSS.escape(firstSeriesKey)}"]`);
+    }
+    const trigger = firstSeries?.querySelector('.pas-gm-menu-btn');
+    if (!manager || !trigger) throw new Error('Grouping preset action trigger was not rendered');
+
+    trigger.focus();
+    trigger.click();
+    let menu = document.querySelector('.pas-gm-context-menu');
+    let items = [...(menu?.querySelectorAll('[role="menuitem"]') || [])];
+    const openedSemantically = Boolean(
+        menu?.getAttribute('role') === 'menu'
+        && trigger.getAttribute('aria-expanded') === 'true'
+        && items.length >= 2
+        && items.every(item => item.tagName === 'BUTTON')
+        && document.activeElement === items[0]
+    );
+
+    items[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    const arrowMoved = document.activeElement === items[1];
+    document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    const escapeClosed = !document.querySelector('.pas-gm-context-menu')
+        && document.activeElement === trigger
+        && trigger.getAttribute('aria-expanded') === 'false';
+
+    trigger.click();
+    menu = document.querySelector('.pas-gm-context-menu');
+    items = [...(menu?.querySelectorAll('[role="menuitem"]:not([disabled])') || [])];
+    items[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    const tabContinued = !document.querySelector('.pas-gm-context-menu')
+        && manager.contains(document.activeElement)
+        && document.activeElement !== trigger;
+
+    trigger.click();
+    manager.querySelector('.pas-gm-search input')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    await Promise.resolve();
+    const outsideClosed = !document.querySelector('.pas-gm-context-menu')
+        && trigger.getAttribute('aria-expanded') === 'false';
+
+    const seriesTrigger = manager.querySelector('.pas-gm-series-menu-btn');
+    seriesTrigger?.click();
+    const renameItem = document.querySelector('.pas-gm-context-menu [data-action="rename"]');
+    renameItem?.click();
+    await nextPaint();
+    const actionActivated = Boolean(manager.querySelector('.pas-gm-name-input'));
+    manager.querySelector('.pas-gm-name-input')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+
+    trigger.click();
+    groupManagerMount?.dispose();
+    groupManagerMount = null;
+    const disposalClosed = !document.querySelector('.pas-gm-context-menu');
+    document.querySelector('.pas-harness-group-dialog')?.remove();
+
+    const result = Object.freeze({
+        openedSemantically,
+        arrowMoved,
+        escapeClosed,
+        tabContinued,
+        outsideClosed,
+        actionActivated,
+        disposalClosed,
+    });
+    if (Object.values(result).some(value => value !== true)) {
+        throw new Error(`Grouping menu keyboard contract failed: ${JSON.stringify(result)}`);
+    }
+    return result;
+}
+
 async function exerciseCoreOperations() {
     if (options.scenario !== 'ordinary') throw new Error('Core operations require the ordinary scenario');
     operationEvents.length = 0;
@@ -548,6 +627,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     closeImportPreview,
     showGroupManager,
     exerciseCoreOperations,
+    exerciseGroupingMenus,
     exerciseDisclosures,
     setConfirmResult: value => { confirmResult = Boolean(value); },
     operationEvents: () => Object.freeze([...operationEvents]),

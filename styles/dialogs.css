@@ -142,3 +142,32 @@ dialog:has(.pas-import-preview),
 @media (prefers-reduced-motion: reduce) {
     .pas-import-mode-card { transition: none; }
 }
+
+/* Native group-menu buttons preserve the established menu hook and appearance. */
+button.pas-gm-ctx-item {
+    width: 100%;
+    min-height: 40px;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    appearance: none;
+    background: transparent;
+    color: var(--pas-fg);
+    font: inherit;
+    text-align: left;
+}
+
+button.pas-gm-ctx-item:focus-visible {
+    outline: 2px solid var(--pas-accent);
+    outline-offset: -3px;
+    background: var(--pas-surface-2);
+}
+
+button.pas-gm-ctx-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+@media (max-width: 640px) {
+    button.pas-gm-ctx-item { min-height: 44px; }
+}

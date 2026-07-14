@@ -40,6 +40,7 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /previousSnapshotPreserved/);
     assert.doesNotMatch(app, /renderModernGroupingHTML/);
     assert.match(app, /exerciseDisclosures/);
+    assert.match(app, /exerciseGroupingMenus/);
     assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true \}\)/);
     assert.doesNotMatch(app, /buildPanelHTML/);
     assert.doesNotMatch(app, /class="pas-panel"/);

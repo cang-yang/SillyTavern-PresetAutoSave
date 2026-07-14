@@ -32,6 +32,10 @@ import {
 import { DragHoverExpander } from './core/drag-hover-expander.js';
 import { createGroupAliasEditor } from './core/group-alias-editor.js';
 import { OrganizationCommandHistory } from './core/organization-command-history.js';
+import {
+    closeGroupManagerContextMenu,
+    openGroupManagerContextMenu,
+} from './group-manager-context-menu.js';
 
 // =====================================================
 // 常量
@@ -166,7 +170,7 @@ function renderModernPresetRows(node) {
             data-series-key="${escapeAttr(node.key)}">
             <span class="pas-gm-preset-name" title="${escapeAttr(item.presetName)}">${escapeHtml(item.presetName)}</span>
             ${manual}
-            <button class="pas-gm-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Preset Actions'))}"><i class="fa-solid fa-ellipsis"></i></button>
+            <button class="pas-gm-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Preset Actions'))}" aria-haspopup="menu" aria-expanded="false"><i class="fa-solid fa-ellipsis"></i></button>
         </div>`;
     }).join('');
 }
@@ -215,7 +219,7 @@ function renderModernGroupingHTML(nodes) {
                 <button class="pas-gm-rename-btn" type="button" aria-label="${escapeAttr(t('Grouping Rename Inline', { name: node.displayName }))}" title="${escapeAttr(t('Grouping Series Menu Rename'))}"><i class="fa-solid fa-pen"></i></button>
                 ${isCustom ? `<span class="pas-gm-origin" title="${escapeAttr(t('Grouping Custom Badge'))}"><i class="fa-solid fa-wand-magic-sparkles"></i></span>` : ''}
                 <span class="pas-gm-series-count">${node.items.length}</span>
-                <button class="pas-gm-series-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Group Actions'))}"><i class="fa-solid fa-ellipsis"></i></button>
+                <button class="pas-gm-series-menu-btn" type="button" aria-label="${escapeAttr(t('Grouping Group Actions'))}" aria-haspopup="menu" aria-expanded="false"><i class="fa-solid fa-ellipsis"></i></button>
             </div>
             <div class="pas-gm-series-body">${renderModernPresetRows(node)}</div>
             <div class="pas-gm-mobile-actions">${mobileActions}</div>
@@ -601,6 +605,7 @@ function performResetAll(container) {
  */
 function refreshGroupingUI(container) {
     if (!container) return;
+    closeGroupManagerContextMenu();
     // Bug A: 保存当前展开状态，避免 innerHTML 重建后全部收起
     const settings = getSettings();
     let html;
@@ -1277,7 +1282,6 @@ function bindMenuEvents(container) {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            container.querySelectorAll('.pas-gm-context-menu').forEach(m => m.remove());
 
             const seriesCard = btn.closest('.pas-gm-series');
             const seriesKey = seriesCard?.getAttribute('data-series-key');
@@ -1288,71 +1292,37 @@ function bindMenuEvents(container) {
             const customized = seriesCard?.getAttribute('data-customized') === '1';
             const automaticName = seriesCard?.getAttribute('data-automatic-name') || seriesKey;
 
-            const menu = document.createElement('div');
-            menu.className = 'pas-gm-context-menu';
-            let subGroupHtml = '';
+            const items = [];
             if (nestingEnabled) {
-                if (depthExceeded) {
-                    subGroupHtml = `<div class="pas-gm-ctx-item pas-gm-action-disabled" title="${escapeAttr(t('Grouping Nesting Max Depth Hint'))}">
-                        <i class="fa-solid fa-plus"></i> ${escapeHtml(t('Grouping Series Menu New Subgroup'))}
-                    </div>`;
-                } else {
-                    subGroupHtml = `<div class="pas-gm-ctx-item" data-action="subgroup">
-                        <i class="fa-solid fa-plus"></i> ${escapeHtml(t('Grouping Series Menu New Subgroup'))}
-                    </div>`;
-                }
-            }
-            menu.innerHTML = `
-                ${subGroupHtml}
-                <div class="pas-gm-ctx-item" data-action="rename">
-                    <i class="fa-solid fa-pen-to-square"></i> ${escapeHtml(t('Grouping Series Menu Rename'))}
-                </div>
-                ${customized ? `<div class="pas-gm-ctx-item" data-action="restore-name">
-                    <i class="fa-solid fa-arrow-rotate-left"></i> ${escapeHtml(t('Grouping Restore Automatic Name', { name: automaticName }))}
-                </div>` : ''}
-                <div class="pas-gm-ctx-item" data-action="delete">
-                    <i class="fa-solid fa-trash"></i> ${escapeHtml(t('Grouping Series Menu Delete'))}
-                </div>
-            `;
-
-            const rect = btn.getBoundingClientRect();
-            menu.style.position = 'fixed';
-            menu.style.visibility = 'hidden';
-            document.body.appendChild(menu);
-            const menuWidth = menu.offsetWidth || 180;
-            const menuHeight = menu.offsetHeight || 130;
-            let menuLeft = rect.left - menuWidth;
-            menuLeft = Math.max(8, Math.min(menuLeft, window.innerWidth - menuWidth - 8));
-            let menuTop = rect.bottom + 4;
-            menuTop = Math.min(menuTop, window.innerHeight - menuHeight - 8);
-            menu.style.left = `${menuLeft}px`;
-            menu.style.top = `${menuTop}px`;
-            menu.style.visibility = '';
-
-            menu.querySelectorAll('.pas-gm-ctx-item').forEach(item => {
-                if (item.classList.contains('pas-gm-action-disabled')) return;
-                item.addEventListener('click', async () => {
-                    const action = item.getAttribute('data-action');
-                    menu.remove();
-                    if (action === 'subgroup') {
-                        await onCreateSubGroup(seriesKey, container);
-                    } else if (action === 'rename') {
-                        await onRenameSeriesGroup(seriesKey, container);
-                    } else if (action === 'restore-name') {
-                        restoreGroupAlias(seriesKey, container);
-                    } else if (action === 'delete') {
-                        await onDeleteCustomGroup(seriesKey, container);
-                    }
+                items.push({
+                    action: 'subgroup',
+                    iconClass: 'fa-solid fa-plus',
+                    label: t('Grouping Series Menu New Subgroup'),
+                    disabled: depthExceeded,
+                    title: depthExceeded ? t('Grouping Nesting Max Depth Hint') : '',
                 });
-            });
+            }
+            items.push({ action: 'rename', iconClass: 'fa-solid fa-pen-to-square', label: t('Grouping Series Menu Rename') });
+            if (customized) {
+                items.push({
+                    action: 'restore-name',
+                    iconClass: 'fa-solid fa-arrow-rotate-left',
+                    label: t('Grouping Restore Automatic Name', { name: automaticName }),
+                });
+            }
+            items.push({ action: 'delete', iconClass: 'fa-solid fa-trash', label: t('Grouping Series Menu Delete'), danger: true });
 
-            const closeMenu = (ev) => {
-                if (!menu.contains(ev.target)) {
-                    menu.remove();
-                    document.removeEventListener('click', closeMenu, true);
-                }
-            };
-            setTimeout(() => document.addEventListener('click', closeMenu, { once: true, capture: true }), 0);
+            openGroupManagerContextMenu({
+                trigger: btn,
+                items,
+                onSelect: async action => {
+                    if (action === 'subgroup') await onCreateSubGroup(seriesKey, container);
+                    else if (action === 'rename') await onRenameSeriesGroup(seriesKey, container);
+                    else if (action === 'restore-name') restoreGroupAlias(seriesKey, container);
+                    else if (action === 'delete') await onDeleteCustomGroup(seriesKey, container);
+                },
+                onError: error => logger.error('[grouping] series menu action failed:', error),
+            });
         });
     });
 
@@ -1360,7 +1330,6 @@ function bindMenuEvents(container) {
     container.querySelectorAll('.pas-gm-menu-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            container.querySelectorAll('.pas-gm-context-menu').forEach(m => m.remove());
 
             const presetEl = btn.closest('.pas-gm-preset');
             const presetName = presetEl?.getAttribute('data-preset-name');
@@ -1368,39 +1337,15 @@ function bindMenuEvents(container) {
 
             const isManual = !!_gmOverrides[presetName];
 
-            const menu = document.createElement('div');
-            menu.className = 'pas-gm-context-menu';
-            menu.innerHTML = `
-                <div class="pas-gm-ctx-item" data-action="move">
-                    <i class="fa-solid fa-arrow-right-arrow-left"></i> ${escapeHtml(t('Grouping Menu Move To'))}
-                </div>
-                ${isManual ? `<div class="pas-gm-ctx-item" data-action="reset">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> ${escapeHtml(t('Grouping Menu Reset Auto'))}
-                </div>` : ''}
-                <div class="pas-gm-ctx-separator"></div>
-                <div class="pas-gm-ctx-item" data-action="copy-name">
-                    <i class="fa-solid fa-copy"></i> ${escapeHtml(t('Grouping Menu Copy Name'))}
-                </div>
-            `;
-
-            const rect = btn.getBoundingClientRect();
-            menu.style.position = 'fixed';
-            menu.style.visibility = 'hidden';
-            document.body.appendChild(menu);
-            const menuWidth = menu.offsetWidth || 150;
-            const menuHeight = menu.offsetHeight || 120;
-            let menuLeft = rect.left - menuWidth;
-            menuLeft = Math.max(8, Math.min(menuLeft, window.innerWidth - menuWidth - 8));
-            let menuTop = rect.bottom + 4;
-            menuTop = Math.min(menuTop, window.innerHeight - menuHeight - 8);
-            menu.style.left = `${menuLeft}px`;
-            menu.style.top = `${menuTop}px`;
-            menu.style.visibility = '';
-
-            menu.querySelectorAll('.pas-gm-ctx-item').forEach(item => {
-                item.addEventListener('click', async () => {
-                    const action = item.getAttribute('data-action');
-                    menu.remove();
+            const items = [
+                { action: 'move', iconClass: 'fa-solid fa-arrow-right-arrow-left', label: t('Grouping Menu Move To') },
+                ...(isManual ? [{ action: 'reset', iconClass: 'fa-solid fa-wand-magic-sparkles', label: t('Grouping Menu Reset Auto') }] : []),
+                { action: 'copy-name', iconClass: 'fa-solid fa-copy', label: t('Grouping Menu Copy Name'), separatorBefore: true },
+            ];
+            openGroupManagerContextMenu({
+                trigger: btn,
+                items,
+                onSelect: async action => {
                     if (action === 'move') {
                         await showMoveDialog(presetName, container);
                     } else if (action === 'reset') {
@@ -1414,16 +1359,9 @@ function bindMenuEvents(container) {
                             .then(() => toast.success(t('Grouping Copied')))
                             .catch(() => toast.error(t('Copy Failed')));
                     }
-                });
+                },
+                onError: error => logger.error('[grouping] preset menu action failed:', error),
             });
-
-            const closeMenu = (ev) => {
-                if (!menu.contains(ev.target)) {
-                    menu.remove();
-                    document.removeEventListener('click', closeMenu, true);
-                }
-            };
-            setTimeout(() => document.addEventListener('click', closeMenu, { once: true, capture: true }), 0);
         });
     });
 }
@@ -1571,6 +1509,7 @@ export function disposeGroupingManagerMount(root = _groupingManagerRoot) {
     if (!_groupingManagerRoot || (root && root !== _groupingManagerRoot)) return false;
     const mountedRoot = _groupingManagerRoot;
     _groupingManagerRoot = null;
+    closeGroupManagerContextMenu();
     mountedRoot.onkeydown = null;
     mountedRoot.replaceChildren();
     _gmAllNames = [];
