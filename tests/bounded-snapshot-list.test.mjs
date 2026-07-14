@@ -48,6 +48,6 @@ test('collapsed series defer version markup until disclosure', async () => {
 
 test('panel search feedback is scheduled within the interaction budget', async () => {
     const source = await readFile(new URL('../modules/history-panel.js', import.meta.url), 'utf8');
-    assert.match(source, /const PANEL_SEARCH_DEBOUNCE_MS = 60;/);
+    assert.match(source, /const PANEL_SEARCH_DEBOUNCE_MS = 30;/);
     assert.match(source, /_state\.search = e\.target\.value\.trim\(\);\s+renderListTabImmediately\(\);\s+}, PANEL_SEARCH_DEBOUNCE_MS\);/);
 });

@@ -125,7 +125,7 @@ const INITIAL_STATE = Object.freeze({
 let _state = newState();
 const PANEL_DATA_CACHE_TTL_MS = 15000;
 const PANEL_WARMUP_DELAY_MS = 1200;
-const PANEL_SEARCH_DEBOUNCE_MS = 60;
+const PANEL_SEARCH_DEBOUNCE_MS = 30;
 
 function scheduleIdleWork(fn, delay = 0) {
     const run = () => {

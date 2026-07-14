@@ -31,6 +31,10 @@ import { SerialTaskQueue } from './core/serial-task-queue.js';
 import { emitHistoryChange } from './core/history-change-events.js';
 import { canCoalesceSnapshotTrigger } from './core/snapshot-retention-policy.js';
 import {
+    createPreservedHistoryQuotaError,
+    isStorageQuotaError,
+} from './core/storage-quota.js';
+import {
     analyzeHistoryImport,
     applyHistoryImportPlan,
     buildHistoryImportPlan,
@@ -619,15 +623,6 @@ function invalidateKeysCache() {
     _keysCache = null;
 }
 
-function isQuotaError(e) {
-    return e && (
-        e.name === 'QuotaExceededError' ||
-        e.code === 22 ||
-        e.code === 1014 ||
-        /quota|exceed/i.test(e.message || '')
-    );
-}
-
 /**
  * 裁剪一个快照列表到上限，但保留所有 pinned 快照。
  * 输入 list 假定已按时间倒序（最新在前），原地修改。
@@ -814,46 +809,17 @@ function computeHashFromString(str) {
 }
 
 /**
- * 安全的 setItem，处理配额超限
+ * 安全写入。配额不足时保持仓库原样并把清理选择交还给用户。
  */
 async function safeSetItem(key, value) {
     try {
         await _store.setItem(key, value);
         invalidateKeysCache();
     } catch (e) {
-        if (isQuotaError(e)) {
-            logger.warn('Storage quota exceeded, attempting emergency cleanup...');
-            await emergencyCleanup();
-            try {
-                await _store.setItem(key, value);
-                invalidateKeysCache();
-            } catch (e2) {
-                logger.error('Storage still failing after cleanup:', e2);
-                throw new Error('Storage quota exceeded after cleanup');
-            }
-        } else {
-            throw e;
-        }
+        if (!isStorageQuotaError(e)) throw e;
+        logger.error('Storage quota exceeded; write rejected without deleting existing history');
+        throw createPreservedHistoryQuotaError(e);
     }
-}
-
-/**
- * 紧急清理：每个预设只保留最近10条
- */
-async function emergencyCleanup() {
-    const keys = await getKeys(true);
-    let removed = 0;
-    for (const key of keys) {
-        const list = await readHistoryBucket(_store, key);
-        if (list.length > 10) {
-            const before = list.length;
-            trimListWithPinned(list, 10);
-            removed += before - list.length;
-            await _store.setItem(key, list);
-        }
-    }
-    invalidateKeysCache();
-    logger.warn(`Emergency cleanup: removed ${removed} snapshots`);
 }
 
 // =====================================================
