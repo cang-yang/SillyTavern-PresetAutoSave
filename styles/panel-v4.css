@@ -453,6 +453,19 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
         scroll-snap-type: x proximity;
     }
     .pas-filters::-webkit-scrollbar { display: none; }
+    #pas-panel-list > .pas-toolbar > .pas-filters {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-right: 0;
+        padding-right: 0;
+        overflow: visible;
+        scroll-snap-type: none;
+    }
+    #pas-panel-list > .pas-toolbar > .pas-filters .pas-filter {
+        min-width: 0;
+        justify-content: center;
+        white-space: nowrap;
+    }
     .pas-filter,
     .pas-log-filter { min-height: 32px; padding: 4px 9px; scroll-snap-align: start; }
     .pas-diff-bar { grid-template-columns: 1fr; }
@@ -493,7 +506,7 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-panel-tabs { margin-inline: 8px; }
     .pas-tab { gap: 4px; font-size: 11px; }
     .pas-panel-body { padding-inline: 8px; }
-    .pas-filters { margin-right: -8px; padding-right: 8px; }
+    .pas-log-toolbar > .pas-filters { margin-right: -8px; padding-right: 8px; }
     .pas-log-actions .pas-log-autoscroll span { display: none; }
     .pas-log-actions .pas-log-autoscroll { margin-right: 0; }
 }

@@ -21,7 +21,7 @@ import {
 } from './history-store.js';
 import {
     confirmSafe, toast, t,
-    escapeHtml, escapeAttr,
+    escapeHtml, escapeAttr, escapeTranslationHtml,
 } from './compatibility.js';
 import { saveNowDetailed, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { forceReseedSnapshots, refreshTakeover } from './preset-takeover.js';
@@ -102,7 +102,7 @@ export function updateLogBadge(panelCtx, count = null) {
 }
 
 export async function onLogClear(panelCtx) {
-    const ok = await confirmSafe(t('Clear Logs Confirm'), t('Clear Logs Hint'));
+    const ok = await confirmSafe(escapeHtml(t('Clear Logs Confirm')), escapeTranslationHtml(t('Clear Logs Hint')));
     if (!ok) return;
     logger.clearLogs();
     renderLogTab(panelCtx);
@@ -344,7 +344,7 @@ export function bindSettingsEvents(container, panelCtx) {
 
     // 重置按钮
     container.querySelector('.pas-btn-reset')?.addEventListener('click', async () => {
-        const ok = await confirmSafe(t('Reset Settings Confirm'), t('Reset Settings Hint'));
+        const ok = await confirmSafe(escapeHtml(t('Reset Settings Confirm')), escapeTranslationHtml(t('Reset Settings Hint')));
         if (!ok) return;
         resetSettings();
         toast.success(t('Reset Settings Done'));
@@ -383,8 +383,8 @@ export function bindSettingsEvents(container, panelCtx) {
     container.querySelector('.pas-btn-clear-all')?.addEventListener('click', async () => {
         const stats = await getStats();
         const ok = await confirmSafe(
-            t('Clear All Confirm'),
-            `<div>${t('Clear All Hint', { count: stats.snapshotCount })}</div>
+            escapeHtml(t('Clear All Confirm')),
+            `<div>${escapeTranslationHtml(t('Clear All Hint', { count: stats.snapshotCount }))}</div>
              <div style="margin-top: 8px; color: var(--white50a, #999);">${escapeHtml(t('Clear All Warning'))}</div>`
         );
         if (!ok) return;
@@ -410,9 +410,9 @@ export async function onCleanup(panelCtx) {
     const stats = await getStats();
     const settings = getSettings();
     const ok = await confirmSafe(
-        t('Cleanup Confirm'),
-        `<div>${t('Cleanup Description', { count: stats.snapshotCount, size: stats.totalSizeFormatted })}</div>
-         <div style="margin: 12px 0;">${t('Cleanup Action Hint', { max: settings.maxHistoryPerPreset })}</div>`
+        escapeHtml(t('Cleanup Confirm')),
+        `<div>${escapeTranslationHtml(t('Cleanup Description', { count: stats.snapshotCount, size: stats.totalSizeFormatted }))}</div>
+         <div style="margin: 12px 0;">${escapeTranslationHtml(t('Cleanup Action Hint', { max: settings.maxHistoryPerPreset }))}</div>`
     );
     if (!ok) return;
 
@@ -489,7 +489,7 @@ export async function onImport(panelCtx) {
  */
 export async function onPurgeCorrupt(panelCtx) {
     const ok = await confirmSafe(
-        t('Purge Corrupt Confirm'),
+        escapeHtml(t('Purge Corrupt Confirm')),
         `<div>${escapeHtml(t('Purge Corrupt Hint'))}</div>
          <div style="margin-top: 8px; color: var(--white50a, #999);">${escapeHtml(t('Purge Corrupt Detail'))}</div>`
     );
@@ -568,10 +568,10 @@ export async function updateStats(panelCtx) {
 
     const footerStats = rootAfter.querySelector('#pas-footer-stats');
     if (footerStats) {
-        footerStats.innerHTML = t('Footer Stats', {
+        footerStats.innerHTML = escapeTranslationHtml(t('Footer Stats', {
             count: stats.snapshotCount,
             size: stats.totalSizeFormatted,
             presets: stats.presetCount,
-        });
+        }));
     }
 }

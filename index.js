@@ -37,6 +37,7 @@ import { initThemeDetector, teardownThemeDetector } from './modules/theme-detect
 import { runDeleteRecovery } from './modules/core/lifecycle-recovery.js';
 import { RuntimeTimerRegistry } from './modules/core/runtime-timers.js';
 import { createDebugInterface } from './modules/debug-interface.js';
+import { createSnapshotWriteback } from './modules/core/snapshot-writeback.js';
 
 const VERSION = '1.0.0';
 
@@ -51,6 +52,13 @@ let _mainEventsBound = false;       // 防止 main() 中事件重复订阅
 let _mainEventUnsubscribers = [];   // main() 中订阅的事件取消函数
 const _runtimeTimers = new RuntimeTimerRegistry();
 let _domReadyHandler = null;
+const _writeBackLatestSnapshots = createSnapshotWriteback({
+    loadSnapshots: getAllSnapshots,
+    getPresetManager,
+    savePreset: savePresetSafe,
+    parsePresetName,
+    logger,
+});
 
 function resetLifecycleState() {
     _runtimeTimers.clearAll();
@@ -261,136 +269,6 @@ export async function onEnable() {
     const ready = _phase1Done && _takeoverDone && _phase2Done;
     if (!ready) logger.warn('Enable completed with one or more initialization phases unavailable');
     return { ready };
-}
-
-/**
- * ⚡ C2+C3 重写：把有快照的预设写回 ST
- *
- * 两种模式（通过 opts 控制）：
- *
- *   onDelete 调用（skipExisting=true, filterGhosts=true）：
- *     - 过滤幽灵快照（presetName === 系列名 且同系列有其他真实版本）
- *     - 已存在于 ST 的预设 → 跳过（不覆盖用户的手动修改）
- *     - 不存在于 ST 的预设 → 用最新快照写回（恢复被数据接管删除的）
- *
- *   onDisable 调用（默认，skipExisting=false, filterGhosts=false）：
- *     - 保持旧行为：已存在的预设 → 用最新快照覆盖
- *     - 不存在的预设 → 跳过
- *
- * @param {object} [opts]
- * @param {boolean} [opts.skipExisting=false] true = 不覆盖已存在的预设（onDelete 语义）
- * @param {boolean} [opts.filterGhosts=false] true = 过滤掉系列名幽灵快照
- */
-async function _writeBackLatestSnapshots(opts = {}) {
-    const { skipExisting = false, filterGhosts = false } = opts;
-    try {
-        const allSnaps = await getAllSnapshots();
-        if (!Array.isArray(allSnaps) || allSnaps.length === 0) {
-            return { written: 0, skipped: 0, failed: 0 };
-        }
-
-        // 1. 按 (apiId, presetName) 分组，取每组中 timestamp 最大的快照
-        const latestMap = new Map();
-        let failed = 0;
-        let skipped = 0;
-        for (const s of allSnaps) {
-            if (!s || !s.presetName || !s.apiId) {
-                failed++;
-                continue;
-            }
-            const k = `${s.apiId}::${s.presetName}`;
-            const cur = latestMap.get(k);
-            if (!cur || (s.timestamp || 0) > (cur.timestamp || 0)) {
-                latestMap.set(k, s);
-            }
-        }
-
-        // 2. 过滤幽灵快照（presetName 等于系列名，且该系列有其他版本）
-        //    这些是旧版 seedSnapshotsIfNeeded 把代表 option 系列名当预设名存的残留
-        if (filterGhosts) {
-            const seriesMembers = new Map(); // seriesKey → Set<presetName>
-            for (const snap of latestMap.values()) {
-                try {
-                    const parsed = parsePresetName(snap.presetName);
-                    const series = parsed.series || snap.presetName;
-                    if (!seriesMembers.has(series)) seriesMembers.set(series, new Set());
-                    seriesMembers.get(series).add(snap.presetName);
-                } catch (_) { /* 解析失败 → 当独立预设，不过滤 */ }
-            }
-            for (const [key, snap] of [...latestMap.entries()]) {
-                try {
-                    const parsed = parsePresetName(snap.presetName);
-                    const series = parsed.series || snap.presetName;
-                    // 只有当 presetName === 系列名 且同系列还有其他成员时才是幽灵
-                    if (snap.presetName === series) {
-                        const members = seriesMembers.get(series);
-                        if (members && members.size > 1) {
-                            latestMap.delete(key);
-                            skipped++;
-                            logger.debug(`writeBack: filtered ghost snapshot "${snap.presetName}" (series has ${members.size} real versions)`);
-                        }
-                    }
-                } catch (_) { /* 解析失败 → 保留 */ }
-            }
-        }
-
-        // 3. 逐个写回 ST
-        let written = 0;
-        for (const snap of latestMap.values()) {
-            if (!snap.preset || typeof snap.preset !== 'object' || Array.isArray(snap.preset)) {
-                failed++;
-                continue;
-            }
-            try {
-                const pm = getPresetManager(snap.apiId);
-                if (!pm) throw new Error(`PresetManager unavailable for ${snap.apiId}`);
-
-                if (skipExisting) {
-                    // onDelete 语义：只恢复 ST 中不存在的预设（不覆盖已有的）
-                    let exists = false;
-                    let existenceKnown = false;
-                    if (pm && typeof pm.getPresetList === 'function') {
-                        try {
-                            const { preset_names } = pm.getPresetList(snap.apiId);
-                            if (Array.isArray(preset_names)) {
-                                exists = preset_names.includes(snap.presetName);
-                                existenceKnown = true;
-                            } else if (preset_names && typeof preset_names === 'object') {
-                                exists = Object.hasOwn(preset_names, snap.presetName);
-                                existenceKnown = true;
-                            }
-                        } catch (_) {}
-                    }
-                    // 兜底：findPreset 检查
-                    if (!exists && typeof pm.findPreset === 'function') {
-                        try {
-                            exists = pm.findPreset(snap.presetName) !== undefined;
-                            existenceKnown = true;
-                        } catch (_) {}
-                    }
-                    if (!existenceKnown) throw new Error(`Could not verify whether preset exists: ${snap.presetName}`);
-                    if (exists) { skipped++; continue; }
-                } else {
-                    // onDisable 语义（旧行为）：只覆盖已存在的预设
-                    if (typeof pm.findPreset !== 'function') {
-                        throw new Error(`Could not verify existing preset: ${snap.presetName}`);
-                    }
-                    const found = pm.findPreset(snap.presetName);
-                    if (found === undefined) { skipped++; continue; }
-                }
-
-                await savePresetSafe(snap.presetName, snap.preset, { apiId: snap.apiId, skipUpdate: true });
-                written++;
-            } catch (e) {
-                logger.debug(`writeback failed for ${snap.presetName}:`, e);
-                failed++;
-            }
-        }
-        return { written, skipped, failed };
-    } catch (e) {
-        logger.warn('writeBackLatestSnapshots step failed:', e);
-        return { written: 0, skipped: 0, failed: 1, error: String(e) };
-    }
 }
 
 export async function onDisable() {

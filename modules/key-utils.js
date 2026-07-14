@@ -25,3 +25,40 @@ export function escapeHtml(s) {
 export function escapeAttr(s) {
     return escapeHtml(s);
 }
+
+/**
+ * Escape a complete host-provided translation while retaining the project's
+ * deliberately small rich-text contract: balanced, attribute-free <b> pairs.
+ * Everything else remains literal text, including tags with attributes.
+ *
+ * @param {*} value
+ * @returns {string}
+ */
+export function escapeTranslationHtml(value) {
+    if (value === null || value === undefined) return '';
+
+    const source = String(value);
+    const tagPattern = /<\/?b>/gi;
+    let result = '';
+    let offset = 0;
+    let emphasisOpen = false;
+    let match;
+
+    while ((match = tagPattern.exec(source)) !== null) {
+        result += escapeHtml(source.slice(offset, match.index));
+        const isClosing = match[0][1] === '/';
+        if (!isClosing && !emphasisOpen) {
+            result += '<strong>';
+            emphasisOpen = true;
+        } else if (isClosing && emphasisOpen) {
+            result += '</strong>';
+            emphasisOpen = false;
+        } else {
+            result += escapeHtml(match[0]);
+        }
+        offset = tagPattern.lastIndex;
+    }
+
+    result += escapeHtml(source.slice(offset));
+    return emphasisOpen ? `${result}</strong>` : result;
+}

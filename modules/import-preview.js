@@ -93,14 +93,14 @@ export function renderHistoryImportPreview(preview, options = {}) {
 async function chooseFallback(preview) {
     if (!preview?.modes?.merge?.available) {
         await confirmSafe(
-            t('Import Preview Title'),
+            escapeHtml(t('Import Preview Title')),
             `<div>${escapeHtml(t('Import Preview Merge Blocked'))}</div>
              <div style="margin-top:8px;opacity:.75">${escapeHtml(t('Import Preview No Changes'))}</div>`,
         );
         return null;
     }
     const ok = await confirmSafe(
-        t('Import Preview Title'),
+        escapeHtml(t('Import Preview Title')),
         `<div>${escapeHtml(t('Import Preview Fallback Summary', {
             presets: preview.presetCount,
             snapshots: preview.snapshotCount,

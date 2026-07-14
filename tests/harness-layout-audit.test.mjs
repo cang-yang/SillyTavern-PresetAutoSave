@@ -81,6 +81,19 @@ test('required control labels must remain visible at supported viewports', () =>
     assert.equal(result.findings[0].selector, '#pas-tab-list > span');
 });
 
+test('required control labels must be fully visible instead of clipped by a scroll strip', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 360, height: 800 },
+        documentWidth: 360,
+        requiredLabels: [
+            { selector: '.pas-filter[data-filter="week"] > span', text: '本周', visible: true, fullyVisible: false },
+        ],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings[0].code, 'required-label-clipped');
+});
+
 test('visible disclosure state must agree with aria-expanded', () => {
     const result = evaluateLayoutAudit(cleanMetrics({
         disclosures: [

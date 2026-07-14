@@ -12,6 +12,7 @@ import {
     confirmSafe, toast, t,
     getAllPresetNames,
     createPopupSafe,
+    escapeTranslationHtml,
 } from './compatibility.js';
 import { refreshTakeover } from './preset-takeover.js';
 import {
@@ -949,13 +950,13 @@ async function onDeleteCustomGroup(seriesKey, container) {
         }
     }
 
-    let confirmHtml = t('Grouping Delete Group Confirm', { name: escapeHtml(displayName) });
+    let confirmHtml = escapeTranslationHtml(t('Grouping Delete Group Confirm', { name: displayName }));
     if (childKeys.length > 0) {
-        confirmHtml = t('Grouping Delete Children Confirm', { count: childKeys.length });
+        confirmHtml = escapeTranslationHtml(t('Grouping Delete Children Confirm', { count: childKeys.length }));
     }
 
     const ok = await confirmSafe(
-        t('Grouping Menu Delete Group'),
+        escapeHtml(t('Grouping Menu Delete Group')),
         confirmHtml
     );
     if (!ok) return;
@@ -1350,8 +1351,8 @@ function bindMenuEvents(container) {
                         await showMoveDialog(presetName, container);
                     } else if (action === 'reset') {
                         const ok = await confirmSafe(
-                            t('Grouping Menu Reset Auto'),
-                            t('Grouping Reset Confirm', { name: presetName })
+                            escapeHtml(t('Grouping Menu Reset Auto')),
+                            escapeTranslationHtml(t('Grouping Reset Confirm', { name: presetName }))
                         );
                         if (ok) performResetOne(presetName, container);
                     } else if (action === 'copy-name') {
@@ -1395,7 +1396,10 @@ function bindClickEvents(container) {
     const resetAllBtn = container.querySelector('.pas-gm-reset-all-btn');
     if (resetAllBtn) {
         resetAllBtn.onclick = async () => {
-            const ok = await confirmSafe(t('Grouping Reset All'), t('Grouping Reset All Confirm'));
+            const ok = await confirmSafe(
+                escapeHtml(t('Grouping Reset All')),
+                escapeTranslationHtml(t('Grouping Reset All Confirm')),
+            );
             if (ok) performResetAll(container);
         };
     }

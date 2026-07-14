@@ -33,6 +33,7 @@ import {
     getCurrentApiId,
     getSelectedPresetName,
     getContextSafe,
+    escapeTranslationHtml,
 } from './compatibility.js';
 import { saveNow, resetLastSavedHash, beginAtomicRestore, endAtomicRestore } from './auto-save.js';
 import { showDiffPopup } from './diff-viewer.js';
@@ -386,8 +387,8 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
 
     const time = formatTime(snapshot.timestamp);
     const ok = await confirmSafe(
-        t('Confirm Restore'),
-        `<div>${t('Restore Snapshot Hint', { name: escapeHtml(snapshot.presetName) })}</div>
+        escapeHtml(t('Confirm Restore')),
+        `<div>${escapeTranslationHtml(t('Restore Snapshot Hint', { name: snapshot.presetName }))}</div>
          <div style="margin: 8px 0; padding: 8px 12px; background: rgba(0,0,0,0.3); border-radius: 6px; font-family: monospace;">${escapeHtml(time)}</div>
          <div style="color: var(--white50a, #999); font-size: 0.9em;">${escapeHtml(t('Restore Irreversible'))}</div>`
     );
@@ -589,8 +590,8 @@ async function onDelete(snapshotId, panelCtx) {
 
     const time = formatTime(snapshot.timestamp);
     const ok = await confirmSafe(
-        t('Delete Snapshot'),
-        t('Delete Snapshot Hint', { name: escapeHtml(snapshot.presetName), time: escapeHtml(time) })
+        escapeHtml(t('Delete Snapshot')),
+        escapeTranslationHtml(t('Delete Snapshot Hint', { name: snapshot.presetName, time }))
     );
     if (!ok) return;
 
@@ -611,8 +612,8 @@ async function onClearPreset(key, panelCtx) {
     }
 
     const ok = await confirmSafe(
-        t('Clear Preset Confirm'),
-        t('Clear Preset Hint', { name: escapeHtml(presetName) })
+        escapeHtml(t('Clear Preset Confirm')),
+        escapeTranslationHtml(t('Clear Preset Hint', { name: presetName }))
     );
     if (!ok) return;
 
@@ -654,8 +655,8 @@ export async function onDeletePreset(presetName, apiId) {
 
     // L2: 确认对话框（presetName 必须 escapeHtml，confirmSafe → Popup 会渲染 HTML）
     const confirmed = await confirmSafe(
-        t('Delete Preset Btn'),
-        t('Delete Preset Confirm', { name: escapeHtml(presetName) })
+        escapeHtml(t('Delete Preset Btn')),
+        escapeTranslationHtml(t('Delete Preset Confirm', { name: presetName }))
     );
     if (!confirmed) return false;
 

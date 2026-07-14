@@ -28,6 +28,7 @@ import {
     getAllPresetNames,
     on as onEvent, off as offEvent, getEventType,
     createPopupSafe,
+    escapeTranslationHtml,
 } from './compatibility.js';
 import {
     parsePresetName,
@@ -1173,11 +1174,11 @@ async function maybePromptForImportAssignment(newName, existingGroups) {
     _importPromptInflight = true;
     try {
         const ok = await confirmSafe(
-            t('Grouping Import Detected Title'),
-            `<div>${t('Grouping Import Detected Hint', {
+            escapeHtml(t('Grouping Import Detected Title')),
+            `<div>${escapeTranslationHtml(t('Grouping Import Detected Hint', {
                 name: `<b>${escapeHtml(newName)}</b>`,
                 series: `<b>${escapeHtml(assignment.displayName)}</b>`,
-            })}</div>
+            }))}</div>
             <div style="margin-top: 6px; font-size: 0.86em; opacity: 0.7;">
               ${escapeHtml(t('Grouping Manage Auto'))}: ${escapeHtml(parsed.series)}
               ${parsed.version ? ` · ${escapeHtml(parsed.version)}` : ''}

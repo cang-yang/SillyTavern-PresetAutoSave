@@ -42,6 +42,8 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /exerciseDisclosures/);
     assert.match(app, /exerciseGroupingMenus/);
     assert.match(app, /exerciseGroupingLayout/);
+    assert.match(app, /exerciseHostileTranslations/);
+    assert.match(app, /hostile translation executed as markup/i);
     assert.match(app, /importantSelector[\s\S]*?\.pas-gm-search input/);
     assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true \}\)/);
     assert.doesNotMatch(app, /buildPanelHTML/);

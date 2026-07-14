@@ -17,7 +17,7 @@ import {
     CONNECTION_FIELDS,
     OPENAI_PRESET_FIELDS,
 } from './core/preset-schema.js';
-export { escapeHtml, escapeAttr } from './key-utils.js';
+export { escapeHtml, escapeAttr, escapeTranslationHtml } from './key-utils.js';
 export { formatTime } from './time-utils.js';
 export { StorageReadError } from './core/storage-integrity.js';
 

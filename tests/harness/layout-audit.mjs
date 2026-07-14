@@ -61,13 +61,21 @@ export function evaluateLayoutAudit(metrics) {
     }
 
     for (const label of Array.isArray(metrics.requiredLabels) ? metrics.requiredLabels : []) {
-        if (label?.visible) continue;
-        findings.push(finding(
-            'required-label-hidden',
-            'error',
-            `Required control label “${String(label?.text || '').trim()}” is not visible.`,
-            String(label?.selector || ''),
-        ));
+        if (!label?.visible) {
+            findings.push(finding(
+                'required-label-hidden',
+                'error',
+                `Required control label “${String(label?.text || '').trim()}” is not visible.`,
+                String(label?.selector || ''),
+            ));
+        } else if (label?.fullyVisible === false) {
+            findings.push(finding(
+                'required-label-clipped',
+                'error',
+                `Required control label “${String(label?.text || '').trim()}” is clipped.`,
+                String(label?.selector || ''),
+            ));
+        }
     }
 
     for (const selector of Array.isArray(metrics.hiddenFocusable) ? metrics.hiddenFocusable : []) {

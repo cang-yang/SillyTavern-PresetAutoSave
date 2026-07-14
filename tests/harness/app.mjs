@@ -13,6 +13,7 @@ const modelKind = options.scenario === 'loading' || options.scenario === 'error'
 const scenario = buildHarnessScenario(modelKind);
 const consoleErrors = [];
 const operationEvents = [];
+const translationOverrides = Object.create(null);
 let lastRenderMs = 0;
 let confirmResult = true;
 
@@ -37,7 +38,9 @@ const translations = await fetch('../../i18n/zh-cn.json').then(response => {
     return response.json();
 });
 const translate = (key, variables = null) => {
-    let output = typeof translations[key] === 'string' ? translations[key] : String(key);
+    let output = Object.hasOwn(translationOverrides, key)
+        ? String(translationOverrides[key])
+        : typeof translations[key] === 'string' ? translations[key] : String(key);
     if (variables) {
         for (const [name, value] of Object.entries(variables)) {
             const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -440,6 +443,33 @@ async function exerciseGroupingLayout() {
     return result;
 }
 
+async function exerciseHostileTranslations() {
+    if (options.scenario !== 'ordinary') throw new Error('Hostile translation checks require the ordinary scenario');
+    const marker = 'pas-hostile-translation-marker';
+    window.__PAS_HOSTILE_TRANSLATION_EXECUTED__ = false;
+    translationOverrides['Footer Stats'] = `<img id="${marker}" src="missing-hostile-translation" onerror="window.__PAS_HOSTILE_TRANSLATION_EXECUTED__=true">hostile`;
+
+    try {
+        await remountProductionPanel();
+        await waitFor(() => panelRoot.querySelector('#pas-footer-stats')?.textContent?.includes('hostile'));
+        await nextPaint();
+        const footer = panelRoot.querySelector('#pas-footer-stats');
+        const result = Object.freeze({
+            injectedElement: Boolean(document.getElementById(marker)),
+            handlerExecuted: window.__PAS_HOSTILE_TRANSLATION_EXECUTED__ === true,
+            renderedLiterally: footer?.textContent?.includes('<img') === true,
+        });
+        if (result.injectedElement || result.handlerExecuted || !result.renderedLiterally) {
+            throw new Error(`Hostile translation executed as markup: ${JSON.stringify(result)}`);
+        }
+        return result;
+    } finally {
+        delete translationOverrides['Footer Stats'];
+        delete window.__PAS_HOSTILE_TRANSLATION_EXECUTED__;
+        await remountProductionPanel();
+    }
+}
+
 async function exerciseCoreOperations() {
     if (options.scenario !== 'ordinary') throw new Error('Core operations require the ordinary scenario');
     operationEvents.length = 0;
@@ -601,11 +631,19 @@ function collectMetrics() {
         .filter(element => element.tabIndex >= 0)
         .map(selectorFor);
     const requiredLabels = [...metricsRoot.querySelectorAll('.pas-tab > span:not(.pas-tab-badge), .pas-filter > span')]
-        .map(element => ({
-            selector: `${selectorFor(element.parentElement)} > span`,
-            text: element.textContent || '',
-            visible: isVisible(element),
-        }));
+        .map(element => {
+            const rect = element.getBoundingClientRect();
+            const clippingRoot = element.closest('.pas-filters') || metricsRoot;
+            const clippingRect = clippingRoot.getBoundingClientRect();
+            const leftEdge = Math.max(0, clippingRect.left);
+            const rightEdge = Math.min(window.innerWidth, clippingRect.right);
+            return {
+                selector: `${selectorFor(element.parentElement)} > span`,
+                text: element.textContent || '',
+                visible: isVisible(element),
+                fullyVisible: rect.left >= leftEdge - 1 && rect.right <= rightEdge + 1,
+            };
+        });
     const disclosures = [...metricsRoot.querySelectorAll('[data-action="toggle-series"], [data-action="toggle-version"], [data-action="toggle-group"]')]
         .map(header => {
             const state = disclosureState(header);
@@ -652,6 +690,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     exerciseCoreOperations,
     exerciseGroupingMenus,
     exerciseGroupingLayout,
+    exerciseHostileTranslations,
     exerciseDisclosures,
     setConfirmResult: value => { confirmResult = Boolean(value); },
     operationEvents: () => Object.freeze([...operationEvents]),
