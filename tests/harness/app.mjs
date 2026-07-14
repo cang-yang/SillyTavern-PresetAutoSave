@@ -12,7 +12,9 @@ const modelKind = options.scenario === 'loading' || options.scenario === 'error'
     : options.scenario;
 const scenario = buildHarnessScenario(modelKind);
 const consoleErrors = [];
+const operationEvents = [];
 let lastRenderMs = 0;
+let confirmResult = true;
 
 const originalConsoleError = console.error.bind(console);
 console.error = (...args) => {
@@ -65,6 +67,8 @@ const selectAdapter = {
     val: () => nativeSelect.options[nativeSelect.selectedIndex]?.value ?? '',
 };
 const eventListeners = new Map();
+const popupShow = async () => null;
+popupShow.confirm = async () => confirmResult;
 const context = {
     mainApi: scenario.currentApiId,
     extensionSettings: {},
@@ -98,16 +102,19 @@ const context = {
     }),
     saveSettingsDebounced: () => {},
     translate,
-    Popup: { show: async () => null },
+    Popup: { show: popupShow },
 };
 window.SillyTavern = { version: '1.13.4-harness', getContext: () => context, libs: {} };
 window.main_api = scenario.currentApiId;
-window.toastr = { success() {}, info() {}, warning() {}, error() {} };
+window.toastr = Object.fromEntries(['success', 'info', 'warning', 'error'].map(level => [level, message => {
+    operationEvents.push(Object.freeze({ level, message: String(message || '') }));
+}]));
 
-const [{ initCompatibility }, { initSettings, batchUpdate }, historyPanel] = await Promise.all([
+const [{ initCompatibility }, { initSettings, batchUpdate }, historyPanel, historyStore] = await Promise.all([
     import('../../modules/compatibility.js'),
     import('../../modules/settings.js'),
     import('../../modules/history-panel.js'),
+    import('../../modules/history-store.js'),
 ]);
 initCompatibility();
 await initSettings();
@@ -124,6 +131,33 @@ batchUpdate({
     autoSeedOnTakeover: false,
 });
 
+function clearHarnessHistoryStorage() {
+    const prefixes = ['PresetAutoSave_history:', 'PresetAutoSave_history_v2:'];
+    for (let index = localStorage.length - 1; index >= 0; index--) {
+        const key = localStorage.key(index);
+        if (key && prefixes.some(prefix => key.startsWith(prefix))) localStorage.removeItem(key);
+    }
+}
+
+async function seedHarnessHistory() {
+    clearHarnessHistoryStorage();
+    await historyStore.initHistoryStore();
+    if (options.scenario !== 'ordinary') return;
+    for (const record of scenario.records) {
+        const snapshot = await historyStore.addSnapshot(
+            record.presetName,
+            record.apiId,
+            record.preset,
+            record.trigger,
+        );
+        if (!snapshot) continue;
+        if (record.pinned) await historyStore.togglePinSnapshot(snapshot.id, true);
+        if (record.label) await historyStore.renameSnapshot(snapshot.id, record.label);
+    }
+}
+
+await seedHarnessHistory();
+
 const app = document.querySelector('#pas-harness-app');
 const scenarioLabel = document.querySelector('#pas-harness-scenario');
 scenarioLabel.textContent = `${options.scenario} · ${options.theme} · ${options.view}`;
@@ -131,10 +165,13 @@ const { mountHistoryPanel, renderHistoryPanelShell, disposeHistoryPanelMount } =
 let panelRoot = null;
 let panelMount = null;
 
-function loadHarnessDataset() {
+async function loadHarnessDataset() {
     if (options.scenario === 'loading') return new Promise(() => {});
     if (options.scenario === 'error') {
         return Promise.reject(new Error('HARNESS_EXPECTED_STORAGE_FAILURE'));
+    }
+    if (options.scenario === 'ordinary') {
+        return { snapshots: await historyStore.getAllSnapshots(), archives: [] };
     }
     return Promise.resolve({ snapshots: scenario.records, archives: [] });
 }
@@ -143,7 +180,10 @@ async function mountProductionPanel({ waitUntilReady = options.scenario !== 'loa
     panelRoot = renderHistoryPanelShell(app);
     const started = performance.now();
     panelMount = mountHistoryPanel(panelRoot, { loadDataset: loadHarnessDataset });
-    if (waitUntilReady) await panelMount.ready;
+    if (waitUntilReady) {
+        await panelMount.ready;
+        await nextPaint();
+    }
     lastRenderMs = performance.now() - started;
     return panelRoot;
 }
@@ -328,6 +368,7 @@ function collectMetrics() {
     const importantSelector = [
         '.pas-btn-snap', '.pas-tools-trigger', '.pas-tab', '.pas-search',
         '.pas-view-btn', '.pas-filter', '.pas-btn-restore', '.pas-btn-apply-version',
+        '.pas-btn-show-more-snapshots',
         '.pas-import-confirm', '.pas-import-mode-card',
         '.pas-gm-header-actions button', '.pas-gm-rename-btn', '.pas-gm-mobile-actions button',
     ].join(',');
@@ -383,6 +424,8 @@ window.__PAS_HARNESS__ = Object.freeze({
     closeImportPreview,
     showGroupManager,
     exerciseDisclosures,
+    setConfirmResult: value => { confirmResult = Boolean(value); },
+    operationEvents: () => Object.freeze([...operationEvents]),
     collectMetrics,
     audit: () => evaluateLayoutAudit(collectMetrics()),
 });

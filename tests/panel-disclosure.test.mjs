@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setDisclosureExpanded } from '../modules/panel-disclosure.js';
+import {
+    setDisclosureExpanded,
+    shouldActivateDisclosureFromKeydown,
+} from '../modules/panel-disclosure.js';
 
 function classList(initial) {
     const values = new Set(initial);
@@ -47,4 +50,15 @@ test('missing optional visuals do not prevent semantic collapse', () => {
 
     assert.equal(body.hidden, true);
     assert.equal(attributes.get('aria-expanded'), 'false');
+});
+
+test('disclosure keyboard proxy never captures a nested action button', () => {
+    const disclosure = {};
+    const nestedButton = {};
+
+    assert.equal(shouldActivateDisclosureFromKeydown({ key: 'Enter', target: disclosure }, disclosure), true);
+    assert.equal(shouldActivateDisclosureFromKeydown({ key: ' ', target: disclosure }, disclosure), true);
+    assert.equal(shouldActivateDisclosureFromKeydown({ key: 'Enter', target: nestedButton }, disclosure), false);
+    assert.equal(shouldActivateDisclosureFromKeydown({ key: ' ', target: nestedButton }, disclosure), false);
+    assert.equal(shouldActivateDisclosureFromKeydown({ key: 'Escape', target: disclosure }, disclosure), false);
 });

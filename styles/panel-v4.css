@@ -498,3 +498,25 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-panel *::before,
     .pas-panel *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+.pas-panel .pas-btn-show-more-snapshots {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    min-height: 44px;
+    margin-top: 8px;
+    border: 1px solid color-mix(in srgb, var(--pas-accent, #8b5cf6) 35%, transparent);
+    border-radius: var(--pas-radius-sm, 8px);
+    background: color-mix(in srgb, var(--pas-accent, #8b5cf6) 8%, transparent);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.pas-panel .pas-btn-show-more-snapshots:hover,
+.pas-panel .pas-btn-show-more-snapshots:focus-visible {
+    border-color: var(--pas-accent, #8b5cf6);
+    background: color-mix(in srgb, var(--pas-accent, #8b5cf6) 14%, transparent);
+}

@@ -75,6 +75,8 @@ import {
     cleanupActionPopups,
     onBatchDeletePresets as _onBatchDeletePresets,
 } from './panel-actions.js';
+import { shouldActivateDisclosureFromKeydown } from './panel-disclosure.js';
+import { BULK_SNAPSHOT_RENDER_LIMIT } from './core/bounded-snapshot-list.js';
 
 // =====================================================
 // 状态
@@ -87,6 +89,7 @@ let _logRefreshTimer = null;
 let _panelSearchTimer = null;
 let _panelLogSearchTimer = null;
 let _panelPresetRefreshTimer = null;
+let _renderListFrame = null;
 let _historyRefreshUnsubscribe = null;
 let _historyRefreshTimer = null;
 let _panelDataWarmupPromise = null;
@@ -122,6 +125,7 @@ const INITIAL_STATE = Object.freeze({
 let _state = newState();
 const PANEL_DATA_CACHE_TTL_MS = 15000;
 const PANEL_WARMUP_DELAY_MS = 1200;
+const PANEL_SEARCH_DEBOUNCE_MS = 60;
 
 function scheduleIdleWork(fn, delay = 0) {
     const run = () => {
@@ -186,6 +190,7 @@ function newState() {
         expandedSeries: new Set(),
         expandedVersions: new Set(),
         expandedPresets: new Set(),
+        snapshotRenderLimits: new Map(),
         diffSel: { a: null, b: null },
         log: { level: 'all', search: '', autoScroll: true },
         batchMode: false,           // AR-0: 批量模式
@@ -217,8 +222,7 @@ function renderPanelLoading(stage = 'loading') {
     listEl.setAttribute('aria-busy', 'true');
     listEl.innerHTML = `<div class="pas-empty pas-panel-loading" data-stage="${escapeAttr(stage)}">
         <i class="fa-solid fa-spinner fa-spin pas-empty-icon"></i>
-        <p class="pas-empty-text">${escapeHtml(t('Loading') || 'Loading...')}</p>
-        <p class="pas-empty-hint">${escapeHtml(stage)}</p>
+        <p class="pas-empty-text">${escapeHtml(t('Panel Loading History'))}</p>
     </div>`;
 }
 
@@ -393,6 +397,11 @@ export function disposeHistoryPanelMount(root = _root) {
     if (_panelPresetRefreshTimer) {
         clearTimeout(_panelPresetRefreshTimer);
         _panelPresetRefreshTimer = null;
+    }
+    if (_renderListFrame !== null) {
+        cancelAnimationFrame(_renderListFrame);
+        _renderListFrame = null;
+        _renderListScheduled = false;
     }
     for (const { event, handler } of _panelEventBindings) {
         try { offEvent(event, handler); } catch (_) {}
@@ -603,8 +612,8 @@ function bindEvents() {
             _panelSearchTimer = setTimeout(() => {
                 _panelSearchTimer = null;
                 _state.search = e.target.value.trim();
-                renderListTab();
-            }, 200);
+                renderListTabImmediately();
+            }, PANEL_SEARCH_DEBOUNCE_MS);
         });
     }
 
@@ -688,12 +697,17 @@ function bindEvents() {
             for (const [seriesKey, info] of seriesMap.entries()) {
                 _state.expandedSeries.add(seriesKey);
                 for (const ver of info.versions) {
-                    _state.expandedVersions.add(presetKey(ver.apiId, ver.presetName));
+                    const key = presetKey(ver.apiId, ver.presetName);
+                    _state.expandedVersions.add(key);
+                    _state.snapshotRenderLimits.set(key, BULK_SNAPSHOT_RENDER_LIMIT);
                 }
             }
         } else {
             const presets = groupSnapshotsByPreset(filtered);
-            for (const k of Object.keys(presets)) _state.expandedPresets.add(k);
+            for (const k of Object.keys(presets)) {
+                _state.expandedPresets.add(k);
+                _state.snapshotRenderLimits.set(k, BULK_SNAPSHOT_RENDER_LIMIT);
+            }
         }
         renderListTab();
     });
@@ -764,7 +778,7 @@ function bindEvents() {
         });
         list.addEventListener('keydown', e => {
             const toggle = e.target.closest('[data-action="toggle-group"], [data-action="toggle-series"], [data-action="toggle-version"]');
-            if (!toggle || !['Enter', ' '].includes(e.key)) return;
+            if (!shouldActivateDisclosureFromKeydown(e, toggle)) return;
             e.preventDefault();
             toggle.click();
         });
@@ -902,10 +916,20 @@ let _renderListScheduled = false;
 function renderListTab() {
     if (_renderListScheduled) return;
     _renderListScheduled = true;
-    requestAnimationFrame(() => {
+    _renderListFrame = requestAnimationFrame(() => {
+        _renderListFrame = null;
         _renderListScheduled = false;
         _renderListTabImpl();
     });
+}
+
+function renderListTabImmediately() {
+    if (_renderListFrame !== null) {
+        cancelAnimationFrame(_renderListFrame);
+        _renderListFrame = null;
+        _renderListScheduled = false;
+    }
+    _renderListTabImpl();
 }
 
 function _renderListTabImpl() {

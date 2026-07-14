@@ -20,8 +20,8 @@
     "Yesterday": "Yesterday",
     "This Week": "This week",
     "Earlier": "Earlier",
-    "Expand All": "Expand all",
-    "Collapse All": "Collapse all",
+    "Expand All": "Expand all groups",
+    "Collapse All": "Collapse all groups",
     "Clear Preset History": "Clear preset history",
     "Clear Preset Confirm": "Clean up history snapshots",
     "Clear Preset Hint": "This will remove old snapshots for <b>{{name}}</b>, keeping the latest version as the current baseline. This cannot be undone.",
@@ -567,5 +567,7 @@
     "Diagnostic Changed Paths": "Changed fields",
     "Diagnostic None": "None",
     "Diagnostic Status committed": "Committed",
-    "Diagnostic Status legacy": "Legacy record"
+    "Diagnostic Status legacy": "Legacy record",
+    "Panel Loading History": "Loading preset history…",
+    "Show More Snapshots": "Show {{count}} more snapshots"
 }

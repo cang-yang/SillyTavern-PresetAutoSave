@@ -15,6 +15,9 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(html, /rel="icon" href="data:image\/svg\+xml,/);
     assert.match(html, /src="\.\/app\.mjs"/);
     assert.match(app, /mountHistoryPanel/);
+    assert.match(app, /initHistoryStore/);
+    assert.match(app, /seedHarnessHistory/);
+    assert.match(app, /operationEvents/);
     assert.match(app, /renderHistoryPanelShell/);
     assert.match(app, /disposeHistoryPanelMount/);
     assert.doesNotMatch(app, /from '\.\.\/\.\.\/modules\/panel-shell\.js'/);

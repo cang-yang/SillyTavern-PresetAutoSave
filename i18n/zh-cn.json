@@ -20,8 +20,8 @@
     "Yesterday": "昨天",
     "This Week": "本周",
     "Earlier": "更早",
-    "Expand All": "全部展开",
-    "Collapse All": "全部收起",
+    "Expand All": "展开全部分组",
+    "Collapse All": "收起全部分组",
     "Clear Preset History": "清空该预设历史",
     "Clear Preset Confirm": "清理历史快照",
     "Clear Preset Hint": "将清除 <b>{{name}}</b> 的历史快照，保留最新版本作为当前基准。此操作不可撤销。",
@@ -567,5 +567,7 @@
     "Diagnostic Changed Paths": "实际变化字段",
     "Diagnostic None": "无",
     "Diagnostic Status committed": "已完整提交",
-    "Diagnostic Status legacy": "旧版记录"
+    "Diagnostic Status legacy": "旧版记录",
+    "Panel Loading History": "正在加载预设历史…",
+    "Show More Snapshots": "再显示 {{count}} 条快照"
 }

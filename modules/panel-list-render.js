@@ -35,6 +35,10 @@ import {
     renderSummary, escapeHtml, escapeAttr, formatTime,
 } from './panel-summary.js';
 import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
+import {
+    SNAPSHOT_RENDER_INCREMENT,
+    getBoundedSnapshotWindow,
+} from './core/bounded-snapshot-list.js';
 
 // =====================================================
 // 工具函数
@@ -290,6 +294,7 @@ function renderPresetGroup(key, snapshots, panelCtx) {
     const totalSize = snapshots.reduce((sum, s) => sum + (s.size || 0), 0);
     const latestTime = snapshots[0]?.timestamp || 0;
     const safeKey = escapeAttr(key);
+    const snapshotWindow = getBoundedSnapshotWindow(snapshots, _state.snapshotRenderLimits.get(key));
 
     return `
 <div class="pas-preset-group ${isCurrent ? 'pas-preset-current' : ''}" data-preset-key="${safeKey}">
@@ -313,7 +318,8 @@ function renderPresetGroup(key, snapshots, panelCtx) {
         </div>
     </div>
     <div class="pas-preset-body"${isExpanded ? '' : ' hidden'}>
-        ${isExpanded ? snapshots.map(s => renderCard(s, panelCtx)).join('') : ''}
+        ${isExpanded ? snapshotWindow.items.map(s => renderCard(s, panelCtx)).join('') : ''}
+        ${isExpanded ? renderShowMoreSnapshots(key, snapshotWindow.remaining, snapshotWindow.total) : ''}
     </div>
 </div>`;
 }
@@ -397,6 +403,7 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     const currentApi = getCurrentApiId();
     const isCurrent = (ver.presetName === currentName && ver.apiId === currentApi);
     const isEmpty = (ver.snapshotCount || 0) === 0;
+    const snapshotWindow = getBoundedSnapshotWindow(ver.snapshots, _state.snapshotRenderLimits.get(versionKey));
 
 
     // 版本号胶囊：仅在解析出版本号时才显示（去掉了"未识别版本"占位）
@@ -471,11 +478,22 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     <div class="pas-version-body"${isExpanded ? '' : ' hidden'}>
         ${isExpanded
             ? (ver.snapshots.length > 0
-                ? ver.snapshots.map(s => renderCard(s, panelCtx)).join('')
+                ? snapshotWindow.items.map(s => renderCard(s, panelCtx)).join('')
                 : `<div class="pas-version-empty-hint">${escapeHtml(t('No Snapshots Yet Hint'))}</div>`)
             : ''}
+        ${isExpanded ? renderShowMoreSnapshots(versionKey, snapshotWindow.remaining, snapshotWindow.total) : ''}
     </div>
 </div>`;
+}
+
+function renderShowMoreSnapshots(key, remaining, total) {
+    if (remaining <= 0) return '';
+    const count = Math.min(remaining, SNAPSHOT_RENDER_INCREMENT);
+    const label = t('Show More Snapshots', { count });
+    return `<button class="pas-btn-show-more-snapshots" data-action="show-more-snapshots" data-preset-key="${escapeAttr(key)}" data-total-snapshots="${total}" type="button">
+        <i class="fa-solid fa-chevron-down"></i>
+        <span>${escapeHtml(label)}</span>
+    </button>`;
 }
 
 // =====================================================

@@ -26,3 +26,17 @@ export function setDisclosureExpanded(group, body, expanded, {
     icon?.classList.toggle('fa-folder-open', expanded);
     icon?.classList.toggle('fa-folder', !expanded);
 }
+
+/**
+ * A row disclosure may contain real action buttons. Only proxy keyboard
+ * activation when focus is on the disclosure itself; descendant controls keep
+ * their native Enter/Space behavior.
+ */
+export function shouldActivateDisclosureFromKeydown(event, disclosure) {
+    return Boolean(
+        event
+        && disclosure
+        && event.target === disclosure
+        && (event.key === 'Enter' || event.key === ' ')
+    );
+}

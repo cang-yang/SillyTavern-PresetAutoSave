@@ -51,6 +51,7 @@ import {
 import { parsePresetKey } from './panel-list-render.js';
 import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
 import { setDisclosureExpanded } from './panel-disclosure.js';
+import { increaseSnapshotRenderLimit } from './core/bounded-snapshot-list.js';
 
 // --- 从子模块导入分组管理函数（软拆分：panel-group-manager.js） ---
 import {
@@ -110,12 +111,28 @@ export function cleanupActionPopups({ includeWizard = false } = {}) {
  * @param {object} panelCtx - { root, state, refreshData, renderListTab, archivedCache }
  */
 export async function handleListClick(e, panelCtx) {
+    const showMoreBtn = e.target.closest('.pas-btn-show-more-snapshots');
     const clearBtn = e.target.closest('.pas-btn-clear-preset');
     const applyVersionBtn = e.target.closest('.pas-btn-apply-version');
     const deletePresetBtn = e.target.closest('.pas-version-delete-btn');
     const seriesHeader = e.target.closest('.pas-series-header');
     const versionHeader = e.target.closest('.pas-version-header');
     const presetHeader = e.target.closest('.pas-preset-header');
+
+    if (showMoreBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = showMoreBtn.getAttribute('data-preset-key');
+        const total = Number.parseInt(showMoreBtn.getAttribute('data-total-snapshots') || '0', 10);
+        if (!key || !Number.isFinite(total)) return;
+        const state = panelCtx.state();
+        state.snapshotRenderLimits.set(
+            key,
+            increaseSnapshotRenderLimit(state.snapshotRenderLimits.get(key), total),
+        );
+        panelCtx.renderListTab();
+        return;
+    }
 
     // 1) 清除某预设/版本的全部历史按钮
     if (clearBtn) {
