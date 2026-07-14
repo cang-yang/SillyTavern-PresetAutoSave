@@ -190,6 +190,21 @@ test('compact history chrome and expanded actions stay within density budgets', 
     ]);
 });
 
+test('compact controls reject oversized painted faces and open-sided version frames', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        viewport: { width: 390, height: 844 },
+        documentWidth: 390,
+        controlFaces: [{ selector: '.pas-primary-action .pas-control-face', visible: true, height: 44 }],
+        versionFrames: [{ selector: '.pas-version-current', visible: true, borders: [1, 0, 0, 0], radius: 0 }],
+    }));
+
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.findings.map(item => item.code), [
+        'compact-control-face-too-tall',
+        'compact-version-frame-incomplete',
+    ]);
+});
+
 test('warmed 500-snapshot view switches stay within one interaction frame', () => {
     const result = evaluateLayoutAudit(cleanMetrics({
         scenario: 'performance',

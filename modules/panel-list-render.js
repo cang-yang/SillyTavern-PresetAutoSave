@@ -234,17 +234,17 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
     const applyBtn = ver.archived
         ? ''
         : `<button class="pas-btn-action pas-btn-apply-version" data-action="apply-version" data-preset-name="${safePresetName}" title="${escapeAttr(t('Apply This Version'))}" type="button" aria-label="${escapeAttr(t('Apply This Version'))}">
-            <i class="fa-solid fa-circle-check"></i><span class="pas-action-label">${escapeHtml(t('Apply This Version'))}</span>
+            <span class="pas-control-face"><i class="fa-solid fa-circle-check"></i><span class="pas-action-label">${escapeHtml(t('Apply Version Short'))}</span></span>
         </button>`;
 
     // AR-0: 删除预设按钮（当前预设 disabled）
     const deletePresetBtn = `<button class="pas-version-delete-btn" data-action="delete-preset" data-preset-name="${safePresetName}" data-api-id="${escapeAttr(ver.apiId)}" title="${escapeAttr(t('Delete Preset Btn'))}" type="button" aria-label="${escapeAttr(t('Delete Preset Btn'))}" ${isCurrent ? 'disabled' : ''}>
-            <i class="fa-solid fa-trash-can"></i><span class="pas-action-label">${escapeHtml(t('Delete Preset Btn'))}</span>
+            <span class="pas-control-face"><i class="fa-solid fa-trash-can"></i><span class="pas-action-label">${escapeHtml(t('Delete'))}</span></span>
         </button>`;
     const versionActionsHtml = `<div class="pas-version-actions" role="group" aria-label="${escapeAttr(t('Grouping Preset Actions'))}">
             ${applyBtn}
             <button class="pas-btn-action pas-btn-clear-preset" data-action="clear-preset" data-preset-key="${safeKey}" title="${escapeAttr(t('Clear Preset History'))}" type="button" aria-label="${escapeAttr(t('Clear Preset History'))}">
-                <i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Clear History Short'))}</span>
+                <span class="pas-control-face"><i class="fa-solid fa-trash"></i><span class="pas-action-label">${escapeHtml(t('Clear Short'))}</span></span>
             </button>
             ${deletePresetBtn}
         </div>`;

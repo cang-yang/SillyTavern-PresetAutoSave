@@ -48,7 +48,7 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /exerciseHostileTranslations/);
     assert.match(app, /hostile translation executed as markup/i);
     assert.match(app, /importantSelector[\s\S]*?\.pas-gm-search input/);
-    assert.match(app, /\.pas-primary-action > span[\s\S]*?\.pas-view-btn > span[\s\S]*?\.pas-btn-clear-preset > \.pas-action-label/);
+    assert.match(app, /\.pas-primary-action \.pas-control-face > span[\s\S]*?\.pas-view-btn > span[\s\S]*?\.pas-btn-clear-preset > \.pas-action-label/);
     assert.match(app, /footerText[\s\S]*?contrastRatio/);
     assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true \}\)/);
     assert.doesNotMatch(app, /buildPanelHTML/);

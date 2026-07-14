@@ -733,13 +733,14 @@ function collectMetrics() {
     const metricsRoot = document.querySelector('.pas-harness-dialog') || app;
     const importantSelector = [
         '.pas-btn-snap', '.pas-tools-trigger', '.pas-tab', '.pas-search',
-        '.pas-view-btn', '.pas-btn-restore', '.pas-btn-apply-version',
+        '.pas-view-btn', '.pas-btn-diff-a', '.pas-btn-diff-b', '.pas-btn-restore', '.pas-btn-view',
+        '.pas-card-tools-trigger', '.pas-btn-apply-version',
         '.pas-btn-show-more-snapshots',
         '.pas-import-confirm', '.pas-import-mode-card',
         '.pas-gm-header-actions button', '.pas-gm-rename-btn', '.pas-gm-mobile-actions button',
         '.pas-gm-search input',
     ].join(',');
-    const controls = [...metricsRoot.querySelectorAll('button, input, [role="button"], .pas-import-mode-card')].map(element => {
+    const controls = [...metricsRoot.querySelectorAll('button, summary, input, [role="button"], .pas-import-mode-card')].map(element => {
         const rect = element.getBoundingClientRect();
         return {
             selector: selectorFor(element),
@@ -753,7 +754,7 @@ function collectMetrics() {
         .filter(element => element.tabIndex >= 0)
         .map(selectorFor);
     const requiredLabelSelector = window.innerWidth <= 460
-        ? '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span, .pas-primary-action > span, .pas-view-btn > span, .pas-btn-clear-preset > .pas-action-label'
+        ? '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span, .pas-primary-action .pas-control-face > span, .pas-view-btn > span, .pas-btn-clear-preset > .pas-action-label'
         : '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span';
     const requiredLabels = [...metricsRoot.querySelectorAll(requiredLabelSelector)]
         .filter(element => isVisible(element.parentElement))
@@ -817,6 +818,23 @@ function collectMetrics() {
     const snapshotActionHeight = visibleSnapshotActions.length > 0
         ? Math.max(...visibleSnapshotActions.map(actions => actions.getBoundingClientRect().height))
         : null;
+    const controlFaces = [...metricsRoot.querySelectorAll('.pas-control-face')].map(element => ({
+        selector: `${selectorFor(element.parentElement)} > .pas-control-face`,
+        visible: isVisible(element),
+        height: Number(element.getBoundingClientRect().height.toFixed(2)),
+    }));
+    const versionFrames = [...metricsRoot.querySelectorAll('.pas-series-body > .pas-version-group')]
+        .filter(isVisible)
+        .map(element => {
+            const style = getComputedStyle(element);
+            return {
+                selector: selectorFor(element),
+                visible: true,
+                borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth]
+                    .map(value => Number.parseFloat(value)),
+                radius: Number.parseFloat(style.borderTopLeftRadius),
+            };
+        });
     const renderedView = panelRoot?.querySelector('.pas-series-group')
         ? 'series'
         : panelRoot?.querySelector('.pas-preset-group') ? 'flat' : null;
@@ -848,6 +866,11 @@ function collectMetrics() {
         historyListTop,
         versionHeaderHeight,
         snapshotActionHeight,
+        controlFaces: Object.freeze(controlFaces.map(Object.freeze)),
+        versionFrames: Object.freeze(versionFrames.map(frame => Object.freeze({
+            ...frame,
+            borders: Object.freeze(frame.borders),
+        }))),
         viewSwitchMs: lastViewSwitchMs,
         viewMode,
         footerText,

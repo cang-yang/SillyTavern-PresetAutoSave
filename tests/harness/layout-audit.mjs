@@ -4,6 +4,8 @@ const OVERFLOW_TOLERANCE = 1;
 const MAX_COMPACT_HISTORY_TOP = 190;
 const MAX_COMPACT_VERSION_HEADER = 54;
 const MAX_COMPACT_SNAPSHOT_ACTIONS = 44;
+const MAX_COMPACT_CONTROL_FACE = 32;
+const MIN_COMPACT_VERSION_RADIUS = 8;
 const MAX_WARMED_VIEW_SWITCH_MS = 20;
 
 function finding(code, severity, message, selector = '') {
@@ -160,6 +162,32 @@ export function evaluateLayoutAudit(metrics) {
                 'error',
                 `Snapshot actions are ${Math.round(snapshotActionHeight)}px high before secondary tools are expanded; the compact budget is ${MAX_COMPACT_SNAPSHOT_ACTIONS}px.`,
                 '.pas-card-actions',
+            ));
+        }
+
+        for (const face of Array.isArray(metrics.controlFaces) ? metrics.controlFaces : []) {
+            if (!face?.visible) continue;
+            const height = Number(face.height);
+            if (!Number.isFinite(height) || height <= MAX_COMPACT_CONTROL_FACE) continue;
+            findings.push(finding(
+                'compact-control-face-too-tall',
+                'error',
+                `Control face is ${Math.round(height)}px high; compact visual faces must stay within ${MAX_COMPACT_CONTROL_FACE}px while the touch target remains 44px.`,
+                String(face.selector || ''),
+            ));
+        }
+
+        for (const frame of Array.isArray(metrics.versionFrames) ? metrics.versionFrames : []) {
+            if (!frame?.visible) continue;
+            const borders = Array.isArray(frame.borders) ? frame.borders.map(Number) : [];
+            const radius = Number(frame.radius);
+            if (borders.length === 4 && borders.every(width => Number.isFinite(width) && width >= 1)
+                && Number.isFinite(radius) && radius >= MIN_COMPACT_VERSION_RADIUS) continue;
+            findings.push(finding(
+                'compact-version-frame-incomplete',
+                'error',
+                'A compact version entry is missing a complete border or rounded corner and appears cut open.',
+                String(frame.selector || ''),
             ));
         }
     }

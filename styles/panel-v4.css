@@ -354,7 +354,7 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 body.pas-light .pas-panel .pas-series-current,
 body.pas-light .pas-panel .pas-series-current-node,
 body.pas-light .pas-panel .pas-version-current,
-body.pas-light .pas-panel .pas-preset-current { border-color: rgba(217, 119, 6, .42); border-left-color: #d97706; background: linear-gradient(135deg, rgba(245, 158, 11, .13), var(--pas-v4-surface) 46%); }
+body.pas-light .pas-panel .pas-preset-current { border-color: rgba(217, 119, 6, .42); background: linear-gradient(135deg, rgba(245, 158, 11, .13), var(--pas-v4-surface) 46%); }
 body.pas-light .pas-panel .pas-series-current .pas-series-version-pill,
 body.pas-light .pas-panel .pas-version-current .pas-version-pill,
 body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34); background: rgba(245, 158, 11, .13); color: #b45309; }
@@ -368,6 +368,7 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
 
 .pas-panel-footer { display: flex; min-height: 40px; flex: 0 0 auto; align-items: center; padding: 8px 20px; border-top: 1px solid var(--pas-v4-border); background: var(--pas-v4-footer-bg); color: var(--pas-v4-footer-text); font-size: 12px; }
 .pas-panel-footer .pas-stats { color: inherit; font-size: inherit; }
+.pas-control-face { display: contents; }
 .pas-action-label { display: none; }
 .pas-version-actions {
     display: flex;
@@ -484,11 +485,28 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-panel-status > .pas-status-dot { width: 6px; height: 6px; box-shadow: 0 0 0 3px rgba(66, 211, 146, .09); }
     .pas-panel-status .pas-panel-stats { display: none; }
     .pas-primary-action,
-    .pas-tools-trigger { min-width: 36px; padding: 0 9px; border-radius: 9px; box-shadow: none; }
-    .pas-primary-action {
-        border-color: transparent;
-        background: linear-gradient(135deg, var(--pas-v4-primary-start), var(--pas-v4-primary-end)) center / 100% calc(100% - 8px) no-repeat;
+    .pas-tools-trigger { min-width: 36px; gap: 0; padding: 0 2px; border-color: transparent; border-radius: 9px; background: transparent; box-shadow: none; }
+    .pas-primary-action:hover,
+    .pas-tools-trigger:hover,
+    .pas-tools-trigger[aria-expanded="true"] { border-color: transparent; background: transparent; box-shadow: none; transform: none; }
+    .pas-control-face {
+        display: inline-flex;
+        height: 30px;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        padding: 0 7px;
+        border: 1px solid var(--pas-v4-border);
+        border-radius: 7px;
+        background: var(--pas-v4-surface-raised);
+        line-height: 1;
+        white-space: nowrap;
     }
+    .pas-primary-action > .pas-control-face,
+    .pas-tools-trigger > .pas-control-face { height: 32px; padding-inline: 8px; border-radius: 8px; }
+    .pas-primary-action > .pas-control-face { border-color: transparent; background: linear-gradient(135deg, var(--pas-v4-primary-start), var(--pas-v4-primary-end)); color: #fff; }
+    .pas-tools-trigger > .pas-control-face { color: var(--pas-v4-text-muted); }
+    .pas-tools-trigger[aria-expanded="true"] > .pas-control-face { border-color: rgba(139, 92, 246, .42); background: var(--pas-v4-accent-soft); color: var(--pas-v4-accent-readable); }
     .pas-tools-menu { position: absolute; top: calc(100% + 8px); right: 0; bottom: auto; left: auto; width: min(340px, calc(100vw - 28px)); max-height: calc(100svh - 110px); overflow-y: auto; padding: 10px; border-radius: 16px; }
     .pas-tools-section { grid-template-columns: 1fr 1fr; }
     .pas-tool-item { min-height: 48px; }
@@ -535,21 +553,25 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-preset-header-meta { flex-wrap: wrap; }
     .pas-card { gap: 4px; padding: 6px 7px; border-radius: 8px; }
     .pas-card-actions {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        display: flex;
+        flex-wrap: wrap;
         min-height: 44px;
         align-items: center;
-        gap: 4px;
+        justify-content: flex-start;
+        gap: 0;
     }
-    .pas-card-primary-actions { min-width: 0; gap: 3px; }
+    .pas-card-primary-actions { min-width: 0; gap: 0; }
     .pas-card-primary-actions .pas-btn-action,
-    .pas-card-tools-trigger { width: auto; min-width: 30px; height: 30px; min-height: 30px; padding: 4px 7px; }
-    .pas-card-primary-actions .pas-btn-restore { min-height: 44px; padding-inline: 9px; }
+    .pas-card-tools-trigger { width: auto; min-width: 38px; height: 44px; min-height: 44px; padding: 0 2px; border: 0; background: transparent; }
+    .pas-card-primary-actions .pas-btn-action { min-width: 44px; min-height: 44px; padding: 0 2px; border: 0; background: transparent; }
+    .pas-card-primary-actions .pas-control-face,
+    .pas-card-tools-trigger .pas-control-face { height: 30px; padding-inline: 7px; }
+    .pas-card-primary-actions .pas-control-face-letter { width: 30px; padding: 0; font-size: 12px; font-weight: 700; }
     .pas-card-tools { display: block; }
     .pas-card-tools-trigger { display: flex; }
     .pas-card-tools:not([open]) > .pas-card-tools-actions { display: none !important; }
-    .pas-card-tools[open] { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; }
-    .pas-card-tools[open] > .pas-card-tools-trigger { grid-column: 2; justify-self: end; }
+    .pas-card-tools[open] { display: grid; flex: 1 0 100%; grid-template-columns: auto minmax(0, 1fr); gap: 4px; }
+    .pas-card-tools[open] > .pas-card-tools-trigger { grid-column: 1; justify-self: start; }
     .pas-card-tools[open] > .pas-card-tools-actions {
         display: grid !important;
         grid-column: 1 / -1;
@@ -566,10 +588,10 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-version-latest,
     .pas-version-meta-stats .pas-divider:last-of-type { display: none; }
     .pas-version-actions {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto;
+        display: flex;
         width: 100%;
-        gap: 4px;
+        align-items: center;
+        gap: 0;
         min-height: 44px;
         padding: 0;
     }
@@ -578,22 +600,28 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-version-actions .pas-version-delete-btn,
     .pas-preset-header-meta .pas-btn-clear-preset {
         width: auto;
-        gap: 6px;
-        padding-inline: 8px;
+        min-height: 44px;
+        gap: 0;
+        padding-inline: 2px;
+        border-color: transparent;
+        background: transparent;
         font-size: 12px;
         white-space: nowrap;
     }
+    .pas-version-actions .pas-control-face { height: 30px; padding-inline: 7px; }
+    .pas-version-actions .pas-btn-clear-preset { margin-left: auto; }
     .pas-version-actions .pas-btn-apply-version {
-        width: 100%;
+        width: auto;
         min-width: 0;
         margin-right: 0;
         border-color: transparent;
-        background: linear-gradient(var(--pas-v4-accent-soft), var(--pas-v4-accent-soft)) center / 100% calc(100% - 8px) no-repeat;
+        background: transparent;
     }
+    .pas-version-actions .pas-btn-apply-version .pas-control-face { border-color: rgba(139, 92, 246, .34); background: var(--pas-v4-accent-soft); color: var(--pas-v4-accent-readable); }
+    .pas-version-actions .pas-version-delete-btn .pas-control-face { border-color: rgba(251, 113, 133, .28); color: var(--pas-v4-danger); }
     .pas-series-group { margin-bottom: 6px; border-radius: 10px; }
-    .pas-series-body { gap: 0; padding: 0 6px 6px; background: transparent; }
-    .pas-series-body > .pas-version-group { border-width: 1px 0 0; border-radius: 0; background: transparent; }
-    .pas-series-body > .pas-version-group:last-of-type { border-bottom-width: 1px; border-radius: 0 0 8px 8px; }
+    .pas-series-body { gap: 6px; padding: 6px; background: transparent; }
+    .pas-series-body > .pas-version-group { border: 1px solid var(--pas-v4-border); border-radius: 8px; background: var(--pas-v4-surface-raised); }
     .pas-version-header { gap: 2px; padding: 4px 6px; }
     .pas-version-body { padding: 4px 6px 6px; }
     .pas-filter,
@@ -632,7 +660,7 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-header-actions { margin-right: 32px; }
     .pas-panel-heading h3 { max-width: 118px; font-size: 13px; }
     .pas-primary-action,
-    .pas-tools-trigger { min-width: 34px; min-height: 34px; padding-inline: 8px; }
+    .pas-tools-trigger { min-width: 34px; padding-inline: 2px; }
     .pas-panel-tabs { margin-inline: 8px; }
     .pas-tab { gap: 4px; font-size: 11px; }
     .pas-panel-body { padding-inline: 8px; }

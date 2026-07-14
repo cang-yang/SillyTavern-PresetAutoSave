@@ -27,11 +27,11 @@ export function buildPanelHTML({ t, escapeHtml, escapeAttr, saveStatus = 'idle',
         </div>
         <div class="pas-header-actions">
             <button class="pas-btn-snap pas-primary-action" type="button" title="${attr('Snapshot Now Title')}">
-                <i class="fa-solid fa-camera" aria-hidden="true"></i><span>${text('Snapshot Now')}</span>
+                <span class="pas-control-face"><i class="fa-solid fa-camera" aria-hidden="true"></i><span>${text('Snapshot Short')}</span></span>
             </button>
             <div class="pas-tools">
                 <button class="pas-tools-trigger" type="button" aria-label="${attr('Panel Tools')}" title="${attr('Panel Tools')}" aria-haspopup="menu" aria-expanded="false" aria-controls="pas-tools-menu">
-                    <i class="fa-solid fa-ellipsis" aria-hidden="true"></i><span>${text('Panel Tools')}</span>
+                    <span class="pas-control-face"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i><span>${text('Panel Tools')}</span></span>
                 </button>
                 <div class="pas-tools-menu" id="pas-tools-menu" role="menu" hidden>
                     <div class="pas-tools-section" role="group" aria-label="${attr('History Group')}">
