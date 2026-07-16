@@ -12,6 +12,17 @@ function cleanMetrics(overrides = {}) {
         viewMode: { selected: 'series', rendered: 'series', manageGroupingAvailable: true },
         hiddenFocusable: [],
         consoleErrors: [],
+        performance: {
+            storageBackend: 'indexeddb',
+            catalogMode: 'warm',
+            historyBytes: 46 * 1024 * 1024,
+            shellMs: 20,
+            payloadReads: 0,
+            payloadReadBytes: 0,
+            payloadWrites: 0,
+            archivePayloadReads: 0,
+            longTasks: [],
+        },
         renderMs: 80,
         ...overrides,
     };
@@ -213,6 +224,59 @@ test('warmed 500-snapshot view switches stay within one interaction frame', () =
 
     assert.equal(result.passed, false);
     assert.equal(result.findings[0].code, 'slow-view-switch');
+});
+
+test('performance audit rejects payload reads, writes, slow shell paint, and missed timing budgets', () => {
+    const warm = evaluateLayoutAudit(cleanMetrics({
+        scenario: 'performance',
+        viewport: { width: 390, height: 844 },
+        documentWidth: 390,
+        renderMs: 301,
+        performance: {
+            storageBackend: 'indexeddb',
+            catalogMode: 'warm',
+            historyBytes: 46 * 1024 * 1024,
+            shellMs: 101,
+            payloadReads: 1,
+            payloadReadBytes: 1024,
+            payloadWrites: 1,
+            archivePayloadReads: 1,
+            longTasks: [{ duration: 75 }],
+        },
+    }));
+
+    assert.equal(warm.passed, false);
+    assert.deepEqual(warm.findings.map(item => item.code), [
+        'slow-shell',
+        'ready-catalog-payload-read',
+        'archive-payload-read',
+        'panel-open-write',
+        'panel-open-long-task',
+        'slow-warm-catalog',
+    ]);
+
+    const cold = evaluateLayoutAudit(cleanMetrics({
+        scenario: 'performance',
+        renderMs: 801,
+        performance: {
+            ...cleanMetrics().performance,
+            catalogMode: 'cold',
+            payloadReads: 25,
+            payloadReadBytes: 46 * 1024 * 1024,
+        },
+    }));
+    assert.equal(cold.passed, false);
+    assert.equal(cold.findings.at(-1).code, 'slow-cold-catalog');
+});
+
+test('performance audit fails closed when required instrumentation is absent', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        scenario: 'performance',
+        performance: null,
+    }));
+
+    assert.equal(result.passed, false);
+    assert.equal(result.findings[0].code, 'invalid-performance-metrics');
 });
 
 test('view controls, renderer, and grouping tools must describe the same mode', () => {

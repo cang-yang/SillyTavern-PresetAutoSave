@@ -29,9 +29,11 @@ import { createStorage } from './compatibility.js';
 
 const ARCHIVE_DB = 'pas_archive';
 const ARCHIVE_STORE = 'archived_presets';
+const SUMMARY_PREFIX = '__archive_summary__::';
 
 let _store = null;
 let _initialized = false;
+let _summaryCache = null;
 
 // =====================================================
 // 初始化
@@ -46,6 +48,7 @@ export async function initArchiveStore() {
     } catch (e) {
         logger.error('Failed to init archive store:', e);
         _store = null;
+        _summaryCache = null;
         _initialized = false;
     }
     return _store;
@@ -55,9 +58,42 @@ function makeKey(apiId, presetName) {
     return `${apiId}::${presetName}`;
 }
 
+function summaryKey(key) {
+    return `${SUMMARY_PREFIX}${encodeURIComponent(key)}`;
+}
+
+function isArchiveDataKey(key) {
+    return typeof key === 'string' && !key.startsWith(SUMMARY_PREFIX);
+}
+
 async function ensureStore() {
     if (!_initialized) await initArchiveStore();
     return _store;
+}
+
+function projectArchiveSummary(entry) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    if (typeof entry.apiId !== 'string' || !entry.apiId) return null;
+    if (typeof entry.presetName !== 'string' || !entry.presetName) return null;
+    return {
+        apiId: entry.apiId,
+        presetName: entry.presetName,
+        seriesKey: typeof entry.seriesKey === 'string' && entry.seriesKey
+            ? entry.seriesKey
+            : entry.presetName,
+        archivedAt: Number.isFinite(Number(entry.archivedAt)) ? Number(entry.archivedAt) : 0,
+        reason: typeof entry.reason === 'string' ? entry.reason : '',
+    };
+}
+
+function invalidateArchiveSummaryCache() {
+    _summaryCache = null;
+}
+
+function cacheMatchesKeys(keys) {
+    return _summaryCache
+        && _summaryCache.keys.length === keys.length
+        && _summaryCache.keys.every((key, index) => key === keys[index]);
 }
 
 // =====================================================
@@ -84,7 +120,18 @@ export async function archivePreset(apiId, presetName, data, seriesKey, reason =
     };
 
     try {
-        await store.setItem(makeKey(apiId, presetName), entry);
+        const key = makeKey(apiId, presetName);
+        await store.setItem(key, entry);
+        try {
+            await store.setItem(summaryKey(key), projectArchiveSummary(entry));
+        } catch (summaryError) {
+            logger.warn('Archive summary write deferred:', {
+                apiId,
+                presetName,
+                code: summaryError?.code || summaryError?.name || 'ARCHIVE_SUMMARY_WRITE_FAILED',
+            });
+        }
+        invalidateArchiveSummaryCache();
         logger.debug(`[Archive] saved ${apiId}::${presetName} (series: ${seriesKey})`);
         return true;
     } catch (e) {
@@ -113,12 +160,51 @@ export async function listArchivedPresets({ strict = false } = {}) {
         return [];
     }
     try {
-        const keys = await store.keys();
+        const keys = (await store.keys()).filter(isArchiveDataKey);
         if (!keys || keys.length === 0) return [];
         const items = await Promise.all(keys.map(k => store.getItem(k).catch(() => null)));
         return items.filter(x => x && x.apiId && x.presetName);
     } catch (e) {
         logger.warn('listArchivedPresets failed:', e);
+        if (strict) throw e;
+        return [];
+    }
+}
+
+export async function listArchivedPresetSummaries({ strict = false } = {}) {
+    const store = await ensureStore();
+    if (!store) {
+        if (strict) throw new Error('Archive store is unavailable');
+        return [];
+    }
+    try {
+        const keys = [...await store.keys()].filter(isArchiveDataKey).sort();
+        if (!keys || keys.length === 0) return [];
+        if (cacheMatchesKeys(keys)) return structuredClone(_summaryCache.entries);
+
+        const storedSummaries = await Promise.all(keys.map(key => store.getItem(summaryKey(key))));
+        const entries = [];
+        for (let index = 0; index < keys.length; index++) {
+            let summary = projectArchiveSummary(storedSummaries[index]);
+            if (!summary) {
+                const authoritative = await store.getItem(keys[index]);
+                summary = projectArchiveSummary(authoritative);
+                if (summary) {
+                    try { await store.setItem(summaryKey(keys[index]), summary); } catch (_) {}
+                }
+            }
+            entries.push(summary);
+        }
+        if (entries.some(entry => entry === null)) {
+            throw new Error('Archive catalog encountered malformed authoritative data');
+        }
+        _summaryCache = {
+            keys: [...keys],
+            entries: structuredClone(entries),
+        };
+        return structuredClone(entries);
+    } catch (e) {
+        logger.warn('listArchivedPresetSummaries failed:', e);
         if (strict) throw e;
         return [];
     }
@@ -147,7 +233,10 @@ export async function removeArchivedPreset(apiId, presetName) {
     const store = await ensureStore();
     if (!store) return false;
     try {
-        await store.removeItem(makeKey(apiId, presetName));
+        const key = makeKey(apiId, presetName);
+        await store.removeItem(key);
+        try { await store.removeItem(summaryKey(key)); } catch (_) {}
+        invalidateArchiveSummaryCache();
         return true;
     } catch (e) {
         return false;
@@ -159,6 +248,7 @@ export async function clearAllArchived() {
     if (!store) return false;
     try {
         await store.clear();
+        invalidateArchiveSummaryCache();
         logger.info('[Archive] cleared all archived presets');
         return true;
     } catch (e) {
@@ -174,7 +264,7 @@ export async function getArchiveCount() {
     if (!store) return 0;
     try {
         const keys = await store.keys();
-        return (keys || []).length;
+        return (keys || []).filter(isArchiveDataKey).length;
     } catch (e) {
         return 0;
     }

@@ -62,7 +62,7 @@ test('compact series versions keep a complete inset frame instead of looking cut
     const versionRule = compactCss.match(/\.pas-series-body\s*>\s*\.pas-version-group\s*\{([^}]*)}/)?.[1] || '';
 
     assert.doesNotMatch(versionRule, /border-width:\s*1px\s+0\s+0/);
-    assert.match(versionRule, /border:\s*1px\s+solid\s+var\(--pas-v4-border\)/);
+    assert.match(versionRule, /border:\s*1\.5px\s+solid\s+var\(--pas-v4-border\)/);
     assert.match(versionRule, /border-radius:\s*(?:8|9|10)px/);
 });
 

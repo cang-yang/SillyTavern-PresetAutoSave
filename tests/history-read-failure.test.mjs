@@ -12,7 +12,7 @@ let writes = 0;
 
 const localforage = {
     createInstance({ storeName }) {
-        const data = stores[storeName];
+        const data = stores[storeName] ??= new Map();
         return {
             async getItem(key) {
                 if (storeName === 'history_v2' && key === 'openai::private broken') {

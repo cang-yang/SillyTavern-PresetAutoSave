@@ -574,5 +574,6 @@
     "Diagnostic Status committed": "已完整提交",
     "Diagnostic Status legacy": "旧版记录",
     "Panel Loading History": "正在加载预设历史…",
+    "Panel Building History Catalog": "正在准备历史索引… {{completed}}/{{total}}",
     "Show More Snapshots": "再显示 {{count}} 条快照"
 }

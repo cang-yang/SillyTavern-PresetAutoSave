@@ -17,6 +17,13 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /mountHistoryPanel/);
     assert.match(app, /initHistoryStore/);
     assert.match(app, /seedHarnessHistory/);
+    assert.match(app, /createIndexedDbLocalforage/);
+    assert.match(app, /storeName: 'history_v2'/);
+    assert.match(app, /buildPerformanceStorageRecords/);
+    assert.match(app, /fingerprintSnapshotSummaries/);
+    assert.match(app, /catalogSummaries: projectSnapshotSummaries/);
+    assert.match(app, /getSnapshotSummaries/);
+    assert.match(app, /scenario === 'ordinary' \|\| options\.scenario === 'performance'[\s\S]*?getSnapshotSummaries/);
     assert.match(app, /initAutoSave/);
     assert.match(app, /teardownAutoSave/);
     assert.match(app, /operationEvents/);
@@ -42,6 +49,10 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /exerciseDisclosures/);
     assert.match(app, /exerciseUnusedNativeSeries/);
     assert.match(app, /exerciseViewSwitchPerformance/);
+    assert.match(app, /groupingDefaultExpand: options\.scenario === 'performance' \? 'current' : 'all'/);
+    assert.match(app, /payloadReads/);
+    assert.match(app, /archivePayloadReads/);
+    assert.match(app, /longTasks/);
     assert.match(app, /expandedSeriesContent/);
     assert.match(app, /exerciseGroupingMenus/);
     assert.match(app, /exerciseGroupingLayout/);
@@ -50,7 +61,7 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /importantSelector[\s\S]*?\.pas-gm-search input/);
     assert.match(app, /\.pas-primary-action \.pas-control-face > span[\s\S]*?\.pas-view-btn > span[\s\S]*?\.pas-btn-clear-preset > \.pas-action-label/);
     assert.match(app, /footerText[\s\S]*?contrastRatio/);
-    assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true \}\)/);
+    assert.match(historyPanel, /renderActiveTab\(\{ immediateList: true, updateStatistics: false \}\)/);
     assert.doesNotMatch(app, /buildPanelHTML/);
     assert.doesNotMatch(app, /class="pas-panel"/);
     assert.doesNotMatch(app, /translate\('Panel Stats'/);
@@ -61,15 +72,19 @@ test('browser harness loads production styles and runs the production panel cont
 });
 
 test('harness options are allow-listed and fail back to stable defaults', () => {
-    assert.deepEqual(normalizeHarnessOptions('?scenario=performance&theme=light&view=flat'), {
+    assert.deepEqual(normalizeHarnessOptions('?scenario=performance&theme=light&view=flat&catalog=cold&history=15mb'), {
         scenario: 'performance',
         theme: 'light',
         view: 'flat',
+        catalog: 'cold',
+        history: '15mb',
     });
     assert.deepEqual(normalizeHarnessOptions('?scenario=secret&theme=neon&view=grid'), {
         scenario: 'ordinary',
         theme: 'dark',
         view: 'series',
+        catalog: 'warm',
+        history: '46mb',
     });
     assert.equal(Object.isFrozen(normalizeHarnessOptions('')), true);
 });

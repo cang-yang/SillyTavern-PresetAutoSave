@@ -17,7 +17,7 @@ import {
     getSettings, updateSetting, batchUpdate,
 } from './settings.js';
 import {
-    getAllSnapshots,
+    getSnapshotSummaries,
 } from './history-store.js';
 import { onHistoryChange } from './core/history-change-events.js';
 import { captureFocusAnchor, restoreFocusAnchor } from './core/focus-anchor.js';
@@ -44,7 +44,7 @@ import {
     seedSnapshotsIfNeeded,
     seedSnapshotForPreset,
 } from './preset-takeover.js';
-import { listArchivedPresets } from './archive-store.js';
+import { listArchivedPresetSummaries } from './archive-store.js';
 import {
     FIELD_LABEL_KEYS, PROMPT_FIELD_LABEL_KEYS,
     fieldLabel, promptFieldLabel,
@@ -96,10 +96,6 @@ let _renderListFrame = null;
 let _renderListMayUseViewCache = false;
 let _historyRefreshUnsubscribe = null;
 let _historyRefreshTimer = null;
-let _panelDataWarmupPromise = null;
-let _panelDataCache = null;
-let _panelDataCacheAt = 0;
-let _panelDataCacheGeneration = 0;
 let _panelMountGeneration = 0;
 let _activeDatasetLoader = null;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
@@ -128,61 +124,14 @@ const INITIAL_STATE = Object.freeze({
 });
 
 let _state = newState();
-const PANEL_DATA_CACHE_TTL_MS = 15000;
-const PANEL_WARMUP_DELAY_MS = 1200;
 const PANEL_SEARCH_DEBOUNCE_MS = 30;
 
-function scheduleIdleWork(fn, delay = 0) {
-    const run = () => {
-        if (typeof requestIdleCallback === 'function') {
-            requestIdleCallback(fn, { timeout: 3000 });
-        } else {
-            setTimeout(fn, 0);
-        }
-    };
-    setTimeout(run, delay);
-}
-
-function invalidatePanelDataCache() {
-    _panelDataCacheGeneration++;
-    _panelDataCache = null;
-    _panelDataCacheAt = 0;
-    _panelDataWarmupPromise = null;
-}
-
-function loadPanelDataset({ allowCache = true } = {}) {
-    const now = Date.now();
-    if (allowCache && _panelDataCache && (now - _panelDataCacheAt) < PANEL_DATA_CACHE_TTL_MS) {
-        return _panelDataCache;
-    }
-    if (allowCache && _panelDataWarmupPromise) {
-        return _panelDataWarmupPromise;
-    }
-    const generation = _panelDataCacheGeneration;
-    const promise = Promise.all([
-        getAllSnapshots(),
-        listArchivedPresets(),
-    ]).then(([snapshots, archives]) => {
-        const dataset = { snapshots: snapshots || [], archives: archives || [] };
-        if (generation === _panelDataCacheGeneration) {
-            _panelDataCache = dataset;
-            _panelDataCacheAt = Date.now();
-        }
-        return dataset;
-    }).finally(() => {
-        if (_panelDataWarmupPromise === promise) _panelDataWarmupPromise = null;
-    });
-    if (allowCache) _panelDataWarmupPromise = promise;
-    return promise;
-}
-
-function warmupPanelData() {
-    if (_panelDataWarmupPromise || _panelDataCache) return;
-    const promise = loadPanelDataset({ allowCache: false });
-    _panelDataWarmupPromise = promise;
-    promise.catch((e) => {
-        logger.debug('[Panel] data warmup failed:', e);
-    });
+async function loadPanelDataset({ onProgress } = {}) {
+    const [snapshots, archives] = await Promise.all([
+        getSnapshotSummaries({ onProgress }),
+        listArchivedPresetSummaries(),
+    ]);
+    return { snapshots: snapshots || [], archives: archives || [] };
 }
 
 function newState() {
@@ -232,6 +181,12 @@ function renderPanelLoading(stage = 'loading') {
     </div>`;
 }
 
+function updatePanelLoadingProgress({ completed = 0, total = 0 } = {}) {
+    const text = _root?.querySelector('.pas-panel-loading .pas-empty-text');
+    if (!text || total <= 0) return;
+    text.textContent = t('Panel Building History Catalog', { completed, total });
+}
+
 function recordPanelPerf(stage, startedAt, details = {}) {
     const elapsed = Math.round(performance.now() - startedAt);
     const payload = { stage, elapsedMs: elapsed, ...details };
@@ -251,16 +206,13 @@ export async function initHistoryPanel() {
     logger.debug('History panel ready');
     // 启动导入识别（事件驱动，无轮询）
     startImportWatcher();
-    scheduleIdleWork(() => warmupPanelData(), PANEL_WARMUP_DELAY_MS);
     if (!_historyRefreshUnsubscribe) {
         _historyRefreshUnsubscribe = onHistoryChange(() => {
-            invalidatePanelDataCache();
-            scheduleIdleWork(() => warmupPanelData(), 500);
             if (!_root || _historyRefreshTimer) return;
             _historyRefreshTimer = setTimeout(async () => {
                 _historyRefreshTimer = null;
                 try {
-                    await refreshData({ allowCache: false });
+                    await refreshData();
                 } catch (e) {
                     logger.debug('[Panel] history change refresh failed:', e);
                 }
@@ -284,7 +236,6 @@ export function teardownHistoryPanel() {
         clearTimeout(_historyRefreshTimer);
         _historyRefreshTimer = null;
     }
-    invalidatePanelDataCache();
     _initialized = false;
 }
 
@@ -336,7 +287,7 @@ async function loadAndRenderMountedPanel(root, generation, panelStartedAt) {
 
         failedStage = 'renderActiveTab';
         const renderStartedAt = performance.now();
-        renderActiveTab({ immediateList: true });
+        renderActiveTab({ immediateList: true, updateStatistics: false });
         root.querySelector('.pas-snapshot-list')?.removeAttribute('aria-busy');
         recordPanelPerf('renderActiveTab', renderStartedAt, { snapshots: _state.snapshots.length });
 
@@ -488,10 +439,15 @@ function waitForDOM() {
 // =====================================================
 // 数据加载
 // =====================================================
-async function loadData({ allowCache = true, mountGeneration = _panelMountGeneration } = {}) {
+async function loadData({ mountGeneration = _panelMountGeneration } = {}) {
     // 并行加载快照 + 归档（数据接管模式下面板要展示完整版本）
     const loader = _activeDatasetLoader || loadPanelDataset;
-    const { snapshots, archives } = await loader({ allowCache });
+    const onProgress = progress => {
+        if (_root && mountGeneration === _panelMountGeneration) {
+            updatePanelLoadingProgress(progress);
+        }
+    };
+    const { snapshots, archives } = await loader({ onProgress });
     if (!_root || mountGeneration !== _panelMountGeneration) return false;
     _state.snapshots = snapshots || [];
     _archivedCache = archives || [];
@@ -538,13 +494,13 @@ async function loadData({ allowCache = true, mountGeneration = _panelMountGenera
     return true;
 }
 
-async function refreshData(options = { allowCache: false }) {
+async function refreshData() {
     if (!_root) return;  // 面板已关闭
     if (_historyRefreshTimer) {
         clearTimeout(_historyRefreshTimer);
         _historyRefreshTimer = null;
     }
-    const loaded = await loadData(options);
+    const loaded = await loadData();
     if (!loaded) return;
     renderActiveTab();
     await updateStats(_panelCtx());
@@ -905,7 +861,7 @@ function switchTab(tabName) {
     renderActiveTab();
 }
 
-function renderActiveTab({ immediateList = false } = {}) {
+function renderActiveTab({ immediateList = false, updateStatistics = true } = {}) {
     if (!_root) return;
     const ctx = _panelCtx();
     if (_state.tab === 'list') {
@@ -914,7 +870,7 @@ function renderActiveTab({ immediateList = false } = {}) {
     }
     else if (_state.tab === 'logs') renderLogTab(ctx);
     else if (_state.tab === 'settings') renderSettingsTab(ctx);
-    updateStats(ctx);
+    if (updateStatistics) updateStats(ctx);
     updateLogBadge(ctx);
 }
 

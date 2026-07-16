@@ -2,8 +2,18 @@ import { applyStatusIndicatorPresentation } from '../../modules/core/status-indi
 import { saveStatusLabelKey, setSaveStatus } from '../../modules/core/save-status.js';
 import { bindHistoryImportPreview, renderHistoryImportPreview } from '../../modules/import-preview.js';
 import { escapeAttr, escapeHtml } from '../../modules/key-utils.js';
-import { buildHarnessScenario } from '../fixtures/browser-harness-model.mjs';
+import { migrationMarkerKey } from '../../modules/core/history-repository.js';
+import {
+    fingerprintSnapshotSummaries,
+    projectSnapshotSummaries,
+} from '../../modules/core/snapshot-summary.js';
+import {
+    buildHarnessScenario,
+    buildPerformanceStorageRecords,
+    PERFORMANCE_HISTORY_TARGETS,
+} from '../fixtures/browser-harness-model.mjs';
 import { normalizeHarnessOptions } from './config.mjs';
+import { createIndexedDbLocalforage } from './indexeddb-storage.mjs';
 import { evaluateLayoutAudit } from './layout-audit.mjs';
 
 const options = normalizeHarnessOptions(window.location.search);
@@ -15,8 +25,29 @@ const consoleErrors = [];
 const operationEvents = [];
 const translationOverrides = Object.create(null);
 let lastRenderMs = 0;
+let lastShellMs = 0;
 let lastViewSwitchMs = null;
 let confirmResult = true;
+let panelMetricStart = Number.POSITIVE_INFINITY;
+let performanceStorageBytes = 0;
+const storageMetrics = {
+    payloadReads: 0,
+    payloadReadBytes: 0,
+    payloadWrites: 0,
+    archivePayloadReads: 0,
+};
+const longTasks = [];
+
+if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes('longtask')) {
+    const observer = new PerformanceObserver(list => {
+        for (const entry of list.getEntries()) {
+            if (entry.startTime >= panelMetricStart) {
+                longTasks.push({ startTime: entry.startTime, duration: entry.duration });
+            }
+        }
+    });
+    observer.observe({ type: 'longtask', buffered: true });
+}
 
 const originalConsoleError = console.error.bind(console);
 console.error = (...args) => {
@@ -131,17 +162,47 @@ const context = {
     Popup: HarnessPopup,
     POPUP_TYPE: { DISPLAY: 'display', INPUT: 'input', CONFIRM: 'confirm', TEXT: 'text' },
 };
-window.SillyTavern = { version: '1.13.4-harness', getContext: () => context, libs: {} };
+const harnessLocalforage = createIndexedDbLocalforage({
+    onOperation({ operation, storeName, key, payloadBytes }) {
+        if (storeName === 'archived_presets') {
+            if (operation === 'getItem' && !key.startsWith('__archive_summary__::')) {
+                storageMetrics.archivePayloadReads++;
+            }
+            return;
+        }
+        if (!['history', 'history_v2'].includes(storeName) || key.startsWith('__history_v2_meta__::')) return;
+        if (operation === 'getItem') {
+            storageMetrics.payloadReads++;
+            storageMetrics.payloadReadBytes += payloadBytes;
+        } else if (operation === 'setItem') {
+            storageMetrics.payloadWrites++;
+        }
+    },
+});
+window.SillyTavern = {
+    version: '1.13.4-harness',
+    getContext: () => context,
+    libs: { localforage: harnessLocalforage },
+};
 window.main_api = scenario.currentApiId;
 window.toastr = Object.fromEntries(['success', 'info', 'warning', 'error'].map(level => [level, message => {
     operationEvents.push(Object.freeze({ level, message: String(message || '') }));
 }]));
 
-const [{ initCompatibility }, { initSettings, batchUpdate }, historyPanel, historyStore, autoSave, groupManager] = await Promise.all([
+const [
+    { initCompatibility },
+    { initSettings, batchUpdate },
+    historyPanel,
+    historyStore,
+    archiveStore,
+    autoSave,
+    groupManager,
+] = await Promise.all([
     import('../../modules/compatibility.js'),
     import('../../modules/settings.js'),
     import('../../modules/history-panel.js'),
     import('../../modules/history-store.js'),
+    import('../../modules/archive-store.js'),
     import('../../modules/auto-save.js'),
     import('../../modules/panel-group-manager.js'),
 ]);
@@ -150,7 +211,7 @@ await initSettings();
 batchUpdate({
     groupingEnabled: options.view === 'series',
     groupingFirstScanDone: true,
-    groupingDefaultExpand: 'all',
+    groupingDefaultExpand: options.scenario === 'performance' ? 'current' : 'all',
     groupingManualOverrides: scenario.overrides,
     groupingSeriesAliases: {},
     nestingEnabled: Object.keys(scenario.tree).length > 0,
@@ -162,17 +223,59 @@ batchUpdate({
     autoSeedOnTakeover: false,
 });
 
-function clearHarnessHistoryStorage() {
-    const prefixes = ['PresetAutoSave_history:', 'PresetAutoSave_history_v2:'];
-    for (let index = localStorage.length - 1; index >= 0; index--) {
-        const key = localStorage.key(index);
-        if (key && prefixes.some(prefix => key.startsWith(prefix))) localStorage.removeItem(key);
-    }
+async function clearHarnessHistoryStorage() {
+    await Promise.all(
+        ['history', 'history_v2', 'history_catalog'].map(storeName => (
+            harnessLocalforage.createInstance({ name: 'PresetAutoSave', storeName }).clear()
+        )),
+    );
+    await harnessLocalforage
+        .createInstance({ name: 'pas_archive', storeName: 'archived_presets' })
+        .clear();
 }
 
 async function seedHarnessHistory() {
-    clearHarnessHistoryStorage();
+    await clearHarnessHistoryStorage();
+    if (options.scenario === 'performance') {
+        const records = buildPerformanceStorageRecords(scenario.records, {
+            targetBytesPerSnapshot: Math.floor(
+                PERFORMANCE_HISTORY_TARGETS[options.history] / scenario.records.length,
+            ),
+        });
+        performanceStorageBytes = records.reduce((sum, record) => sum + record.size, 0);
+        const buckets = new Map();
+        for (const record of records) {
+            const key = `${record.apiId}::${record.presetName}`;
+            if (!buckets.has(key)) buckets.set(key, []);
+            buckets.get(key).push(record);
+        }
+        const v2Store = harnessLocalforage.createInstance({
+            name: 'PresetAutoSave',
+            storeName: 'history_v2',
+        });
+        for (const [key, records] of buckets) {
+            await v2Store.setItem(key, records);
+            await v2Store.setItem(migrationMarkerKey(key), {
+                status: 'active',
+                schemaVersion: 2,
+                count: records.length,
+                catalogRevision: fingerprintSnapshotSummaries(records),
+                catalogSummaries: projectSnapshotSummaries(records),
+                migratedAt: Date.now(),
+            });
+        }
+        await archiveStore.archivePreset(
+            'kobold',
+            'Performance Archive V1.0',
+            { prompts: [{ identifier: 'main', content: 'x'.repeat(512 * 1024) }] },
+            'Performance Archive',
+            'harness',
+        );
+    }
     await historyStore.initHistoryStore();
+    if (options.scenario === 'performance' && options.catalog === 'warm') {
+        await historyStore.getSnapshotSummaries();
+    }
     if (options.scenario !== 'ordinary') return;
     for (const record of scenario.records) {
         const snapshot = await historyStore.addSnapshot(
@@ -204,15 +307,26 @@ async function loadHarnessDataset() {
     if (options.scenario === 'error') {
         return Promise.reject(new Error('HARNESS_EXPECTED_STORAGE_FAILURE'));
     }
-    if (options.scenario === 'ordinary') {
-        return { snapshots: await historyStore.getAllSnapshots(), archives: [] };
+    if (options.scenario === 'ordinary' || options.scenario === 'performance') {
+        const [snapshots, archives] = await Promise.all([
+            historyStore.getSnapshotSummaries(),
+            archiveStore.listArchivedPresetSummaries(),
+        ]);
+        return { snapshots, archives };
     }
     return Promise.resolve({ snapshots: scenario.records, archives: [] });
 }
 
 async function mountProductionPanel({ waitUntilReady = options.scenario !== 'loading' } = {}) {
-    panelRoot = renderHistoryPanelShell(app);
     const started = performance.now();
+    panelMetricStart = started;
+    storageMetrics.payloadReads = 0;
+    storageMetrics.payloadReadBytes = 0;
+    storageMetrics.payloadWrites = 0;
+    storageMetrics.archivePayloadReads = 0;
+    longTasks.length = 0;
+    panelRoot = renderHistoryPanelShell(app);
+    lastShellMs = performance.now() - started;
     panelMount = mountHistoryPanel(panelRoot, { loadDataset: loadHarnessDataset });
     if (waitUntilReady) {
         await panelMount.ready;
@@ -876,6 +990,21 @@ function collectMetrics() {
         footerText,
         hiddenFocusable: Object.freeze(hiddenFocusable),
         consoleErrors: Object.freeze([...consoleErrors]),
+        performance: Object.freeze({
+            storageBackend: 'indexeddb',
+            catalogMode: options.catalog,
+            historyBytes: performanceStorageBytes,
+            historyMiB: Number((performanceStorageBytes / (1024 * 1024)).toFixed(2)),
+            shellMs: Number(lastShellMs.toFixed(2)),
+            payloadReads: storageMetrics.payloadReads,
+            payloadReadBytes: storageMetrics.payloadReadBytes,
+            payloadWrites: storageMetrics.payloadWrites,
+            archivePayloadReads: storageMetrics.archivePayloadReads,
+            longTasks: Object.freeze(longTasks.map(entry => Object.freeze({
+                startTime: Number(entry.startTime.toFixed(2)),
+                duration: Number(entry.duration.toFixed(2)),
+            }))),
+        }),
         renderMs: lastRenderMs,
     });
 }

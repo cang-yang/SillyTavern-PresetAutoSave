@@ -12,7 +12,12 @@ import {
     savePresetSafe, getPresetManager, getContextSafe,
 } from './modules/compatibility.js';
 import { initSettings, getSettings, resetSettings } from './modules/settings.js';
-import { initHistoryStore, getAllSnapshots, clearAll as clearAllSnapshots } from './modules/history-store.js';
+import {
+    initHistoryStore,
+    teardownHistoryStore,
+    getAllSnapshots,
+    clearAll as clearAllSnapshots,
+} from './modules/history-store.js';
 import { initAutoSave, teardown as teardownAutoSave } from './modules/auto-save.js';
 import { initUIInjector, teardown as teardownUI } from './modules/ui-injector.js';
 import {
@@ -90,6 +95,7 @@ async function runPhase1() {
         logger.success('Phase 1 ready: settings/store/UI ✓');
     } catch (e) {
         logger.error('Phase 1 init error:', e);
+        try { await teardownHistoryStore(); } catch (_) { /* best-effort */ }
         _phase1Done = false; // 失败时允许重试
     }
 }
@@ -227,6 +233,7 @@ export async function onDelete() {
     try { teardownThemeDetector(); } catch (_) { /* best-effort */ }
     try { teardownUI(); } catch (_) { /* best-effort */ }
     try { teardownHistoryPanel(); } catch (_) { /* best-effort */ }
+    try { await teardownHistoryStore(); } catch (e) { logger.warn('teardownHistoryStore:', e); }
     try { offAll(); } catch (_) { /* best-effort */ }
     resetLifecycleState();
 
@@ -292,6 +299,7 @@ export async function onDisable() {
     try { teardownThemeDetector(); } catch (_) { /* best-effort */ }
     try { teardownUI(); } catch (_) { /* best-effort */ }
     try { teardownHistoryPanel(); } catch (_) { /* best-effort */ }
+    try { await teardownHistoryStore(); } catch (e) { logger.warn('teardownHistoryStore:', e); }
     try { offAll(); } catch (_) { /* best-effort */ }
     resetLifecycleState();
 

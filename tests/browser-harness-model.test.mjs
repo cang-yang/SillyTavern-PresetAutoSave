@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHarnessScenario } from './fixtures/browser-harness-model.mjs';
+import {
+    buildHarnessScenario,
+    buildPerformanceStorageRecords,
+    PERFORMANCE_HISTORY_TARGETS,
+} from './fixtures/browser-harness-model.mjs';
 
 test('ordinary harness scenario is deterministic and exercises hostile display text', () => {
     const first = buildHarnessScenario('ordinary');
@@ -39,6 +43,20 @@ test('empty and performance scenarios provide exact boundary cardinalities', () 
     assert.equal(performance.records.length, 500);
     assert.equal(new Set(performance.records.map(record => record.presetName)).size, 25);
     assert.equal(performance.records.at(-1).id, 'harness-performance-0500');
+});
+
+test('performance storage fixtures represent 1, 15, and 46 MiB IndexedDB histories', () => {
+    const performance = buildHarnessScenario('performance');
+    for (const [label, targetBytes] of Object.entries(PERFORMANCE_HISTORY_TARGETS)) {
+        const records = buildPerformanceStorageRecords(performance.records, {
+            targetBytesPerSnapshot: Math.floor(targetBytes / performance.records.length),
+        });
+        const totalBytes = records.reduce((sum, record) => sum + record.size, 0);
+
+        assert.equal(records.length, 500);
+        assert.ok(Math.abs(totalBytes - targetBytes) < performance.records.length, label);
+        assert.ok(records.every(record => record.preset.__pasHarnessPayload.length > 0), label);
+    }
 });
 
 test('unsupported harness scenarios fail closed', () => {

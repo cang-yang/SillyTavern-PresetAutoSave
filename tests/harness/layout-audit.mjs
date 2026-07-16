@@ -7,6 +7,10 @@ const MAX_COMPACT_SNAPSHOT_ACTIONS = 44;
 const MAX_COMPACT_CONTROL_FACE = 32;
 const MIN_COMPACT_VERSION_RADIUS = 8;
 const MAX_WARMED_VIEW_SWITCH_MS = 20;
+const MAX_COMPACT_SHELL_MS = 100;
+const MAX_WARM_CATALOG_MS = 300;
+const MAX_COLD_CATALOG_MS = 800;
+const MAX_ORDINARY_LONG_TASK_MS = 50;
 
 function finding(code, severity, message, selector = '') {
     return Object.freeze({ code, severity, message, selector });
@@ -246,6 +250,81 @@ export function evaluateLayoutAudit(metrics) {
     }
 
     const renderMs = Number(metrics.renderMs);
+    if (metrics.scenario === 'performance') {
+        const perf = metrics.performance;
+        if (!perf || typeof perf !== 'object') {
+            findings.push(finding(
+                'invalid-performance-metrics',
+                'error',
+                'Performance scenario is missing required storage and timing instrumentation.',
+            ));
+        } else {
+            const shellMs = Number(perf.shellMs);
+            if (Number.isFinite(viewportWidth) && viewportWidth <= COMPACT_MAX_WIDTH
+                && (!Number.isFinite(shellMs) || shellMs > MAX_COMPACT_SHELL_MS)) {
+                findings.push(finding(
+                    'slow-shell',
+                    'error',
+                    `Compact shell paint took ${Math.round(shellMs)}ms; the budget is ${MAX_COMPACT_SHELL_MS}ms.`,
+                ));
+            }
+
+            const payloadReads = Number(perf.payloadReads);
+            if (perf.catalogMode === 'warm' && (!Number.isFinite(payloadReads) || payloadReads !== 0)) {
+                findings.push(finding(
+                    'ready-catalog-payload-read',
+                    'error',
+                    `Warm catalog open performed ${payloadReads} authoritative payload reads; the budget is zero.`,
+                ));
+            }
+
+            const payloadWrites = Number(perf.payloadWrites);
+            const archivePayloadReads = Number(perf.archivePayloadReads);
+            if (!Number.isFinite(archivePayloadReads) || archivePayloadReads !== 0) {
+                findings.push(finding(
+                    'archive-payload-read',
+                    'error',
+                    `Panel open performed ${archivePayloadReads} complete archive payload reads; the budget is zero.`,
+                ));
+            }
+
+            if (!Number.isFinite(payloadWrites) || payloadWrites !== 0) {
+                findings.push(finding(
+                    'panel-open-write',
+                    'error',
+                    `Panel open performed ${payloadWrites} authoritative payload writes; the budget is zero.`,
+                ));
+            }
+
+            const longestTask = Math.max(
+                0,
+                ...(Array.isArray(perf.longTasks) ? perf.longTasks : []).map(entry => Number(entry?.duration) || 0),
+            );
+            if (longestTask > MAX_ORDINARY_LONG_TASK_MS) {
+                findings.push(finding(
+                    'panel-open-long-task',
+                    'warning',
+                    `Panel open produced a ${Math.round(longestTask)}ms long task; investigate work above ${MAX_ORDINARY_LONG_TASK_MS}ms.`,
+                ));
+            }
+
+            if (Number.isFinite(renderMs) && perf.catalogMode === 'warm' && renderMs > MAX_WARM_CATALOG_MS) {
+                findings.push(finding(
+                    'slow-warm-catalog',
+                    'error',
+                    `Warm catalog open took ${Math.round(renderMs)}ms; the target is ${MAX_WARM_CATALOG_MS}ms.`,
+                ));
+            }
+            if (Number.isFinite(renderMs) && perf.catalogMode === 'cold' && renderMs > MAX_COLD_CATALOG_MS) {
+                findings.push(finding(
+                    'slow-cold-catalog',
+                    'error',
+                    `Cold catalog open took ${Math.round(renderMs)}ms; the target is ${MAX_COLD_CATALOG_MS}ms.`,
+                ));
+            }
+        }
+    }
+
     if (!Number.isFinite(renderMs) || renderMs < 0) {
         findings.push(finding('invalid-render-timing', 'error', 'Render duration is not a finite non-negative number.'));
     } else if (renderMs > 1000) {

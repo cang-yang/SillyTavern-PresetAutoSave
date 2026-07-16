@@ -574,5 +574,6 @@
     "Diagnostic Status committed": "Committed",
     "Diagnostic Status legacy": "Legacy record",
     "Panel Loading History": "Loading preset history…",
+    "Panel Building History Catalog": "Preparing history index… {{completed}}/{{total}}",
     "Show More Snapshots": "Show {{count}} more snapshots"
 }

@@ -39,7 +39,11 @@ test('loading state uses localized user copy without exposing internal stages', 
 
     assert.equal(english['Panel Loading History'], 'Loading preset history…');
     assert.equal(chinese['Panel Loading History'], '正在加载预设历史…');
+    assert.equal(english['Panel Building History Catalog'], 'Preparing history index… {{completed}}/{{total}}');
+    assert.equal(chinese['Panel Building History Catalog'], '正在准备历史索引… {{completed}}/{{total}}');
     const loadingRenderer = source.match(/function renderPanelLoading[^]*?\n}/)?.[0] || '';
     assert.match(loadingRenderer, /t\('Panel Loading History'\)/);
     assert.doesNotMatch(loadingRenderer, /pas-empty-hint|escapeHtml\(stage/);
+    assert.match(source, /getSnapshotSummaries\(\{ onProgress \}\)/);
+    assert.match(source, /t\('Panel Building History Catalog'/);
 });

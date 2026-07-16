@@ -30,6 +30,8 @@ import { readHistoryBucket, readHistoryBuckets } from './core/history-bucket-rea
 import { SerialTaskQueue } from './core/serial-task-queue.js';
 import { emitHistoryChange } from './core/history-change-events.js';
 import { canCoalesceSnapshotTrigger } from './core/snapshot-retention-policy.js';
+import { createHistoryCatalog } from './core/history-catalog.js';
+import { createHistoryMigrationWorker } from './core/history-migration-worker.js';
 import {
     createPreservedHistoryQuotaError,
     isStorageQuotaError,
@@ -46,6 +48,7 @@ import {
 const STORAGE_NAME = 'PresetAutoSave';
 const STORE_NAME = 'history';
 const V2_STORE_NAME = 'history_v2';
+const CATALOG_STORE_NAME = 'history_catalog';
 const KEY_DELIMITER = '::';
 
 // =====================================================
@@ -70,6 +73,11 @@ export const TRIGGER_LABEL_KEYS = Object.freeze({
 // 状态
 // =====================================================
 let _store = null;
+let _catalog = null;
+let _catalogBuildPromise = null;
+let _catalogBuildAbortController = null;
+let _catalogRuntimeVerified = false;
+let _migrationWorker = null;
 let _initialized = false;
 let _keysCache = null;
 let _keysCacheTime = 0;
@@ -81,19 +89,53 @@ const _historyMutations = new SerialTaskQueue();
 // =====================================================
 export async function initHistoryStore() {
     try {
+        await teardownHistoryStore();
         const legacyStore = createStorage(STORAGE_NAME, STORE_NAME);
         const v2Store = createStorage(STORAGE_NAME, V2_STORE_NAME);
+        const catalogStore = createStorage(STORAGE_NAME, CATALOG_STORE_NAME);
         _store = new HistoryRepository({
             legacyStore,
             v2Store,
             onError: (error, context) => logger.warn('History v2 migration deferred:', context, error),
         });
+        _catalog = createHistoryCatalog({
+            store: catalogStore,
+            yieldControl: yieldCatalogWork,
+            yieldEvery: 4,
+        });
+        _migrationWorker = createHistoryMigrationWorker({
+            migrateKey: key => _historyMutations.run(() => _store.migrateItem(key)),
+            onMigrated: syncCatalogBucketAfterMigration,
+            onError: (error, context) => logger.warn('Background history migration deferred:', context, error),
+        });
+        try {
+            await _catalog.load();
+        } catch (catalogError) {
+            logger.warn('History catalog unavailable; authoritative history remains active:', {
+                code: catalogError?.code || catalogError?.name || 'CATALOG_READ_FAILED',
+            });
+        }
+        const sourceManifest = await _store.getCatalogManifest();
+        if (_catalog.read().status === 'ready') {
+            if (_catalog.matchesSourceManifest(sourceManifest)) {
+                _catalogRuntimeVerified = true;
+            } else {
+                await _catalog.markDirty('CATALOG_SOURCE_CHANGED');
+            }
+        }
         _initialized = true;
-        const presetCount = (await _store.keys()).length;
+        const presetCount = sourceManifest.length;
         logger.success(`History repository v2 ready: ${presetCount} preset histories (lazy migration enabled)`);
     } catch (e) {
         logger.error('Failed to init history store:', e);
         _store = null;
+        _catalog = null;
+        _catalogBuildPromise = null;
+        _catalogBuildAbortController?.abort();
+        _catalogBuildAbortController = null;
+        _catalogRuntimeVerified = false;
+        await _migrationWorker?.close();
+        _migrationWorker = null;
         _initialized = false;
         throw e;
     }
@@ -815,11 +857,89 @@ async function safeSetItem(key, value) {
     try {
         await _store.setItem(key, value);
         invalidateKeysCache();
+        await syncCatalogBucketAfterCommit(key, value);
     } catch (e) {
         if (!isStorageQuotaError(e)) throw e;
         logger.error('Storage quota exceeded; write rejected without deleting existing history');
         throw createPreservedHistoryQuotaError(e);
     }
+}
+
+export async function teardownHistoryStore() {
+    const worker = _migrationWorker;
+    const build = _catalogBuildPromise;
+    _initialized = false;
+    _migrationWorker = null;
+    _catalogBuildAbortController?.abort();
+
+    await Promise.allSettled([
+        worker?.close(),
+        build,
+    ].filter(Boolean));
+
+    if (_catalogBuildPromise === build) _catalogBuildPromise = null;
+    _catalogBuildAbortController = null;
+    _catalogRuntimeVerified = false;
+    _store = null;
+    _catalog = null;
+    _keysCache = null;
+    _keysCacheTime = 0;
+}
+
+async function syncCatalogBucketAfterCommit(key, snapshots) {
+    if (!_catalog) return;
+    const target = parseKey(key);
+    if (!target) {
+        _catalogRuntimeVerified = false;
+        await _catalog.markDirty('CATALOG_TARGET_INVALID');
+        return;
+    }
+    try {
+        if (Array.isArray(snapshots) && snapshots.length > 0) {
+            await _catalog.replaceBucket(target.apiId, target.presetName, snapshots);
+        } else {
+            await _catalog.removeBucket(target.apiId, target.presetName);
+        }
+        _catalogRuntimeVerified = _catalog.read().status === 'ready';
+    } catch (error) {
+        _catalogRuntimeVerified = false;
+        logger.warn('History catalog sync failed after authoritative commit', {
+            operation: Array.isArray(snapshots) && snapshots.length > 0 ? 'replace-bucket' : 'remove-bucket',
+            count: Array.isArray(snapshots) ? snapshots.length : 0,
+            code: error?.code || error?.name || 'CATALOG_WRITE_FAILED',
+        });
+        await _catalog.markDirty('CATALOG_SYNC_FAILED');
+    }
+}
+
+async function syncCatalogBucketAfterMigration(key, snapshots) {
+    if (!_catalog) return;
+    const target = parseKey(key);
+    if (!target || snapshots.length === 0) {
+        _catalogRuntimeVerified = false;
+        await _catalog.markDirty('CATALOG_MIGRATION_REBUILD_REQUIRED');
+        return;
+    }
+    try {
+        await _catalog.replaceBucket(target.apiId, target.presetName, snapshots);
+    } catch (error) {
+        _catalogRuntimeVerified = false;
+        await _catalog.markDirty('CATALOG_MIGRATION_SYNC_FAILED');
+        throw error;
+    }
+}
+
+async function markCatalogDirtyAfterCommit(reason) {
+    if (!_catalog) return;
+    _catalogRuntimeVerified = false;
+    await _catalog.markDirty(reason);
+}
+
+function yieldCatalogWork() {
+    if (typeof globalThis.scheduler?.yield === 'function') {
+        return globalThis.scheduler.yield();
+    }
+    return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 // =====================================================
@@ -832,6 +952,88 @@ export async function getSnapshots(apiId, presetName) {
     await ensureStore();
     const key = makeKey(apiId, presetName);
     return readHistoryBucket(_store, key);
+}
+
+export function getHistoryCatalogState() {
+    if (!_catalog) {
+        return {
+            status: 'missing',
+            summaries: [],
+            progress: { completed: 0, total: 0 },
+            generation: 0,
+            errorCode: '',
+        };
+    }
+    return _catalog.read();
+}
+
+export function ensureHistoryCatalog({ onProgress = () => {}, signal } = {}) {
+    if (!_initialized || !_store || !_catalog) {
+        return Promise.reject(new Error('HistoryStore not initialized'));
+    }
+    if (_catalogBuildPromise) return _catalogBuildPromise;
+
+    const store = _store;
+    const catalog = _catalog;
+    const migrationWorker = _migrationWorker;
+    const internalAbortController = new AbortController();
+    _catalogBuildAbortController = internalAbortController;
+    const buildSignal = combineAbortSignals(signal, internalAbortController.signal);
+    const operation = _historyMutations.run(async () => {
+        const current = catalog.read();
+        if (_catalogRuntimeVerified && current.status === 'ready') return current;
+
+        const sourceManifest = await store.getCatalogManifest();
+        if (catalog.matchesSourceManifest(sourceManifest)) {
+            _catalogRuntimeVerified = true;
+            return current;
+        }
+        if (current.status === 'ready') {
+            await catalog.markDirty('CATALOG_SOURCE_CHANGED');
+        }
+        const ready = await catalog.rebuild({
+            keys: sourceManifest.map(entry => entry.key),
+            signal: buildSignal,
+            onProgress,
+            readBucket: async key => (await store.getCatalogBucket(key)) ?? [],
+        });
+        _catalogRuntimeVerified = true;
+        migrationWorker?.enqueue(
+            sourceManifest
+                .filter(entry => entry.revision === 'legacy')
+                .map(entry => entry.key),
+        );
+        return ready;
+    });
+    _catalogBuildPromise = operation;
+    operation.finally(() => {
+        if (_catalogBuildPromise === operation) _catalogBuildPromise = null;
+        if (_catalogBuildAbortController === internalAbortController) {
+            _catalogBuildAbortController = null;
+        }
+    }).catch(() => {});
+    return operation;
+}
+
+function combineAbortSignals(externalSignal, internalSignal) {
+    if (!externalSignal) return internalSignal;
+    if (typeof AbortSignal.any === 'function') {
+        return AbortSignal.any([externalSignal, internalSignal]);
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (externalSignal.aborted || internalSignal.aborted) abort();
+    else {
+        externalSignal.addEventListener('abort', abort, { once: true });
+        internalSignal.addEventListener('abort', abort, { once: true });
+    }
+    return controller.signal;
+}
+
+export async function getSnapshotSummaries({ onProgress, signal } = {}) {
+    await ensureStore();
+    const ready = await ensureHistoryCatalog({ onProgress, signal });
+    return ready.summaries;
 }
 
 /**
@@ -856,10 +1058,22 @@ export async function getAllSnapshots() {
  */
 export async function getSnapshotById(snapshotId) {
     await ensureStore();
-    const keys = await getKeys();
+    const catalogMatch = _catalog?.read().summaries.find(summary => summary.id === snapshotId);
+    const catalogKey = catalogMatch
+        ? makeKey(catalogMatch.apiId, catalogMatch.presetName)
+        : null;
+
+    if (catalogKey) {
+        const targetSnapshots = await readHistoryBucket(_store, catalogKey);
+        const found = targetSnapshots.find(snapshot => snapshot.id === snapshotId);
+        if (found) return found;
+    }
+
+    const keys = (await getKeys()).filter(key => key !== catalogKey);
     if (!keys || keys.length === 0) return null;
 
     // 性能优化：并行查询，更快返回
+    // A missing or stale derived catalog must never hide authoritative data.
     const lists = await readHistoryBuckets(_store, keys);
     for (const list of lists) {
         if (!Array.isArray(list)) continue;
@@ -999,6 +1213,7 @@ async function deleteSnapshotMutation(snapshotId, options = {}) {
                 await _store.setItem(key, list);
             }
             invalidateKeysCache();
+            await syncCatalogBucketAfterCommit(key, list);
             logger.debug('Snapshot deleted:', snapshotId);
             return true;
         }
@@ -1030,6 +1245,7 @@ async function renameSnapshotMutation(snapshotId, newName) {
             snap.name = trimmed;
             await _store.setItem(key, list);
             invalidateKeysCache();
+            await syncCatalogBucketAfterCommit(key, list);
             logger.debug(`Snapshot renamed: ${snapshotId} -> "${trimmed}"`);
             return true;
         }
@@ -1060,6 +1276,7 @@ async function togglePinSnapshotMutation(snapshotId, pinned) {
             snap.pinned = newVal;
             await _store.setItem(key, list);
             invalidateKeysCache();
+            await syncCatalogBucketAfterCommit(key, list);
             logger.debug(`Snapshot ${newVal ? 'pinned' : 'unpinned'}: ${snapshotId}`);
             return newVal;
         }
@@ -1079,6 +1296,7 @@ async function clearPresetHistoryMutation(apiId, presetName) {
     const key = makeKey(apiId, presetName);
     await _store.removeItem(key);
     invalidateKeysCache();
+    await syncCatalogBucketAfterCommit(key, []);
     logger.info(`Cleared history for: [${apiId}] ${presetName}`);
 }
 
@@ -1134,6 +1352,7 @@ async function deleteOldSnapshotsForPresetMutation(apiId, presetName, options = 
         await _store.setItem(key, kept);
     }
     invalidateKeysCache();
+    await syncCatalogBucketAfterCommit(key, kept);
     emitHistoryChange({
         type: 'history-pruned',
         apiId,
@@ -1159,6 +1378,7 @@ async function clearAllMutation() {
         await _store.removeItem(key);
     }
     invalidateKeysCache();
+    await markCatalogDirtyAfterCommit('CATALOG_CLEAR_ALL');
     logger.info('All history cleared');
 }
 
@@ -1199,6 +1419,7 @@ async function cleanCorruptSnapshotsMutation() {
     }
 
     invalidateKeysCache();
+    if (cleaned > 0) await markCatalogDirtyAfterCommit('CATALOG_CLEANUP');
     logger.info(`Cleanup: removed ${cleaned} corrupt snapshots out of ${scanned} scanned`);
     return { cleaned, scanned };
 }
@@ -1229,6 +1450,7 @@ async function trimOldSnapshotsMutation(keepPerPreset = null) {
     }
 
     invalidateKeysCache();
+    if (trimmed > 0) await markCatalogDirtyAfterCommit('CATALOG_TRIM_COUNT');
     logger.info(`Trimmed ${trimmed} old snapshots (keep ${keep} per preset, pinned preserved)`);
     return trimmed;
 }
@@ -1265,6 +1487,7 @@ async function trimByAgeMutation(maxDays) {
     }
 
     invalidateKeysCache();
+    if (trimmed > 0) await markCatalogDirtyAfterCommit('CATALOG_TRIM_AGE');
     logger.info(`Trimmed ${trimmed} snapshots older than ${maxDays} days (pinned preserved)`);
     return trimmed;
 }
@@ -1366,6 +1589,7 @@ async function importAllMutation(payload, mode = 'merge') {
     const plan = buildHistoryImportPlan(payload, existing, { mode, max });
     const imported = await applyHistoryImportPlan(_store, plan, existing);
     invalidateKeysCache();
+    await markCatalogDirtyAfterCommit('CATALOG_IMPORT');
     logger.info(`Imported ${imported} verified snapshots (mode: ${mode}, source v${plan.sourceVersion})`);
     return imported;
 }

@@ -2,6 +2,11 @@ import { buildPerformanceScenario, buildVisualScenario } from './visual-scenario
 
 const FIXED_EPOCH = Date.UTC(2026, 6, 13, 8, 0, 0);
 const SNAPSHOT_INTERVAL_MS = 60_000;
+export const PERFORMANCE_HISTORY_TARGETS = Object.freeze({
+    '1mb': 1 * 1024 * 1024,
+    '15mb': 15 * 1024 * 1024,
+    '46mb': 46 * 1024 * 1024,
+});
 
 function clone(value) {
     return typeof structuredClone === 'function'
@@ -11,6 +16,23 @@ function clone(value) {
 
 function byteSize(value) {
     return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+export function buildPerformanceStorageRecords(records, {
+    targetBytesPerSnapshot = Math.floor(PERFORMANCE_HISTORY_TARGETS['46mb'] / 500),
+} = {}) {
+    if (!Array.isArray(records)) throw new TypeError('Performance records must be an array');
+    return records.map(record => {
+        const copy = clone(record);
+        const preset = { ...copy.preset, __pasHarnessPayload: '' };
+        const paddingLength = Math.max(0, targetBytesPerSnapshot - byteSize(preset));
+        preset.__pasHarnessPayload = 'x'.repeat(paddingLength);
+        return {
+            ...copy,
+            size: byteSize(preset),
+            preset,
+        };
+    });
 }
 
 function projectRecords(kind, records) {

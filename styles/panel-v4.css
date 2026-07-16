@@ -621,7 +621,7 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-version-actions .pas-version-delete-btn .pas-control-face { border-color: rgba(251, 113, 133, .28); color: var(--pas-v4-danger); }
     .pas-series-group { margin-bottom: 6px; border-radius: 10px; }
     .pas-series-body { gap: 6px; padding: 6px; background: transparent; }
-    .pas-series-body > .pas-version-group { border: 1px solid var(--pas-v4-border); border-radius: 8px; background: var(--pas-v4-surface-raised); }
+    .pas-series-body > .pas-version-group { border: 1.5px solid var(--pas-v4-border); border-radius: 8px; background: var(--pas-v4-surface-raised); }
     .pas-version-header { gap: 2px; padding: 4px 6px; }
     .pas-version-body { padding: 4px 6px 6px; }
     .pas-filter,

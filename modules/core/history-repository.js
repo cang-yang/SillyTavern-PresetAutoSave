@@ -1,5 +1,9 @@
 import { enrichSnapshotList, verifyMigratedSnapshotList, HISTORY_SCHEMA_VERSION } from './history-schema.js';
 import { readOptionalHistoryBucket } from './history-bucket-reader.js';
+import {
+    fingerprintSnapshotSummaries,
+    projectSnapshotSummaries,
+} from './snapshot-summary.js';
 
 const META_PREFIX = '__history_v2_meta__::';
 
@@ -22,6 +26,16 @@ export class HistoryRepository {
         this.migrationStats = { attempted: 0, succeeded: 0, failed: 0 };
     }
 
+    async peekItem(key) {
+        const marker = await this.v2Store.getItem(migrationMarkerKey(key));
+        if (marker?.status === 'deleted') return null;
+
+        const current = await readOptionalHistoryBucket(this.v2Store, key);
+        if (current) return current;
+
+        return readOptionalHistoryBucket(this.legacyStore, key);
+    }
+
     async getItem(key) {
         const marker = await this.v2Store.getItem(migrationMarkerKey(key));
         if (marker?.status === 'deleted') return null;
@@ -32,6 +46,44 @@ export class HistoryRepository {
         const legacy = await readOptionalHistoryBucket(this.legacyStore, key);
         if (!legacy) return null;
         return this.#migrate(key, legacy);
+    }
+
+    async getCatalogBucket(key) {
+        const marker = await this.v2Store.getItem(migrationMarkerKey(key));
+        if (marker?.status === 'deleted') return null;
+        if (Array.isArray(marker?.catalogSummaries)) {
+            try {
+                return projectSnapshotSummaries(marker.catalogSummaries);
+            } catch (_) {
+                // A derived seed may be rebuilt from authoritative history.
+            }
+        }
+        return this.peekItem(key);
+    }
+
+    async migrateItem(key) {
+        const markerKey = migrationMarkerKey(key);
+        const marker = await this.v2Store.getItem(markerKey);
+        if (marker?.status === 'deleted') return { status: 'deleted', snapshots: null };
+
+        const current = await readOptionalHistoryBucket(this.v2Store, key);
+        if (current) return { status: 'current', snapshots: current };
+
+        const legacy = await readOptionalHistoryBucket(this.legacyStore, key);
+        if (!legacy) return { status: 'missing', snapshots: null };
+
+        await this.#migrate(key, legacy);
+        const [committed, committedMarker] = await Promise.all([
+            readOptionalHistoryBucket(this.v2Store, key),
+            this.v2Store.getItem(markerKey),
+        ]);
+        if (
+            committed
+            && (committedMarker?.status === 'migrated' || committedMarker?.status === 'active')
+        ) {
+            return { status: 'migrated', snapshots: committed };
+        }
+        return { status: 'failed', snapshots: legacy };
     }
 
     async #migrate(key, legacy) {
@@ -72,6 +124,8 @@ export class HistoryRepository {
                 status,
                 schemaVersion: HISTORY_SCHEMA_VERSION,
                 count: enriched.length,
+                catalogRevision: fingerprintSnapshotSummaries(enriched),
+                catalogSummaries: projectSnapshotSummaries(enriched),
                 migratedAt: this.now(),
             });
             return readBack;
@@ -138,6 +192,41 @@ export class HistoryRepository {
             if (marker?.status !== 'deleted') result.push(key);
         }
         return result;
+    }
+
+    async getCatalogManifest() {
+        const [legacyKeys, v2Keys] = await Promise.all([
+            this.legacyStore.keys(),
+            this.v2Store.keys(),
+        ]);
+        const v2DataKeys = new Set((v2Keys ?? []).filter(isDataKey));
+        const candidates = new Set([
+            ...(legacyKeys ?? []).filter(isDataKey),
+            ...v2DataKeys,
+        ]);
+        const candidateList = [...candidates];
+        const markers = await Promise.all(candidateList.map(
+            key => this.v2Store.getItem(migrationMarkerKey(key)),
+        ));
+        const manifest = candidateList.flatMap((key, index) => {
+            const marker = markers[index];
+            if (marker?.status === 'deleted') return [];
+            let revision = 'legacy';
+            if (v2DataKeys.has(key)) {
+                revision = typeof marker?.catalogRevision === 'string' && marker.catalogRevision
+                    ? marker.catalogRevision
+                    : [
+                        'v2',
+                        marker?.status ?? 'unmarked',
+                        marker?.schemaVersion ?? '',
+                        marker?.count ?? '',
+                        marker?.migratedAt ?? '',
+                    ].join(':');
+            }
+            return [{ key, revision }];
+        });
+        manifest.sort((left, right) => left.key.localeCompare(right.key, 'en'));
+        return manifest;
     }
 
     async clear() {

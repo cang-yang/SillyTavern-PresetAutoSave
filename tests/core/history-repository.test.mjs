@@ -40,6 +40,21 @@ function legacySnapshot(overrides = {}) {
     };
 }
 
+test('peekItem reads compatible legacy data without migration writes or counters', async () => {
+    const key = 'openai::Demo';
+    const legacyValue = [legacySnapshot()];
+    const legacy = new MemoryStore({ [key]: legacyValue });
+    const v2 = new MemoryStore();
+    const repository = new HistoryRepository({ legacyStore: legacy, v2Store: v2 });
+
+    const result = await repository.peekItem(key);
+    result[0].name = 'changed outside';
+
+    assert.deepEqual(await legacy.getItem(key), legacyValue);
+    assert.deepEqual(await v2.keys(), []);
+    assert.deepEqual(repository.migrationStats, { attempted: 0, succeeded: 0, failed: 0 });
+});
+
 test('lazily migrates, verifies, and then prefers v2 data', async () => {
     const key = 'openai::Demo';
     const legacy = new MemoryStore({ [key]: [legacySnapshot()] });
@@ -70,6 +85,36 @@ test('failed migration remains retryable and falls back to legacy data', async (
     assert.equal(errors.length, 1);
 });
 
+test('explicit background migration reports whether a verified v2 bucket was committed', async () => {
+    const key = 'openai::Demo';
+    const legacy = new MemoryStore({ [key]: [legacySnapshot()] });
+    const v2 = new MemoryStore();
+    const repository = new HistoryRepository({ legacyStore: legacy, v2Store: v2 });
+
+    const migrated = await repository.migrateItem(key);
+    const current = await repository.migrateItem(key);
+
+    assert.equal(migrated.status, 'migrated');
+    assert.equal(migrated.snapshots[0].schemaVersion, 2);
+    assert.equal(current.status, 'current');
+    assert.deepEqual(repository.migrationStats, { attempted: 1, succeeded: 1, failed: 0 });
+});
+
+test('explicit background migration exposes failure without hiding legacy data', async () => {
+    const key = 'openai::Demo';
+    const legacyValue = [legacySnapshot()];
+    const repository = new HistoryRepository({
+        legacyStore: new MemoryStore({ [key]: legacyValue }),
+        v2Store: new MemoryStore({}, { failSet: true }),
+    });
+
+    const result = await repository.migrateItem(key);
+
+    assert.equal(result.status, 'failed');
+    assert.deepEqual(result.snapshots, legacyValue);
+    assert.deepEqual(repository.migrationStats, { attempted: 1, succeeded: 0, failed: 1 });
+});
+
 test('writes v2 envelopes and deterministic parent links', async () => {
     const key = 'openai::Demo';
     const legacy = new MemoryStore();
@@ -86,6 +131,36 @@ test('writes v2 envelopes and deterministic parent links', async () => {
     assert.equal(stored[1].parentSnapshotId, null);
     assert.equal(stored[0].canonicalHash, 'new-hash');
     assert.equal((await repository.getItem(key))[0].schemaVersion, 2);
+});
+
+test('verified v2 markers retain a payload-free catalog seed', async () => {
+    const key = 'openai::Demo';
+    const v2 = new MemoryStore();
+    const repository = new HistoryRepository({ legacyStore: new MemoryStore(), v2Store: v2 });
+    await repository.setItem(key, [legacySnapshot({
+        preset: { temperature: 0.7, prompts: [{ content: 'private prompt' }] },
+    })]);
+
+    const marker = await v2.getItem(migrationMarkerKey(key));
+    const catalogBucket = await repository.getCatalogBucket(key);
+
+    assert.equal(Array.isArray(marker.catalogSummaries), true);
+    assert.equal(JSON.stringify(marker.catalogSummaries).includes('private prompt'), false);
+    assert.equal(catalogBucket[0].id, 'snap-1');
+    assert.equal(Object.hasOwn(catalogBucket[0], 'preset'), false);
+});
+
+test('catalog bucket falls back to read-only legacy data without migration', async () => {
+    const key = 'openai::Legacy';
+    const repository = new HistoryRepository({
+        legacyStore: new MemoryStore({ [key]: [legacySnapshot({ presetName: 'Legacy' })] }),
+        v2Store: new MemoryStore(),
+    });
+
+    const bucket = await repository.getCatalogBucket(key);
+
+    assert.equal(bucket[0].presetName, 'Legacy');
+    assert.deepEqual(repository.migrationStats, { attempted: 0, succeeded: 0, failed: 0 });
 });
 
 test('active writes may recompute derived v2 metadata while preserving snapshot content', async () => {

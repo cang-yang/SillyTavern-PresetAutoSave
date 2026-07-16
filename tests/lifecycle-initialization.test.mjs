@@ -16,3 +16,9 @@ test('startup aborts when required host compatibility is unavailable', () => {
     assert.match(source, /if \(!initCompatibility\(\)\) \{[\s\S]*?return;[\s\S]*?\}/);
     assert.doesNotMatch(source, /Compatibility check failed, extension may not work properly/);
 });
+
+test('disable and delete quiesce background history work', () => {
+    assert.match(source, /teardownHistoryStore/);
+    assert.match(source, /onDelete\(\)[\s\S]*?await teardownHistoryStore\(\)/);
+    assert.match(source, /onDisable\(\)[\s\S]*?await teardownHistoryStore\(\)/);
+});
