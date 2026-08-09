@@ -11,7 +11,7 @@ const [renderer, panelCss, safetyCss, panelShell] = await Promise.all([
 const snapshotRenderer = await readFile(new URL('../modules/panel-snapshot-card.js', import.meta.url), 'utf8');
 
 test('collapsed version rows do not carry the contextual action strip', () => {
-    const versionRenderer = renderer.match(/function renderVersionGroup[\s\S]*?\n}\n\nfunction renderShowMoreSnapshots/)?.[0] || '';
+    const versionRenderer = renderer.match(/function renderVersionGroup[\s\S]*?\r?\n}\r?\n\r?\nfunction renderShowMoreSnapshots/)?.[0] || '';
     const header = versionRenderer.match(/<div class="pas-version-header"[\s\S]*?<div class="pas-version-body"/)?.[0] || '';
     const body = versionRenderer.match(/<div class="pas-version-body"[\s\S]*?<\/div>\s*<\/div>`/)?.[0] || '';
 
@@ -38,7 +38,7 @@ test('compact history filters stay in one scrollable row instead of a two-row gr
 });
 
 test('version status and metadata share one secondary row', () => {
-    const versionRenderer = renderer.match(/function renderVersionGroup[\s\S]*?\n}\n\nfunction renderShowMoreSnapshots/)?.[0] || '';
+    const versionRenderer = renderer.match(/function renderVersionGroup[\s\S]*?\r?\n}\r?\n\r?\nfunction renderShowMoreSnapshots/)?.[0] || '';
     assert.doesNotMatch(versionRenderer, /const tagsRowHtml/);
     assert.match(versionRenderer, /pas-version-header-row-meta[\s\S]*?pas-version-header-tags[\s\S]*?tagsHtml/);
 });
