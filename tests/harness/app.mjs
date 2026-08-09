@@ -804,6 +804,94 @@ async function exercisePresetSwitchConvergence() {
     return result;
 }
 
+async function exerciseDirtyPresetSwitchGuard() {
+    if (options.scenario !== 'ordinary') {
+        throw new Error('Dirty preset switch checks require the ordinary scenario');
+    }
+
+    const originalIndex = nativeSelect.selectedIndex;
+    const originalName = nativeSelect.options[originalIndex]?.textContent || '';
+    const targetIndex = [...nativeSelect.options].findIndex((_, index) => index !== originalIndex);
+    if (targetIndex < 0) throw new Error('Dirty preset switch fixture requires a destination preset');
+
+    const targetName = nativeSelect.options[targetIndex]?.textContent || '';
+    const originalPreset = structuredClone(storedPresetByName.get(originalName) || {});
+    const targetPreset = structuredClone(storedPresetByName.get(targetName) || {});
+    const modifiedPreset = structuredClone(originalPreset);
+    const markerValue = Number(modifiedPreset.temperature || 0) + 0.123456;
+    modifiedPreset.temperature = markerValue;
+    const snapshotsBefore = await historyStore.getSnapshots(scenario.currentApiId, originalName);
+    const targetStoredBefore = JSON.stringify(targetPreset);
+    const errorCountBefore = consoleErrors.length;
+
+    const container = document.createElement('div');
+    container.id = 'openai_settings';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.value = String(markerValue);
+    container.append(input);
+    document.body.append(container);
+
+    let afterSwitch;
+    let savedSnapshots;
+    try {
+        await new Promise(resolve => setTimeout(resolve, 350));
+        livePresetSettings = structuredClone(modifiedPreset);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await waitFor(() => autoSave.isDirty() || autoSave.isPending());
+
+        nativeSelect.selectedIndex = targetIndex;
+        nativeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        savedSnapshots = await waitFor(async () => {
+            const snapshots = await historyStore.getSnapshots(scenario.currentApiId, originalName);
+            const saved = storedPresetByName.get(originalName);
+            return snapshots.length === snapshotsBefore.length + 1
+                && saved?.temperature === markerValue
+                ? snapshots
+                : null;
+        }, 3000);
+
+        livePresetSettings = structuredClone(targetPreset);
+        await context.eventSource.emit(context.event_types.PRESET_CHANGED, {
+            apiId: scenario.currentApiId,
+            name: targetName,
+        });
+        afterSwitch = await waitFor(() => {
+            const tracking = autoSave.getCurrentTracking();
+            return tracking.presetName === targetName && tracking.lastHash && !tracking.ignoring
+                ? tracking
+                : null;
+        }, 3000);
+    } finally {
+        const savedOriginal = structuredClone(storedPresetByName.get(originalName) || modifiedPreset);
+        nativeSelect.selectedIndex = originalIndex;
+        livePresetSettings = savedOriginal;
+        await context.eventSource.emit(context.event_types.PRESET_CHANGED, {
+            apiId: scenario.currentApiId,
+            name: originalName,
+        });
+        await waitFor(() => {
+            const tracking = autoSave.getCurrentTracking();
+            return tracking.presetName === originalName && !tracking.ignoring;
+        }, 3000);
+        container.remove();
+    }
+
+    const newest = savedSnapshots?.[0];
+    const result = Object.freeze({
+        sourcePersisted: storedPresetByName.get(originalName)?.temperature === markerValue,
+        sourceHistoryCommitted: newest?.preset?.temperature === markerValue
+            && newest?.trigger === 'switch_guard',
+        destinationUnchanged: JSON.stringify(storedPresetByName.get(targetName) || {}) === targetStoredBefore,
+        destinationSettled: afterSwitch?.presetName === targetName && Boolean(afterSwitch?.lastHash),
+        noConsoleErrors: consoleErrors.length === errorCountBefore,
+    });
+    if (Object.values(result).some(value => value !== true)) {
+        throw new Error(`Dirty preset switch guard failed: ${JSON.stringify(result)}`);
+    }
+    return result;
+}
+
 async function exerciseDisclosures() {
     const checks = [];
     const actions = ['toggle-series', 'toggle-version', 'toggle-group'];
@@ -1119,6 +1207,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     showGroupManager,
     exerciseCoreOperations,
     exercisePresetSwitchConvergence,
+    exerciseDirtyPresetSwitchGuard,
     exerciseGroupingMenus,
     exerciseGroupingLayout,
     exerciseHostileTranslations,

@@ -18,6 +18,15 @@ import { formatEnumValue } from './panel-summary.js';
 
 let _popup = null;
 
+/**
+ * Keep the user's explicit A/B selection stable. Timestamp order is useful for
+ * an automatic before/after view, but these slots are named controls and are
+ * also used by swap/export actions, so silently reordering them is misleading.
+ */
+export function resolveDiffSides(snapA, snapB) {
+    return Object.freeze({ a: snapA, b: snapB });
+}
+
 // =====================================================
 // 公共 API
 // =====================================================
@@ -35,11 +44,10 @@ export async function showDiffPopup(snapA, snapB) {
     if (!snapA || !snapB) { toast.error(t('Diff Need Two')); return; }
     if (snapA.id === snapB.id) { toast.warning(t('Diff Same Snapshot')); return; }
 
-    let a = snapA, b = snapB;
-    if (a.timestamp > b.timestamp) [a, b] = [b, a];
+    const { a, b } = resolveDiffSides(snapA, snapB);
 
     try {
-        const html = buildDiffHTML(a, b);
+        const html = buildDiffPopupHTML(a, b);
         _popup = createPopupSafe(html, 'DISPLAY', {
             wide: true, large: true, allowVerticalScrolling: true,
             okButton: false, cancelButton: t('Close'),
@@ -278,7 +286,7 @@ function extractOrd(po) {
 // HTML 构建
 // =====================================================
 
-function buildDiffHTML(a, b) {
+export function buildDiffPopupHTML(a, b) {
     const diff = computeDiff(a, b);
     const c = diff.counts;
     return `
@@ -300,19 +308,19 @@ function buildDiffHTML(a, b) {
             </label>
         </div>
         <div class="pas-diff-toolbar-right">
-            <button class="pas-mini-btn pas-diff-btn-swap" type="button" title="${esc(t('Diff Swap Title'))}">
+            <button class="pas-mini-btn pas-diff-btn-swap" type="button" title="${esc(t('Diff Swap Title'))}" aria-label="${esc(t('Diff Swap Title'))}">
                 <i class="fa-solid fa-arrow-right-arrow-left"></i>
                 <span>${esc(t('Diff Swap'))}</span>
             </button>
-            <button class="pas-mini-btn pas-diff-btn-export" type="button" title="${esc(t('Diff Export Title'))}">
+            <button class="pas-mini-btn pas-diff-btn-export" type="button" title="${esc(t('Diff Export Title'))}" aria-label="${esc(t('Diff Export Title'))}">
                 <i class="fa-solid fa-download"></i>
                 <span>${esc(t('Diff Export'))}</span>
             </button>
-            <button class="pas-mini-btn pas-diff-btn-export-a" type="button" title="${esc(t('Export Preset A Title'))}">
+            <button class="pas-mini-btn pas-diff-btn-export-a" type="button" title="${esc(t('Export Preset A Title'))}" aria-label="${esc(t('Export Preset A Title'))}">
                 <i class="fa-solid fa-file-export"></i>
                 <span>${esc(t('Export Preset A'))}</span>
             </button>
-            <button class="pas-mini-btn pas-diff-btn-export-b" type="button" title="${esc(t('Export Preset B Title'))}">
+            <button class="pas-mini-btn pas-diff-btn-export-b" type="button" title="${esc(t('Export Preset B Title'))}" aria-label="${esc(t('Export Preset B Title'))}">
                 <i class="fa-solid fa-file-export"></i>
                 <span>${esc(t('Export Preset B'))}</span>
             </button>

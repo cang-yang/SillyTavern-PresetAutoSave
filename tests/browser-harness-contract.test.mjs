@@ -43,6 +43,7 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /showGroupManager/);
     assert.match(app, /exerciseCoreOperations/);
     assert.match(app, /exercisePresetSwitchConvergence/);
+    assert.match(app, /exerciseDirtyPresetSwitchGuard/);
     assert.match(app, /countIncreased/);
     assert.match(app, /newIdCreated/);
     assert.match(app, /previousSnapshotPreserved/);
