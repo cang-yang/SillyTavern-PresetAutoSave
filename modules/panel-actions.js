@@ -51,6 +51,7 @@ import {
 } from './panel-summary.js';
 import { parsePresetKey } from './panel-list-model.js';
 import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
+import { prepareRestoreBaseline } from './core/restore-baseline.js';
 import { setDisclosureExpanded } from './panel-disclosure.js';
 import { increaseSnapshotRenderLimit } from './core/bounded-snapshot-list.js';
 
@@ -401,6 +402,12 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
     );
     if (!ok) return;
 
+    const restore = prepareRestoreBaseline({
+        apiId: currentApi,
+        presetName: currentPreset,
+        preset: snapshot.preset,
+    }, { hashPreset });
+
     // AL-1: 原子恢复 — 在整个操作期间抑制所有自动保存事件副作用
     // （savePresetSafe 会触发 SETTINGS_UPDATED 等事件，若不抑制会导致
     //  updateTrackingAfterSwitch → seedSnapshot → resetHash
@@ -410,8 +417,8 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
         // 1. 写入预设到磁盘（skipUpdate:false 让 ST 重新加载 UI）
         //    AM-0 P1a: 使用当前预设名/API（已通过 P0 验证与快照一致），
         //    不再调用 selectPresetSafe()，因为当前预设就是目标预设
-        await savePresetSafe(currentPreset, snapshot.preset, {
-            skipUpdate: false, apiId: currentApi,
+        await savePresetSafe(restore.presetName, restore.preset, {
+            skipUpdate: false, apiId: restore.apiId,
         });
 
         // 2. 创建恢复快照并计算正确的 hash
@@ -420,13 +427,8 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
         //    savePresetSafe(skipUpdate:false) 触发 ST 重新加载 UI 是异步的，
         //    oai_settings 在 savePresetSafe 返回后可能仍是恢复前的旧值，
         //    导致 hashPreset() 算出旧 hash → endAtomicRestore 设置错误的基线。
-        let restoreHash = null;
         try {
-            const restoredPreset = snapshot.preset;
-            if (restoredPreset) {
-                await addSnapshot(currentPreset, currentApi, restoredPreset, TRIGGER.RESTORE);
-                restoreHash = hashPreset(restoredPreset, apiId);
-            }
+            await addSnapshot(restore.presetName, restore.apiId, restore.preset, TRIGGER.RESTORE);
         } catch (snapErr) {
             logger.warn('Post-restore snapshot failed (non-fatal):', snapErr);
         }
@@ -434,9 +436,9 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
         // 3. 结束原子恢复：将 tracking hash 设为恢复后的真实指纹
         //    （而非 null，避免"下次必定认为有变化"的错误行为）
         //    endAtomicRestore 内部会设置 2 秒抑制窗口（AM-0 P1b）
-        endAtomicRestore(restoreHash, {
-            apiId: currentApi,
-            presetName: currentPreset,
+        endAtomicRestore(restore.restoreHash, {
+            apiId: restore.apiId,
+            presetName: restore.presetName,
         });
 
         toast.success(t('Restored To Time', { time }));

@@ -27,6 +27,24 @@ test('a disk failure creates no history record', async () => {
     assert.equal(historyCalls, 0);
 });
 
+test('an explicit memory synchronization failure stops history and reports a partial transaction', async () => {
+    let historyCalls = 0;
+
+    await assert.rejects(() => commitPresetSave({}, {
+        persistPreset: async () => {},
+        syncMemory: async () => false,
+        commitHistory: async () => { historyCalls++; },
+    }), error => {
+        assert.equal(error instanceof PresetSaveTransactionError, true);
+        assert.equal(error.stage, 'memory');
+        assert.equal(error.diskCommitted, true);
+        assert.equal(error.historyCommitted, false);
+        return true;
+    });
+
+    assert.equal(historyCalls, 0);
+});
+
 test('reports a partial transaction when history fails after disk commit', async () => {
     await assert.rejects(() => commitPresetSave({}, {
         persistPreset: async () => {},

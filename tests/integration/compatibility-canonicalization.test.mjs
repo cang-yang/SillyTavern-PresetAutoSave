@@ -17,6 +17,7 @@ const {
     ENV,
     initCompatibility,
     getLivePresetSnapshot,
+    getStoredPresetSnapshot,
     sanitizePresetForExport,
     savePresetSafe,
 } = await import('../../modules/compatibility.js');
@@ -126,5 +127,29 @@ test('live capture ignores a select that already points at the next preset', () 
     assert.deepEqual(getLivePresetSnapshot('textgenerationwebui'), {
         extensions: { probe: { enabled: false } },
         temperature: 0.83,
+    });
+});
+
+test('stored capture returns the destination preset while live settings still contain the source', () => {
+    globalThis.window.SillyTavern.getContext = () => ({
+        mainApi: 'openai',
+        getPresetManager: () => ({
+            getPresetList: () => ({
+                settings: { temperature: 0.1 },
+                preset_names: ['Preset A', 'Preset B'],
+                presets: [
+                    { temperature: 0.1 },
+                    { temperature: 0.8, extensions: { destination: true } },
+                ],
+            }),
+        }),
+        eventSource: { on() {} },
+        event_types: {},
+    });
+    initCompatibility();
+
+    assert.deepEqual(getStoredPresetSnapshot('Preset B', { apiId: 'openai' }), {
+        extensions: { destination: true },
+        temperature: 0.8,
     });
 });

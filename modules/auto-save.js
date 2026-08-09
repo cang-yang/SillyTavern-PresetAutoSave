@@ -24,6 +24,7 @@ import {
     getSelectedPresetName,
     getPresetSnapshot,
     getLivePresetSnapshot,
+    getStoredPresetSnapshot,
     getPresetManager,
     savePresetSafe,
     syncPresetToMemory,
@@ -44,6 +45,7 @@ import { resolveNativePresetSaveTarget } from './core/native-preset-save-target.
 import { PRESET_WATCH_SELECTORS, isInsidePresetWatchArea } from './core/preset-dom-watch.js';
 import { getSaveStatus, setSaveStatus } from './core/save-status.js';
 import { classifyCoordinatorResult } from './core/save-outcome.js';
+import { createPresetSwitchConvergence } from './core/preset-switch-convergence.js';
 
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
@@ -119,6 +121,7 @@ let _currentApiId = null;          // 当前跟踪的 API
 let _currentPresetName = null;     // 当前跟踪的预设名
 let _switchTraceSeq = 0;
 let _activeSwitchTrace = null;
+let _switchConvergence = null;
 
 // 容器级监听：只在 WATCH_SELECTORS 命中的元素上 bind input/change，
 // 而不是在整个 document 捕获。聊天框、其他扩展的输入完全不进入热路径。
@@ -179,6 +182,8 @@ export async function initAutoSave() {
     } else {
         logger.warn('No initial preset available; baseline hash not set');
     }
+
+    _switchConvergence = createSwitchConvergenceController();
 
     // 绑定 ST 事件（包含 SETTINGS_UPDATED + 切换/预设变更）
     bindPresetEvents();
@@ -1391,45 +1396,20 @@ function bindPresetEvents() {
 
     // ----- OpenAI 切换后事件 -----
     const oaiAfter = getEventType('OAI_PRESET_CHANGED_AFTER', 'oai_preset_changed_after');
-    _eventUnsubscribers.push(on(oaiAfter, () => {
+    _eventUnsubscribers.push(on(oaiAfter, (data = {}) => {
         if (_restoreInProgress) return; // AL-1: 恢复期间跳过切换后逻辑
         // 切换 → 大量 SETTINGS_UPDATED + DOM mutation
         // 实测 ST 可能持续 2-3 秒触发各种事件，因此把窗口加大到 4 秒
-        _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
         cancelPendingSave();
-        setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
-        // 1) 早一点把"跟踪状态"指向新预设（避免下一次 doSave 比较错对象）
-        _runtimeTimers.schedule(() => {
-            updateTrackingAfterSwitch();
-        }, 200);
-        // 2) 晚一点解锁 ignoreInput，避免切换尾部的 mutation 被当成用户输入
-        _runtimeTimers.schedule(() => {
-            setIgnoreInput(false);
-            if (_activeSwitchTrace) noteSwitchTrace('oai-after:ignore-reset');
-            clearSwitchTrace('oai-after:ignore-reset');
-        }, IGNORE_INPUT_AFTER_SWITCH_MS);
+        beginSwitchConvergence(data);
     }));
 
     // ----- 通用预设切换事件（适用于所有 API）-----
     const presetChanged = getEventType('PRESET_CHANGED', 'preset_changed');
-    _eventUnsubscribers.push(on(presetChanged, async (data) => {
+    _eventUnsubscribers.push(on(presetChanged, (data) => {
         if (_restoreInProgress) return; // AL-1: 恢复期间跳过预设切换逻辑
         cancelPendingSave();
-        setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
-        _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
-
-        if (data) {
-            if (data.apiId) _currentApiId = data.apiId;
-            if (data.name) _currentPresetName = data.name;
-        }
-
-        _runtimeTimers.schedule(() => {
-            updateTrackingAfterSwitch();
-        }, 250);
-        _runtimeTimers.schedule(() => {
-            setIgnoreInput(false);
-            clearSwitchTrace('preset-changed:ignore-reset');
-        }, IGNORE_INPUT_AFTER_SWITCH_MS);
+        beginSwitchConvergence(data || {});
     }));
 
     // ----- 主 API 切换 -----
@@ -1437,16 +1417,7 @@ function bindPresetEvents() {
     _eventUnsubscribers.push(on(mainApiChanged, () => {
         if (_restoreInProgress) return; // AL-1: 恢复期间跳过 API 切换逻辑
         cancelPendingSave();
-        setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
-        _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
-
-        _runtimeTimers.schedule(() => {
-            updateTrackingAfterSwitch();
-        }, 250);
-        _runtimeTimers.schedule(() => {
-            setIgnoreInput(false);
-            clearSwitchTrace('main-api-changed:ignore-reset');
-        }, IGNORE_INPUT_AFTER_SWITCH_MS);
+        beginSwitchConvergence({ apiId: getCurrentApiId() });
     }));
 }
 
@@ -1464,37 +1435,110 @@ const IGNORE_INPUT_AFTER_SWITCH_MS = 2500;
  * 注意：在 ST 中，OAI_PRESET_CHANGED_AFTER 之后通常还会触发通用 PRESET_CHANGED，
  * 两者都会进入这里。如果两次结果一致，就跳过第二次（保持 idle）。
  */
-function updateTrackingAfterSwitch() {
-    const newApiId = getCurrentApiId();
-    const newPresetName = getSelectedPresetName();
-    const newPreset = getPresetSnapshot();
-    const newHash = newPreset ? hashPreset(newPreset, newApiId) : null;
+function readSwitchCandidate() {
+    const apiId = getCurrentApiId();
+    const presetName = getSelectedPresetName();
+    if (!apiId || !presetName) return null;
 
-    // 去重：相同 (apiId, name, hash) 在短时间内重复进来直接 return
-    if (
-        newApiId === _currentApiId
-        && newPresetName === _currentPresetName
-        && newHash === _lastSavedHash
-        && !_dirty
-    ) {
-        return;
+    const preset = getPresetSnapshot(presetName, { apiId });
+    if (!preset) return null;
+    const storedPreset = getStoredPresetSnapshot(presetName, { apiId });
+
+    return {
+        apiId,
+        presetName,
+        preset,
+        liveHash: hashPreset(preset, apiId),
+        storedHash: storedPreset ? hashPreset(storedPreset, apiId) : null,
+    };
+}
+
+function finishSwitchConvergence(candidate) {
+    const preserveDirty = _dirty;
+    _currentApiId = candidate.apiId;
+    _currentPresetName = candidate.presetName;
+    _lastSavedHash = candidate.verified ? candidate.liveHash : null;
+    _lastQuickFingerprint = candidate.verified
+        ? _computeQuickFingerprint(candidate.apiId)
+        : null;
+    _suspendUntil = 0;
+    setIgnoreInput(false);
+
+    if (preserveDirty) {
+        if (_suspendCompensationTimer) {
+            clearTimeout(_suspendCompensationTimer);
+            _suspendCompensationTimer = null;
+        }
+        _dirty = true;
+        _setStatus('pending');
+        scheduleAutoSave(null, 'post-switch-user-change');
+    } else {
+        _dirty = false;
+        _setStatus('idle');
     }
 
-    _currentApiId = newApiId;
-    _currentPresetName = newPresetName;
-    _lastSavedHash = newHash;
-    _lastQuickFingerprint = _computeQuickFingerprint(newApiId);
-    _dirty = false;
-    _setStatus('idle');
+    logger.debug(
+        `Switch tracking settled: [${candidate.apiId}] ${candidate.presetName} ` +
+        `hash=${_lastSavedHash || 'unverified'} generation=${candidate.generation}`
+    );
+    clearSwitchTrace('switch-converged');
 
-    logger.debug(`Tracking updated: [${_currentApiId}] ${_currentPresetName} hash=${_lastSavedHash}`);
-
-    // V-1: 首次切换到没有快照的预设时，自动创建初始快照
-    if (newApiId && newPresetName) {
-        seedSnapshotForPreset(newPresetName, newApiId).catch(e => {
-            logger.debug(`[AutoSave] seed-on-switch failed for "${newPresetName}":`, e);
+    if (candidate.verified) {
+        seedSnapshotForPreset(candidate.presetName, candidate.apiId, {
+            preset: candidate.preset,
+            verified: candidate.verified,
+        }).catch(e => {
+            logger.debug(`[AutoSave] seed-on-switch failed for "${candidate.presetName}":`, e);
         });
     }
+}
+
+function timeoutSwitchConvergence(result) {
+    _currentApiId = getCurrentApiId() || result?.hint?.apiId || null;
+    _currentPresetName = getSelectedPresetName() || result?.hint?.presetName || null;
+    _lastSavedHash = null;
+    _lastQuickFingerprint = null;
+    _suspendUntil = 0;
+    setIgnoreInput(false);
+    _setStatus(_dirty ? 'pending' : 'idle');
+    logger.warn(
+        `Preset switch did not converge; history seeding skipped for ` +
+        `[${result?.hint?.apiId || '?'}] ${result?.hint?.presetName || '?'}`
+    );
+    clearSwitchTrace('switch-convergence-timeout');
+    if (_dirty) {
+        if (_suspendCompensationTimer) {
+            clearTimeout(_suspendCompensationTimer);
+            _suspendCompensationTimer = null;
+        }
+        scheduleAutoSave(null, 'post-switch-timeout');
+    }
+}
+
+function createSwitchConvergenceController() {
+    return createPresetSwitchConvergence({
+        readCandidate: readSwitchCandidate,
+        onSettled: finishSwitchConvergence,
+        onTimeout: timeoutSwitchConvergence,
+        schedule: (fn, delay) => _runtimeTimers.schedule(fn, delay),
+        cancel: id => _runtimeTimers.cancel(id),
+        intervalMs: 80,
+        timeoutMs: 10_000,
+        requiredStableSamples: 2,
+    });
+}
+
+function beginSwitchConvergence(data = {}) {
+    if (!_switchConvergence) _switchConvergence = createSwitchConvergenceController();
+    const wasActive = _switchConvergence.isActive();
+    const hint = {
+        apiId: data.apiId || getCurrentApiId(),
+        presetName: data.name || data.presetName || getSelectedPresetName(),
+    };
+    _suspendUntil = Date.now() + 10_000;
+    setIgnoreInput(true, 11_000);
+    if (!wasActive) _dirty = false;
+    _switchConvergence.begin(hint);
 }
 
 // =====================================================
@@ -1554,6 +1598,7 @@ let _restoreAutoResetTimer = null;
 const RESTORE_TIMEOUT_MS = 10_000;
 
 export function beginAtomicRestore() {
+    _switchConvergence?.cancel();
     _restoreInProgress = true;
     cancelPendingSave();
     setIgnoreInput(true, RESTORE_TIMEOUT_MS + 1000);
@@ -1628,6 +1673,8 @@ export function endAtomicRestore(hash, tracking = null) {
 export async function teardown() {
     cancelPendingSave();
     _enabled = false;
+    _switchConvergence?.cancel();
+    _switchConvergence = null;
     _runtimeTimers.clearAll();
 
     // Stop every source of new work before waiting for the current disk write.

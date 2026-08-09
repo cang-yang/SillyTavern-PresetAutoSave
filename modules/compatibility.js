@@ -631,6 +631,47 @@ export function getPresetSettingsSafe(presetName) {
  * @param {string} [presetName] 预设名（可选）
  * @returns {object|null}
  */
+function isUsablePresetObject(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
+function findStoredPresetInList(list, presetName) {
+    const { presets, preset_names: presetNames } = list || {};
+    if (!presets || !presetNames || !presetName) return null;
+
+    let index = -1;
+    if (Array.isArray(presetNames)) {
+        index = presetNames.indexOf(presetName);
+    } else if (typeof presetNames === 'object') {
+        const mapped = presetNames[presetName];
+        if (typeof mapped === 'number') index = mapped;
+    }
+
+    return index >= 0 && isUsablePresetObject(presets[index]) ? presets[index] : null;
+}
+
+export function getStoredPresetSnapshot(presetName, options = {}) {
+    const explicitApiId = typeof options === 'string' ? options : options?.apiId;
+    const apiId = explicitApiId || getCurrentApiId();
+    const pm = getPresetManager(apiId);
+    if (!pm || !presetName) return null;
+
+    if (typeof pm.getPresetList === 'function') {
+        const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList-stored');
+        const stored = findStoredPresetInList(list, presetName);
+        if (stored) return sanitizePresetForExport(cloneDeepSafe(stored), { apiId });
+    }
+
+    if (typeof pm.getPresetSettings === 'function') {
+        const stored = safeCall(() => pm.getPresetSettings(presetName), null, 'getPresetSettings-stored');
+        if (isUsablePresetObject(stored)) {
+            return sanitizePresetForExport(cloneDeepSafe(stored), { apiId });
+        }
+    }
+
+    return null;
+}
+
 export function getPresetSnapshot(presetName, options = {}) {
     const explicitApiId = typeof options === 'string' ? options : options?.apiId;
     const apiId = explicitApiId || getCurrentApiId();
@@ -646,7 +687,6 @@ export function getPresetSnapshot(presetName, options = {}) {
         return null;
     }
 
-    const isUsable = (obj) => obj && typeof obj === 'object' && Object.keys(obj).length > 0;
     const currentName = getSelectedPresetName();
     const currentApiId = getCurrentApiId();
     const isCurrentPreset = (name === currentName && apiId === currentApiId);
@@ -658,7 +698,7 @@ export function getPresetSnapshot(presetName, options = {}) {
     if (isCurrentPreset && typeof pm.getPresetList === 'function') {
         const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList-settings');
         const live = list?.settings;
-        if (isUsable(live)) {
+        if (isUsablePresetObject(live)) {
             if (_lastSnapshotPath !== `live:${apiId}`) {
                 logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (live memory data)`);
                 _lastSnapshotPath = `live:${apiId}`;
@@ -672,7 +712,7 @@ export function getPresetSnapshot(presetName, options = {}) {
     if (isCurrentPreset) {
         try {
             const ctx = SillyTavern.getContext();
-            if (ctx?.chatCompletionSettings && isUsable(ctx.chatCompletionSettings)) {
+            if (ctx?.chatCompletionSettings && isUsablePresetObject(ctx.chatCompletionSettings)) {
                 if (_lastSnapshotPath !== 'ctx-ccs') {
                     logger.debug('[getPresetSnapshot] using ctx.chatCompletionSettings (fallback)');
                     _lastSnapshotPath = 'ctx-ccs';
@@ -687,7 +727,7 @@ export function getPresetSnapshot(presetName, options = {}) {
     if (isCurrentPreset && apiId === 'openai') {
         try {
             const oai = window.oai_settings;
-            if (isUsable(oai)) {
+            if (isUsablePresetObject(oai)) {
                 if (_lastSnapshotPath !== 'oai-global') {
                     logger.debug('[getPresetSnapshot] using window.oai_settings (fallback)');
                     _lastSnapshotPath = 'oai-global';
@@ -705,23 +745,8 @@ export function getPresetSnapshot(presetName, options = {}) {
             const list = pm.getPresetList(apiId);
             const { presets, preset_names } = list || {};
             if (presets && preset_names) {
-                let presetData = null;
-
-                if (Array.isArray(preset_names)) {
-                    const idx = preset_names.indexOf(name);
-                    if (idx >= 0 && presets[idx]) {
-                        presetData = presets[idx];
-                    }
-                } else if (typeof preset_names === 'object') {
-                    const idx = preset_names[name];
-                    if (idx !== undefined && presets[idx]) {
-                        presetData = presets[idx];
-                    }
-                }
-
-                if (isUsable(presetData)) {
-                    return sanitizePresetForExport(cloneDeepSafe(presetData), { apiId });
-                }
+                const presetData = findStoredPresetInList(list, name);
+                if (presetData) return sanitizePresetForExport(cloneDeepSafe(presetData), { apiId });
                 logger.debug('[getPresetSnapshot] non-current lookup unusable:', describePresetLookup(list, name, currentName));
             }
             if (!presets || !preset_names) {
@@ -736,7 +761,7 @@ export function getPresetSnapshot(presetName, options = {}) {
     // 对 openai 返回 {}，但对其他 API（textgenerationwebui 等）可能有效
     if (typeof pm.getPresetSettings === 'function') {
         const raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
-        if (isUsable(raw)) {
+        if (isUsablePresetObject(raw)) {
             return sanitizePresetForExport(cloneDeepSafe(raw), { apiId });
         }
     }

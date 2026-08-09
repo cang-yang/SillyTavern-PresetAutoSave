@@ -809,16 +809,19 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
         pinned: false,     // 是否锁定（锁定的快照永不被自动清理/合并）
     };
 
+    const previousIds = new Set(list.map(item => item?.id).filter(Boolean));
     list.unshift(snapshot);
 
     // 4. 按上限裁剪（保留所有 pinned + 最新的非 pinned 直到上限）
     const max = settings.maxHistoryPerPreset;
     trimListWithPinned(list, max);
+    const retainedIds = new Set(list.map(item => item?.id).filter(Boolean));
+    const removedIds = [...previousIds].filter(id => !retainedIds.has(id));
 
     await safeSetItem(key, list);
     const desc = describeSummaryForLog(summary);
     logger.debug(`Snapshot added: ${presetName} (total: ${list.length}/${max}) ${desc}`);
-    emitHistoryChange({ type: 'snapshot-added', snapshot });
+    emitHistoryChange({ type: 'snapshot-added', snapshot, removedIds });
     return snapshot;
 }
 

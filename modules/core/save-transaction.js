@@ -19,7 +19,10 @@ export async function commitPresetSave(request, {
 
     await persistPreset(request);
     try {
-        await syncMemory(request);
+        const synchronized = await syncMemory(request);
+        if (synchronized === false) {
+            throw new Error('Preset memory synchronization returned false');
+        }
     } catch (cause) {
         throw new PresetSaveTransactionError('Preset persisted but memory synchronization failed', {
             cause,

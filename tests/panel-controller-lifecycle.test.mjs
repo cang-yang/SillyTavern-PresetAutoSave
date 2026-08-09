@@ -31,6 +31,13 @@ test('every deferred controller render is cleared by mount disposal', () => {
     assert.match(source, /disposeHistoryPanelMount[^]*?cancelAnimationFrame\(_renderListFrame\)/);
 });
 
+test('bursty host preset events debounce one pending list repaint', () => {
+    assert.match(
+        source,
+        /const onPresetChanged = \(\) => \{[\s\S]*?if \(_panelPresetRefreshTimer\) \{[\s\S]*?clearTimeout\(_panelPresetRefreshTimer\)[\s\S]*?_panelPresetRefreshTimer = setTimeout/,
+    );
+});
+
 test('loading state uses localized user copy without exposing internal stages', async () => {
     const [english, chinese] = await Promise.all([
         readFile(new URL('../i18n/en-us.json', import.meta.url), 'utf8').then(JSON.parse),

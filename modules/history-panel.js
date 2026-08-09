@@ -80,6 +80,7 @@ import {
 import { shouldActivateDisclosureFromKeydown } from './panel-disclosure.js';
 import { BULK_SNAPSHOT_RENDER_LIMIT } from './core/bounded-snapshot-list.js';
 import { createPanelViewMarkupCache } from './core/panel-view-markup-cache.js';
+import { applyPanelHistoryChange } from './core/panel-history-change.js';
 
 // =====================================================
 // 状态
@@ -96,6 +97,7 @@ let _renderListFrame = null;
 let _renderListMayUseViewCache = false;
 let _historyRefreshUnsubscribe = null;
 let _historyRefreshTimer = null;
+let _historyRefreshNeedsReload = false;
 let _panelMountGeneration = 0;
 let _activeDatasetLoader = null;
 let _archivedCache = [];  // 归档预设缓存（数据接管模式下显示）
@@ -207,12 +209,36 @@ export async function initHistoryPanel() {
     // 启动导入识别（事件驱动，无轮询）
     startImportWatcher();
     if (!_historyRefreshUnsubscribe) {
-        _historyRefreshUnsubscribe = onHistoryChange(() => {
-            if (!_root || _historyRefreshTimer) return;
+        _historyRefreshUnsubscribe = onHistoryChange((change) => {
+            if (!_root) return;
+            const incremental = applyPanelHistoryChange(_state.snapshots, change);
+            if (incremental.handled) {
+                _state.snapshots = incremental.summaries;
+                const settings = getSettings();
+                _state._cachedSeriesMap = groupSnapshotsBySeries(_state.snapshots, {
+                    overrides: settings.groupingManualOverrides,
+                    aliases: settings.groupingSeriesAliases,
+                });
+            } else {
+                _historyRefreshNeedsReload = true;
+            }
+
+            if (_panelPresetRefreshTimer) {
+                clearTimeout(_panelPresetRefreshTimer);
+                _panelPresetRefreshTimer = null;
+            }
+            if (_historyRefreshTimer) return;
             _historyRefreshTimer = setTimeout(async () => {
                 _historyRefreshTimer = null;
                 try {
-                    await refreshData();
+                    const needsReload = _historyRefreshNeedsReload;
+                    _historyRefreshNeedsReload = false;
+                    if (needsReload) {
+                        await refreshData();
+                    } else {
+                        renderActiveTab();
+                        await updateStats(_panelCtx());
+                    }
                 } catch (e) {
                     logger.debug('[Panel] history change refresh failed:', e);
                 }
@@ -236,6 +262,7 @@ export function teardownHistoryPanel() {
         clearTimeout(_historyRefreshTimer);
         _historyRefreshTimer = null;
     }
+    _historyRefreshNeedsReload = false;
     _initialized = false;
 }
 
@@ -808,7 +835,10 @@ function bindEvents() {
     // ⚡ 订阅预设切换事件 → 实时更新"当前预设"金色高亮
     //   不重新加载所有快照（避免性能问题），只重新渲染列表
     const onPresetChanged = () => {
-        if (_panelPresetRefreshTimer) return;
+        if (_panelPresetRefreshTimer) {
+            clearTimeout(_panelPresetRefreshTimer);
+            _panelPresetRefreshTimer = null;
+        }
         _panelPresetRefreshTimer = setTimeout(() => {
             _panelPresetRefreshTimer = null;
             try {
@@ -817,7 +847,7 @@ function bindEvents() {
             } catch (e) {
                 logger.debug('[Panel] preset-changed re-render failed:', e);
             }
-        }, 80);
+        }, 220);
     };
 
     const presetChangeEvents = [

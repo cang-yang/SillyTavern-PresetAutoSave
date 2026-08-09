@@ -1351,7 +1351,7 @@ export async function seedSnapshotsIfNeeded(opts = {}) {
  * @param {string} [apiId] - 不传则自动获取当前 API
  * @returns {Promise<{seeded: boolean}>}
  */
-export async function seedSnapshotForPreset(presetName, apiId) {
+export async function seedSnapshotForPreset(presetName, apiId, options = {}) {
     if (_tearingDown) return { seeded: false };
     beginSeedActivity();
     try {
@@ -1362,7 +1362,14 @@ export async function seedSnapshotForPreset(presetName, apiId) {
         if (Array.isArray(existing) && existing.length > 0) {
             return { seeded: false };
         }
-        const data = getPresetSnapshot(presetName);
+        const hasPresetOverride = options.preset && typeof options.preset === 'object';
+        if (hasPresetOverride && options.verified !== true) {
+            logger.debug(`[Seed] unverified preset override rejected for "${presetName}"`);
+            return { seeded: false, reason: 'unverified' };
+        }
+        const data = hasPresetOverride
+            ? options.preset
+            : getPresetSnapshot(presetName, { apiId: aid });
         if (!data || typeof data !== 'object') {
             logger.debug(`[Seed] no data for "${presetName}", skip single-seed`);
             return { seeded: false };

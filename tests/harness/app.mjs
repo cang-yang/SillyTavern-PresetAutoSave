@@ -102,6 +102,41 @@ const selectAdapter = {
     val: () => nativeSelect.options[nativeSelect.selectedIndex]?.value ?? '',
 };
 const eventListeners = new Map();
+const storedPresetByName = new Map();
+for (const record of scenario.records) {
+    if (!storedPresetByName.has(record.presetName)) {
+        storedPresetByName.set(record.presetName, structuredClone(record.preset || {}));
+    }
+}
+let livePresetSettings = structuredClone(
+    storedPresetByName.get(nativeSelect.options[nativeSelect.selectedIndex]?.textContent) || {},
+);
+const presetManager = {
+    select: selectAdapter,
+    savePreset: async (name, data) => {
+        storedPresetByName.set(name, structuredClone(data || {}));
+        if (name === nativeSelect.options[nativeSelect.selectedIndex]?.textContent) {
+            livePresetSettings = structuredClone(data || {});
+        }
+        return true;
+    },
+    getPresetList: () => {
+        const presetNames = [...nativeSelect.options].map(option => option.textContent || '');
+        return {
+            settings: livePresetSettings,
+            preset_names: presetNames,
+            presets: presetNames.map(name => storedPresetByName.get(name) || {}),
+        };
+    },
+    getPresetSettings: name => storedPresetByName.get(name) || {},
+    selectPreset: async name => {
+        const index = [...nativeSelect.options].findIndex(option => option.textContent === name);
+        if (index >= 0) nativeSelect.selectedIndex = index;
+        return index >= 0;
+    },
+    findPreset: name => [...nativeSelect.options].find(option => option.textContent === name) || null,
+    getSelectedPresetName: () => nativeSelect.options[nativeSelect.selectedIndex]?.textContent || '',
+};
 const popupShow = async () => null;
 popupShow.confirm = async () => confirmResult;
 class HarnessPopup {
@@ -144,19 +179,13 @@ const context = {
         off(name, handler) {
             eventListeners.get(name)?.delete(handler);
         },
-    },
-    getPresetManager: () => ({
-        select: selectAdapter,
-        savePreset: async () => true,
-        getPresetSettings: () => scenario.records[0]?.preset || {},
-        selectPreset: async name => {
-            const index = [...nativeSelect.options].findIndex(option => option.textContent === name);
-            if (index >= 0) nativeSelect.selectedIndex = index;
-            return index >= 0;
+        async emit(name, data) {
+            for (const handler of [...(eventListeners.get(name) || [])]) {
+                await handler(data);
+            }
         },
-        findPreset: name => [...nativeSelect.options].find(option => option.textContent === name) || null,
-        getSelectedPresetName: () => nativeSelect.options[nativeSelect.selectedIndex]?.textContent || '',
-    }),
+    },
+    getPresetManager: () => presetManager,
     saveSettingsDebounced: () => {},
     translate,
     Popup: HarnessPopup,
@@ -706,6 +735,75 @@ async function exerciseCoreOperations() {
     });
 }
 
+async function exercisePresetSwitchConvergence() {
+    if (options.scenario !== 'ordinary') {
+        throw new Error('Preset switch convergence checks require the ordinary scenario');
+    }
+
+    const originalIndex = nativeSelect.selectedIndex;
+    const originalName = nativeSelect.options[originalIndex]?.textContent || '';
+    const originalPreset = structuredClone(storedPresetByName.get(originalName) || {});
+    const targetIndex = [...nativeSelect.options].findIndex((option, index) => (
+        index !== originalIndex
+        && JSON.stringify(storedPresetByName.get(option.textContent) || {}) !== JSON.stringify(originalPreset)
+    ));
+    if (targetIndex < 0) throw new Error('Preset switch fixture requires distinct preset data');
+
+    const targetName = nativeSelect.options[targetIndex]?.textContent || '';
+    const targetPreset = structuredClone(storedPresetByName.get(targetName) || {});
+    const snapshotCountBefore = (await historyStore.getAllSnapshots()).length;
+    const consoleErrorCountBefore = consoleErrors.length;
+    let duringMismatch;
+    let afterConvergence;
+
+    try {
+        nativeSelect.selectedIndex = targetIndex;
+        await context.eventSource.emit(context.event_types.PRESET_CHANGED, {
+            apiId: scenario.currentApiId,
+            name: targetName,
+        });
+
+        // The selector already names the target while the host still exposes
+        // the previous preset in live memory. The production controller must
+        // reject this mixed identity/content state.
+        await new Promise(resolve => setTimeout(resolve, 260));
+        duringMismatch = autoSave.getCurrentTracking();
+
+        livePresetSettings = structuredClone(targetPreset);
+        afterConvergence = await waitFor(() => {
+            const tracking = autoSave.getCurrentTracking();
+            return tracking.presetName === targetName && tracking.lastHash && !tracking.ignoring
+                ? tracking
+                : null;
+        }, 3000);
+    } finally {
+        nativeSelect.selectedIndex = originalIndex;
+        livePresetSettings = structuredClone(originalPreset);
+        await context.eventSource.emit(context.event_types.PRESET_CHANGED, {
+            apiId: scenario.currentApiId,
+            name: originalName,
+        });
+        await waitFor(() => {
+            const tracking = autoSave.getCurrentTracking();
+            return tracking.presetName === originalName && !tracking.ignoring;
+        }, 3000);
+    }
+
+    const snapshotCountAfter = (await historyStore.getAllSnapshots()).length;
+    const result = Object.freeze({
+        originalName,
+        targetName,
+        mixedStateRejected: duringMismatch?.presetName !== targetName,
+        targetSettled: afterConvergence?.presetName === targetName && Boolean(afterConvergence?.lastHash),
+        noSpeculativeSnapshot: snapshotCountAfter === snapshotCountBefore,
+        noConsoleErrors: consoleErrors.length === consoleErrorCountBefore,
+    });
+    if (Object.values(result).slice(2).some(value => value !== true)) {
+        throw new Error(`Preset switch convergence failed: ${JSON.stringify(result)}`);
+    }
+    return result;
+}
+
 async function exerciseDisclosures() {
     const checks = [];
     const actions = ['toggle-series', 'toggle-version', 'toggle-group'];
@@ -1020,6 +1118,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     closeImportPreview,
     showGroupManager,
     exerciseCoreOperations,
+    exercisePresetSwitchConvergence,
     exerciseGroupingMenus,
     exerciseGroupingLayout,
     exerciseHostileTranslations,
