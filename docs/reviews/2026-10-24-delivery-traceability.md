@@ -112,11 +112,13 @@ evidence, with the settings correction verified separately. Production syntax
 and whitespace checks pass too. Local commits are `3f56216` (module checker)
 and `015dac0` (product changes). The post-commit full suite again passes498/498.
 
-Push and remote-SHA verification remain pending: the configured localhost7890
-proxy is not listening, and direct GitHub fetch/ls-remote attempts fail with
-timeout, reset or connection failure. No successful remote push is claimed.
-Resume with a remote-divergence check and non-forced dev push when connectivity
-returns; no further full-product review is needed for this delivery.
+Delivery was blocked on2026-10-24 by an unavailable localhost7890 proxy and
+failed direct connections. Connectivity returned on2026-10-25. A fresh fetch
+confirmed zero remote-only commits and three local-only commits. A non-forced
+dev push succeeded; ls-remote then confirmed dev at
+`de3ca331b78369e6a165f840feef18feaed8eeb5`, with main unchanged at
+`186301d17d17d404976051143f8b2d987583923c`. Only this documentation receipt
+follows that verified product delivery; no new product changes or review loop.
 
 ## Evidence Limits
 
