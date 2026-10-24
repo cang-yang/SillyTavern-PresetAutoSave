@@ -2,10 +2,6 @@ function targetKey(apiId, presetName) {
     return JSON.stringify([apiId, presetName]);
 }
 
-function seriesKey(apiId, seriesName) {
-    return JSON.stringify([apiId, seriesName]);
-}
-
 function emptyResult(failed = 0) {
     return { written: 0, skipped: 0, failed };
 }
@@ -25,38 +21,6 @@ function findLatestSnapshots(snapshots) {
         }
     }
     return { latestByTarget, failed };
-}
-
-function removeGhostSnapshots(latestByTarget, parsePresetName, logger) {
-    const membersBySeries = new Map();
-    for (const snapshot of latestByTarget.values()) {
-        try {
-            const parsed = parsePresetName(snapshot.presetName);
-            const series = parsed?.series || snapshot.presetName;
-            const key = seriesKey(snapshot.apiId, series);
-            if (!membersBySeries.has(key)) membersBySeries.set(key, new Set());
-            membersBySeries.get(key).add(snapshot.presetName);
-        } catch (_) {
-            // An unparseable name remains an independent stable preset target.
-        }
-    }
-
-    let skipped = 0;
-    for (const [target, snapshot] of [...latestByTarget.entries()]) {
-        try {
-            const parsed = parsePresetName(snapshot.presetName);
-            const series = parsed?.series || snapshot.presetName;
-            const members = membersBySeries.get(seriesKey(snapshot.apiId, series));
-            if (snapshot.presetName === series && members?.size > 1) {
-                latestByTarget.delete(target);
-                skipped++;
-                logger.debug?.(`writeBack: filtered ghost snapshot "${snapshot.presetName}" (series has ${members.size} real versions)`);
-            }
-        } catch (_) {
-            // Parse failures fail open here so recovery data is never discarded.
-        }
-    }
-    return skipped;
 }
 
 function presetExists(manager, snapshot) {
@@ -96,20 +60,18 @@ export function createSnapshotWriteback({
     loadSnapshots,
     getPresetManager,
     savePreset,
-    parsePresetName,
     logger = {},
 }) {
     return async function writeBackLatestSnapshots(options = {}) {
-        const { skipExisting = false, filterGhosts = false } = options;
+        const { skipExisting = false } = options;
         try {
             const snapshots = await loadSnapshots();
             if (!Array.isArray(snapshots) || snapshots.length === 0) return emptyResult();
 
             const selected = findLatestSnapshots(snapshots);
             let failed = selected.failed;
-            let skipped = filterGhosts
-                ? removeGhostSnapshots(selected.latestByTarget, parsePresetName, logger)
-                : 0;
+            // A base series name is also a legitimate canonical preset target.
+            let skipped = 0;
             let written = 0;
 
             for (const snapshot of selected.latestByTarget.values()) {

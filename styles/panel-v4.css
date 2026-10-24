@@ -56,6 +56,7 @@ body.pas-light .popup:has(.pas-panel) > .popup-button-close { border-color: rgba
     --pas-v4-text: #f5f7ff;
     --pas-v4-text-muted: #9da7ba;
     --pas-v4-text-faint: #6f7a90;
+    --pas-v4-metadata-text: #aeb7c9;
     --pas-v4-footer-text: #aeb7c9;
     --pas-v4-footer-bg: #10141e;
     --pas-v4-success: #42d392;
@@ -109,6 +110,7 @@ body.pas-light .pas-panel {
     --pas-v4-text: #202436;
     --pas-v4-text-muted: #697086;
     --pas-v4-text-faint: #9299aa;
+    --pas-v4-metadata-text: #4b5268;
     --pas-v4-footer-text: #4b5268;
     --pas-v4-footer-bg: #eef0f5;
     --pas-v4-danger: #b42318;
@@ -203,6 +205,25 @@ body.pas-light .pas-panel-header { background: rgba(255, 255, 255, .52); }
 .pas-panel-status > .pas-status-saving { background: var(--pas-v4-accent); box-shadow: 0 0 0 4px rgba(139, 92, 246, .11), 0 0 10px rgba(139, 92, 246, .30); }
 .pas-panel-status > .pas-status-saved { background: var(--pas-v4-success); box-shadow: 0 0 0 4px rgba(66, 211, 146, .10), 0 0 10px rgba(66, 211, 146, .28); }
 .pas-panel-status > .pas-status-error { background: var(--pas-v4-danger); box-shadow: 0 0 0 4px rgba(251, 113, 133, .10), 0 0 10px rgba(251, 113, 133, .28); }
+.pas-panel-status > .pas-status-partial,
+.pas-status-dot[data-pas-element="status-dot"].pas-status-partial {
+    background: #e7b558;
+    box-shadow: 0 0 0 3px rgba(231, 181, 88, .16);
+}
+
+.pas-panel .pas-batch-checkbox {
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
+}
+
+@media (max-width: 640px) {
+    .pas-panel .pas-batch-checkbox {
+        flex-basis: 44px;
+        width: 44px;
+        height: 44px;
+    }
+}
 .pas-panel-stats:empty { display: none; }
 .pas-panel-stats:not(:empty)::before { content: '·'; margin-right: 7px; }
 
@@ -313,8 +334,15 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 .pas-log-filter:hover { border-color: var(--pas-v4-border-strong); background: var(--pas-v4-surface-raised); color: var(--pas-v4-text); transform: translateY(-1px); }
 .pas-filter-active { border-color: rgba(139, 92, 246, .36); background: var(--pas-v4-accent-soft); color: var(--pas-v4-accent-readable); box-shadow: 0 0 0 1px rgba(139, 92, 246, .06) inset; }
 
-.pas-diff-bar { display: grid; grid-template-columns: auto minmax(120px, 1fr) minmax(120px, 1fr) auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid color-mix(in srgb, var(--pas-v4-accent) 46%, transparent); border-radius: 12px; background: var(--pas-v4-accent-soft); }
+.pas-diff-bar { display: grid; flex: 0 0 auto; grid-template-columns: auto minmax(120px, 1fr) minmax(120px, 1fr) auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid color-mix(in srgb, var(--pas-v4-accent) 46%, transparent); border-radius: 12px; background: var(--pas-v4-accent-soft); }
 .pas-diff-bar-slot { min-width: 0; }
+.pas-diff-bar-slot-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pas-panel .pas-btn-start-diff,
+.pas-panel .pas-btn-clear-diff,
+.pas-panel .pas-btn-batch-select-all,
+.pas-panel .pas-btn-batch-deselect-all { min-width: 44px; min-height: 44px; }
+.pas-panel .pas-btn-start-diff > span { display: inline; }
+.pas-panel .pas-btn-clear-diff { flex: 0 0 44px; }
 
 .pas-snapshot-list,
 .pas-log-view,
@@ -339,6 +367,28 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 .pas-series-header:hover,
 .pas-version-header:hover { background: var(--pas-v4-accent-softer); }
 
+.pas-panel .pas-series-header-row-meta,
+.pas-panel .pas-version-header-row-meta,
+.pas-panel .pas-card-meta {
+    color: var(--pas-v4-metadata-text);
+    font-size: 12px;
+    line-height: 1.3;
+}
+.pas-panel .pas-series-snapshots,
+.pas-panel .pas-version-count,
+.pas-panel .pas-card-time,
+.pas-panel .pas-card-hash {
+    color: var(--pas-v4-metadata-text);
+    font-size: 12px;
+    opacity: 1;
+}
+
+.pas-panel .pas-version-header .pas-tag-empty,
+.pas-panel .pas-version-empty-hint {
+    color: var(--pas-v4-metadata-text);
+    font-size: 12px;
+}
+
 .pas-card { border: 1px solid var(--pas-v4-border); border-radius: 10px; background: var(--pas-v4-surface-raised); box-shadow: none; transition: border-color .16s ease, background .16s ease; }
 .pas-card:hover { border-color: rgba(139, 92, 246, .28); background: var(--pas-v4-surface-hover); box-shadow: none; transform: none; }
 .pas-card.pas-card-pinned { border-color: rgba(139, 92, 246, .32); background: rgba(139, 92, 246, .075); }
@@ -354,7 +404,7 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 body.pas-light .pas-panel .pas-series-current,
 body.pas-light .pas-panel .pas-series-current-node,
 body.pas-light .pas-panel .pas-version-current,
-body.pas-light .pas-panel .pas-preset-current { border-color: rgba(217, 119, 6, .42); background: linear-gradient(135deg, rgba(245, 158, 11, .13), var(--pas-v4-surface) 46%); }
+body.pas-light .pas-panel .pas-preset-current { border-color: rgba(217, 119, 6, .42); background: color-mix(in srgb, var(--pas-v4-current) 7%, var(--pas-v4-surface)); }
 body.pas-light .pas-panel .pas-series-current .pas-series-version-pill,
 body.pas-light .pas-panel .pas-version-current .pas-version-pill,
 body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34); background: rgba(245, 158, 11, .13); color: #b45309; }
@@ -623,13 +673,11 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-series-body { gap: 6px; padding: 6px; background: transparent; }
     .pas-series-body > .pas-version-group { border: 1.5px solid var(--pas-v4-border); border-radius: 8px; background: var(--pas-v4-surface-raised); }
     .pas-version-header { gap: 2px; padding: 4px 6px; }
+    .pas-version-header:has(.pas-batch-checkbox) { position: relative; padding-left: 54px; }
+    .pas-version-header .pas-batch-checkbox { position: absolute; top: 50%; left: 6px; margin: 0; transform: translateY(-50%); }
     .pas-version-body { padding: 4px 6px 6px; }
     .pas-filter,
     .pas-log-filter { min-height: 28px; padding: 3px 8px; scroll-snap-align: start; }
-    .pas-diff-bar { grid-template-columns: 1fr; }
-    .pas-diff-bar-label { grid-column: auto; }
-    .pas-diff-bar-actions { justify-self: stretch; }
-    .pas-btn-start-diff { flex: 1; }
     .pas-log-toolbar {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
@@ -653,6 +701,25 @@ body.pas-light .pas-panel .pas-tag-current { border-color: rgba(217, 119, 6, .34
     .pas-log-level { min-width: 48px; justify-self: start; line-height: 18px; }
     .pas-log-msg { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; text-align: left; }
     .pas-panel-footer { min-height: 36px; padding: 7px 10px; font-size: 12px; }
+}
+
+@media (max-width: 640px) {
+    /* A bottom action shelf preserves search access while selecting B and
+       leaves history as the only scrolling content in the list tab. */
+    #pas-panel-list > .pas-snapshot-list { order: 1; }
+    #pas-panel-list > .pas-diff-bar { order: 2; }
+    #pas-panel-list > .pas-batch-toolbar { order: 3; }
+    .pas-panel .pas-diff-bar {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: repeat(2, minmax(22px, auto));
+        gap: 2px 6px;
+        padding: 4px 6px;
+        border-radius: 8px;
+    }
+    .pas-panel .pas-diff-bar-label { display: none; }
+    .pas-panel .pas-diff-bar-slot { grid-column: 1; max-width: none; margin: 0; padding-block: 1px; font-size: 12px; }
+    .pas-panel .pas-diff-bar-actions { grid-column: 2; grid-row: 1 / 3; gap: 4px; align-self: center; }
+    .pas-panel .pas-btn-start-diff { gap: 5px; padding-inline: 8px; white-space: nowrap; }
 }
 
 @media (max-width: 360px) {

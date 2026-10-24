@@ -25,7 +25,9 @@ export function normalizeValue(value) {
 
     const result = {};
     for (const key of Object.keys(value).sort()) {
-        result[key] = normalizeValue(value[key]);
+        Object.defineProperty(result, key, {
+            value: normalizeValue(value[key]), enumerable: true, writable: true, configurable: true,
+        });
     }
     return result;
 }

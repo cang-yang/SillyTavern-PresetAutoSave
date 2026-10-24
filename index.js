@@ -43,6 +43,8 @@ import { runDeleteRecovery } from './modules/core/lifecycle-recovery.js';
 import { RuntimeTimerRegistry } from './modules/core/runtime-timers.js';
 import { createDebugInterface } from './modules/debug-interface.js';
 import { createSnapshotWriteback } from './modules/core/snapshot-writeback.js';
+import { createRuntimeLifecycle } from './modules/core/runtime-lifecycle.js';
+import { initHistorySeeding, teardownHistorySeeding } from './modules/history-seeding.js';
 
 const VERSION = '1.0.0';
 
@@ -52,7 +54,6 @@ const VERSION = '1.0.0';
 let _phase1Done = false;
 let _takeoverDone = false;
 let _phase2Done = false;
-let _runtimeReadyPromise = null;
 let _mainEventsBound = false;       // 防止 main() 中事件重复订阅
 let _mainEventUnsubscribers = [];   // main() 中订阅的事件取消函数
 const _runtimeTimers = new RuntimeTimerRegistry();
@@ -64,6 +65,29 @@ const _writeBackLatestSnapshots = createSnapshotWriteback({
     parsePresetName,
     logger,
 });
+const _lifecycle = createRuntimeLifecycle({
+    initialize: async isCurrent => {
+        await runPhase1(isCurrent);
+        if (!isCurrent() || !_phase1Done) return false;
+        await runTakeoverPhase();
+        if (!isCurrent() || !_takeoverDone) return false;
+        await runPhase2();
+        return isCurrent() && _phase1Done && _takeoverDone && _phase2Done;
+    },
+    cleanup: cleanupFailedInitialization,
+});
+
+async function cleanupFailedInitialization() {
+    await teardownAutoSave();
+    await teardownHistorySeeding();
+    await teardownTakeover();
+    teardownHistoryPanel();
+    teardownUI();
+    teardownThemeDetector();
+    await teardownHistoryStore();
+    offAll();
+    resetLifecycleState();
+}
 
 function resetLifecycleState() {
     _runtimeTimers.clearAll();
@@ -74,7 +98,6 @@ function resetLifecycleState() {
     _phase1Done = false;
     _takeoverDone = false;
     _phase2Done = false;
-    _runtimeReadyPromise = null;
     _mainEventsBound = false;
     _mainEventUnsubscribers = [];
 }
@@ -82,15 +105,19 @@ function resetLifecycleState() {
 // =====================================================
 // 阶段 1: UI 基础设施初始化（settings / store / 注入按钮 / 历史面板）
 // =====================================================
-async function runPhase1() {
+async function runPhase1(isCurrent = () => true) {
     if (_phase1Done) return;
     _phase1Done = true;
     try {
         logger.debug('--- Phase 1: UI infrastructure ---');
         initThemeDetector();
         await initSettings();
+        if (!isCurrent()) return;
         await initHistoryStore();
+        if (!isCurrent()) return;
+        initHistorySeeding();
         await initUIInjector(showHistoryPanel);
+        if (!isCurrent()) return;
         await initHistoryPanel();
         logger.success('Phase 1 ready: settings/store/UI ✓');
     } catch (e) {
@@ -177,11 +204,16 @@ export async function onActivate() {
 }
 
 export async function onDelete() {
+    return _lifecycle.stop(deleteRuntime);
+}
+
+async function deleteRuntime() {
     logger.info('Uninstalling: quiescing saves → restoring presets → clearing verified recovery data');
 
     let saveQuiesced = false;
     try {
         await teardownAutoSave();
+        await teardownHistorySeeding();
         saveQuiesced = true;
     } catch (e) {
         logger.error('onDelete: could not quiesce auto-save; recovery data will be preserved', e);
@@ -249,20 +281,7 @@ export async function onDelete() {
  * sharing this promise turns that normal race into an await instead of a warning.
  */
 function ensureRuntimeReady() {
-    if (_phase1Done && _takeoverDone && _phase2Done) return Promise.resolve(true);
-    if (_runtimeReadyPromise) return _runtimeReadyPromise;
-
-    _runtimeReadyPromise = (async () => {
-        await runPhase1();
-        if (!_phase1Done) return false;
-        await runTakeoverPhase();
-        if (!_takeoverDone) return false;
-        await runPhase2();
-        return _phase1Done && _takeoverDone && _phase2Done;
-    })().finally(() => {
-        _runtimeReadyPromise = null;
-    });
-    return _runtimeReadyPromise;
+    return _lifecycle.start();
 }
 
 export async function onEnable() {
@@ -272,17 +291,21 @@ export async function onEnable() {
         logger.error('Required SillyTavern capabilities unavailable; enable aborted');
         return { ready: false };
     }
-    await ensureRuntimeReady();
-    const ready = _phase1Done && _takeoverDone && _phase2Done;
+    const ready = await _lifecycle.start({ explicit: true });
     if (!ready) logger.warn('Enable completed with one or more initialization phases unavailable');
     return { ready };
 }
 
 export async function onDisable() {
+    return _lifecycle.stop(disableRuntime);
+}
+
+async function disableRuntime() {
     logger.info('Disabled - restoring presets to ST (snapshots + archives)');
     let saveQuiesced = false;
     try {
         await teardownAutoSave();
+        await teardownHistorySeeding();
         saveQuiesced = true;
     } catch (e) {
         logger.error('onDisable: could not quiesce auto-save; preset recovery skipped', e);
@@ -431,6 +454,7 @@ export async function onDisable() {
             refreshTakeover,
             logger,
             phaseState: () => ({ phase1: _phase1Done, takeover: _takeoverDone, phase2: _phase2Done }),
+            isActive: _lifecycle.isActive,
             ensureRuntimeReady,
             listSeries: listSeriesFromNativeSelects,
             parsePresetName,

@@ -26,11 +26,12 @@ function getRequestPayload(input, init, baseUrl) {
 }
 
 export function observeNativePresetSaves({
-    windowObject = window,
-    documentObject = document,
+    windowObject = globalThis.window,
+    documentObject = globalThis.document,
     onSaved,
     onError = () => {},
     shouldCapture = () => true,
+    captureContext = () => undefined,
     now = () => Date.now(),
 } = {}) {
     if (typeof windowObject?.fetch !== 'function' || typeof documentObject?.addEventListener !== 'function') {
@@ -38,7 +39,9 @@ export function observeNativePresetSaves({
     }
 
     let intent = null;
+    let disposed = false;
     const originalFetch = windowObject.fetch;
+    const reportError = error => { try { onError(error); } catch (_) {} };
 
     const clickHandler = (event) => {
         if (event?.isTrusted === false) return;
@@ -53,21 +56,30 @@ export function observeNativePresetSaves({
 
     async function observedFetch(...args) {
         const payload = getRequestPayload(args[0], args[1], windowObject.location?.href || 'http://localhost/');
-        const response = await originalFetch.apply(this, args);
         const activeIntent = intent;
-        if (
-            response?.ok
-            && payload
-            && activeIntent
-            && activeIntent.expiresAt >= now()
-            && activeIntent.apiId === payload.apiId
-            && shouldCapture(payload)
-        ) {
-            intent = null;
-            queueMicrotask(() => {
-                Promise.resolve(onSaved?.(payload)).catch(onError);
-            });
-        }
+        let captured;
+        try { if (payload) captured = captureContext(payload); } catch (error) { reportError(error); }
+        const response = await originalFetch.apply(this, args);
+        try {
+            if (
+                !disposed
+                && response?.ok
+                && payload
+                && activeIntent
+                && intent === activeIntent
+                && activeIntent.expiresAt >= now()
+                && activeIntent.apiId === payload.apiId
+                && shouldCapture(payload)
+            ) {
+                intent = null;
+                queueMicrotask(() => {
+                    if (disposed) return;
+                    Promise.resolve().then(() => {
+                        if (!disposed) return onSaved?.(payload, captured);
+                    }).catch(reportError);
+                });
+            }
+        } catch (error) { reportError(error); }
         return response;
     }
 
@@ -75,6 +87,8 @@ export function observeNativePresetSaves({
     windowObject.fetch = observedFetch;
 
     return () => {
+        if (disposed) return;
+        disposed = true;
         documentObject.removeEventListener('click', clickHandler, true);
         if (windowObject.fetch === observedFetch) windowObject.fetch = originalFetch;
         intent = null;

@@ -35,15 +35,31 @@ test('series and flat renderers both consume the bounded snapshot seam', async (
     assert.match(source, /pas-btn-show-more-snapshots/);
 });
 
-test('collapsed series defer version markup until disclosure', async () => {
-    const source = await readFile(new URL('../modules/panel-list-render.js', import.meta.url), 'utf8');
-
-    assert.match(
-        source,
-        /\$\{isExpanded\s*\?\s*info\.versions\.map\(v => renderVersionGroup\(v, seriesKey, info\.versions, panelCtx\)\)\.join\(''\)\s*:\s*''\}/s,
-    );
-    assert.match(source, /if \(isExpanded && seriesData && seriesData\.versions/);
-    assert.match(source, /if \(isExpanded && hasChildren\)/);
+test('collapsed series defer version markup and expanded trees keep bounded cards', async () => {
+    const { installRuntimeHost } = await import('./fixtures/runtime-host.mjs');
+    installRuntimeHost();
+    const { initSettings, batchUpdate } = await import('../modules/settings.js');
+    const { renderSeriesView } = await import('../modules/panel-list-render.js');
+    await initSettings();
+    const snapshots = Array.from({ length: 20 }, (_, index) => ({
+        id: `bounded-${index}`, apiId: 'openai', presetName: 'Story V1',
+        timestamp: index + 1, trigger: 'manual', size: 10, preset: { temperature: 0.5 },
+    }));
+    for (const nestingEnabled of [false, true]) {
+        batchUpdate({ nestingEnabled, groupingTree: { story: 'parent' } });
+        const state = {
+            filter: 'all', search: '', expandedSeries: new Set(),
+            expandedVersions: new Set(['openai::Story V1']),
+            snapshotRenderLimits: new Map(), diffSel: { a: null, b: null },
+        };
+        const panelCtx = { state: () => state, archivedCache: () => [] };
+        assert.doesNotMatch(renderSeriesView(snapshots, panelCtx), /data-version-key=/);
+        state.expandedSeries = new Set(['parent', 'story']);
+        const html = renderSeriesView(snapshots, panelCtx);
+        assert.match(html, /data-version-key="openai::Story V1"/);
+        assert.equal((html.match(/data-snapshot-id=/g) || []).length, 5);
+        assert.match(html, /pas-btn-show-more-snapshots/);
+    }
 });
 
 test('panel search feedback is scheduled within the interaction budget', async () => {

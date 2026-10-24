@@ -105,7 +105,8 @@ export function openGroupManagerContextMenu({
         menu.append(button);
     }
 
-    documentRef.body.append(menu);
+    const owner = trigger.closest?.('dialog[open]') || documentRef.body;
+    owner.append(menu);
     positionMenu(menu, trigger, windowRef);
     menu.style.visibility = '';
     trigger.setAttribute('aria-haspopup', 'menu');
@@ -148,11 +149,17 @@ export function openGroupManagerContextMenu({
         if (!item || !menu.contains(item)) return;
         const action = item.dataset.action;
         closeGroupManagerContextMenu();
-        Promise.resolve(onSelect?.(action)).catch(onError);
+        Promise.resolve().then(() => onSelect?.(action)).catch(onError).finally(() => {
+            const focused = documentRef.activeElement;
+            if (trigger.isConnected !== false
+                && (!focused || focused === documentRef.body || focused === owner || menu.contains(focused))) {
+                trigger.focus();
+            }
+        });
     });
 
     const onPointerDown = event => {
-        if (!menu.contains(event.target) && event.target !== trigger) {
+        if (!menu.contains(event.target) && !trigger.contains?.(event.target)) {
             closeGroupManagerContextMenu({ restoreFocus: true });
         }
     };

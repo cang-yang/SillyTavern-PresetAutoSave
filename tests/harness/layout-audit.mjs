@@ -35,6 +35,34 @@ export function evaluateLayoutAudit(metrics) {
     }
 
     const findings = [];
+    for (const control of Array.isArray(metrics.settingsControls) ? metrics.settingsControls : []) {
+        if (!control.visible) continue;
+        if (!control.name?.trim() || (control.requiresDescription && !control.description?.trim())) {
+            findings.push(finding('settings-control-label', 'error',
+                'Settings controls need an associated name and fields need a description.', control.selector));
+        }
+        const targets = [{ width: control.width, height: control.height }, ...(control.targets || [])];
+        if (!targets.some(target => target.width >= MIN_TOUCH_TARGET && target.height >= MIN_TOUCH_TARGET)) {
+            findings.push(finding('settings-touch-target', 'error',
+                'Settings control has no effective clickable target of at least 44 by 44 pixels.', control.selector));
+        }
+    }
+    for (const control of Array.isArray(metrics.controls) ? metrics.controls : []) {
+        if (control.visible && control.important && control.pointerBlocked) {
+            findings.push(finding('control-pointer-blocked', 'error',
+                'A visible comparison command is covered by another element.', control.selector));
+        }
+    }
+    for (const cell of Array.isArray(metrics.diffContentCells) ? metrics.diffContentCells : []) {
+        if (!cell.visible) continue;
+        const symbol = { removed: '-', added: '+', unchanged: '=' }[cell.status];
+        if (!['A', 'B'].includes(cell.side) || !['removed', 'added', 'unchanged'].includes(cell.status)
+            || !cell.labelVisible || !cell.label?.startsWith(`${cell.side} ${symbol} `)
+            || cell.role !== 'group' || !cell.name?.includes('A') || !cell.name?.includes('B')) {
+            findings.push(finding('diff-side-label-missing', 'error',
+                'Prompt content must identify its A/B side and change state visibly and accessibly.', cell.selector));
+        }
+    }
     const viewportWidth = Number(metrics.viewport.width);
     const documentWidth = Number(metrics.documentWidth);
 
@@ -68,6 +96,13 @@ export function evaluateLayoutAudit(metrics) {
                 ));
             }
         }
+    }
+
+    for (const command of Array.isArray(metrics.commandNames) ? metrics.commandNames : []) {
+        if (!command.visible || /[\p{L}\p{N}]/u.test(String(command.name || ''))) continue;
+        findings.push(finding('command-name-missing', 'error',
+            'Visible command has no meaningful accessible name beyond its icon.',
+            String(command.selector || '')));
     }
 
     for (const label of Array.isArray(metrics.requiredLabels) ? metrics.requiredLabels : []) {
@@ -224,6 +259,21 @@ export function evaluateLayoutAudit(metrics) {
                 `Footer statistics contrast is ${contrast}:1; normal text requires at least 4.5:1.`,
                 '#pas-footer-stats',
             ));
+        }
+    }
+
+    for (const sample of Array.isArray(metrics.metadataText) ? metrics.metadataText : []) {
+        const fontSize = Number(sample.fontSize);
+        const contrast = Number(sample.contrast);
+        if (!Number.isFinite(fontSize) || fontSize < 12) {
+            findings.push(finding('metadata-text-size', 'error',
+                `History metadata uses ${fontSize}px text; normal text requires at least 12px.`,
+                String(sample.selector || '')));
+        }
+        if (!Number.isFinite(contrast) || contrast < 4.5) {
+            findings.push(finding('metadata-text-contrast', 'error',
+                `History metadata contrast is ${contrast}:1; normal text requires at least 4.5:1.`,
+                String(sample.selector || '')));
         }
     }
 

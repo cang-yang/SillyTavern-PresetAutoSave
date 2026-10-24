@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { compositeTextContrast } from './harness/text-contrast.mjs';
 
 const panelCss = await readFile(new URL('../styles/panel-v4.css', import.meta.url), 'utf8');
+const legacyCss = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 
 function hexToRgb(hex) {
     const value = hex.replace('#', '');
@@ -77,4 +79,27 @@ test('footer statistics retain readable size and contrast in compact light and d
     assert.ok(contrastRatio(lightForeground, lightBackground) >= 4.5);
     assert.match(panelCss, /\.pas-panel-footer \.pas-stats\s*\{[^}]*color:\s*inherit[^}]*font-size:\s*inherit/s);
     assert.match(panelCss, /@media \(max-width:\s*460px\)[\s\S]*?\.pas-panel-footer\s*\{[^}]*font-size:\s*12px/s);
+});
+
+test('history metadata has explicit readable text tokens for both feature surfaces', () => {
+    for (const token of [lightThemeToken, darkThemeToken]) {
+        for (const surface of ['--pas-v4-surface', '--pas-v4-surface-raised', '--pas-v4-surface-hover']) {
+            assert.ok(contrastRatio(token('--pas-v4-metadata-text'), token(surface)) >= 4.5);
+        }
+    }
+    assert.match(panelCss, /\.pas-panel \.pas-series-header-row-meta,[^}]*font-size:\s*12px/s);
+    assert.match(panelCss, /\.pas-panel \.pas-card-hash\s*\{[^}]*opacity:\s*1/s);
+});
+
+test('empty version ancestors do not fade readable history metadata below contrast requirements', () => {
+    const declarations = legacyCss.match(/\.pas-version-empty\s*>\s*\.pas-version-header\s*\{([^}]*)\}/)?.[1] || '';
+    const opacity = Number(declarations.match(/opacity:\s*([\d.]+)/)?.[1] ?? 1);
+    for (const token of [lightThemeToken, darkThemeToken]) {
+        const color = name => `rgb(${hexToRgb(token(name)).join(', ')})`;
+        const ratio = compositeTextContrast(color('--pas-v4-metadata-text'), [
+            { backgroundColor: 'rgba(0, 0, 0, 0)', opacity },
+            { backgroundColor: color('--pas-v4-surface') },
+        ]);
+        assert.ok(ratio >= 4.5, `empty header metadata contrast was ${ratio}`);
+    }
 });

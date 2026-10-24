@@ -53,3 +53,17 @@ test('global logger capture is idempotent and fully reversible', () => {
     });
     assert.equal(logger.getLogs({ level: 'error' }).length, 1);
 });
+
+test('logger teardown cancels pending persistence even without installed global handlers', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let writes = 0;
+    globalThis.localStorage = { getItem: () => null, setItem() { writes++; } };
+    const fresh = await import('../modules/logger.js?pending-persistence');
+    fresh.logger.setPersistEnabled(true);
+    writes = 0;
+    fresh.logger.warn('synthetic pending log');
+    fresh.teardownLogger();
+    t.mock.timers.tick(1000);
+    assert.equal(writes, 0);
+    delete globalThis.localStorage;
+});

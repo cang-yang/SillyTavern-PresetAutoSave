@@ -33,6 +33,8 @@ import {
 import { DragHoverExpander } from './core/drag-hover-expander.js';
 import { createGroupAliasEditor } from './core/group-alias-editor.js';
 import { OrganizationCommandHistory } from './core/organization-command-history.js';
+import { movePresetMembership, removeGroupMembership } from './core/group-membership.js';
+import { findCanonicalGroup } from './core/group-projection.js';
 import {
     closeGroupManagerContextMenu,
     openGroupManagerContextMenu,
@@ -540,31 +542,15 @@ function performMoveGroup(childKey, newParentKey, container) {
 function performMove(presetName, targetSeriesKey, container, targetSeriesName = null) {
     const keys = ['groupingManualOverrides', PENDING_GROUPS_STATE_KEY];
     const before = captureOrganizationState(keys);
-    // 拖到"自动分组"区 = 恢复自动识别
-    if (targetSeriesKey === '__auto__') {
-        delete _gmOverrides[presetName];
-        saveGroupingSettings(_gmOverrides);
-        recordOrganizationChange('Grouping Action Move Preset', keys, before, container);
-        refreshGroupingUI(container);
-        return;
-    }
-    // 如果目标系列与自动检测的系列相同，删除覆盖
     const parsed = parsePresetName(presetName);
-    const autoKey = normalizeSeriesKey(parsed.series);
-    if (autoKey === targetSeriesKey) {
-        delete _gmOverrides[presetName];
-    } else {
-        // 找到目标系列的显示名（从现有 groups 中查找，或从 _pendingCustomGroups 中查找）
-        const { groups } = buildGroupingData();
-        const targetGroup = groups.find(g => normalizeSeriesKey(g.series) === targetSeriesKey);
-        if (targetGroup) {
-            _gmOverrides[presetName] = targetGroup.series;
-        } else {
-            // AQ-1: 可能是从 _pendingCustomGroups 来的空分组
-            const pendingName = [..._pendingCustomGroups].find(n => normalizeSeriesKey(n) === targetSeriesKey);
-            _gmOverrides[presetName] = pendingName || targetSeriesName || targetSeriesKey;
-        }
-    }
+    const { groups } = buildGroupingData();
+    const pendingName = [..._pendingCustomGroups].find(name => normalizeSeriesKey(name) === targetSeriesKey);
+    _gmOverrides = movePresetMembership({
+        presetName, targetKey: targetSeriesKey,
+        automaticKey: normalizeSeriesKey(parsed.series),
+        groups, overrides: _gmOverrides,
+        newGroupName: pendingName || targetSeriesName,
+    });
     // AQ-1: 有预设移入后，该分组不再是"待建"状态
     for (const pName of _pendingCustomGroups) {
         if (normalizeSeriesKey(pName) === targetSeriesKey) {
@@ -656,9 +642,7 @@ function normalizePresetNames(names) {
     const unique = new Map();
     for (const name of Array.isArray(names) ? names : []) {
         if (typeof name !== 'string' || !name.trim()) continue;
-        const normalized = name.trim();
-        const key = normalized.toLocaleLowerCase();
-        if (!unique.has(key)) unique.set(key, normalized);
+        if (!unique.has(name)) unique.set(name, name);
     }
     return [...unique.values()].sort((a, b) => a.localeCompare(b));
 }
@@ -813,11 +797,11 @@ async function showMoveDialog(presetName, container) {
     const currentKey = normalizeSeriesKey(currentSeries);
 
     const optionsHtml = groups
-        .filter(g => normalizeSeriesKey(g.series) !== currentKey)
-        .map(g => `<div class="pas-gm-move-option" data-target-key="${escapeAttr(normalizeSeriesKey(g.series))}" data-target-name="${escapeAttr(g.series)}">
+        .filter(g => g.canonicalKey !== currentKey)
+        .map(g => `<button type="button" class="pas-gm-move-option" data-target-key="${escapeAttr(g.canonicalKey)}" data-target-name="${escapeAttr(g.automaticName)}">
             <i class="fa-solid fa-box-open"></i> ${escapeHtml(g.series)}
             <span class="pas-gm-move-count">${g.items.length}</span>
-        </div>`).join('');
+        </button>`).join('');
 
     const html = `
     <div class="pas-gm-move-dialog">
@@ -825,9 +809,9 @@ async function showMoveDialog(presetName, container) {
         <p class="pas-gm-move-desc">${escapeHtml(t('Grouping Move Dialog Desc', { name: presetName }))}</p>
         <div class="pas-gm-move-list">
             ${optionsHtml}
-            <div class="pas-gm-move-option pas-gm-move-new" data-target-key="__new__">
+            <button type="button" class="pas-gm-move-option pas-gm-move-new" data-target-key="__new__">
                 <i class="fa-solid fa-plus"></i> ${escapeHtml(t('Grouping Move New Series'))}
-            </div>
+            </button>
         </div>
     </div>`;
 
@@ -900,7 +884,7 @@ async function onCreateCustomGroup(container) {
     // 检查是否已存在同名分组
     const { groups } = buildGroupingData();
     const targetKey = normalizeSeriesKey(trimmed);
-    const exists = groups.some(g => normalizeSeriesKey(g.series) === targetKey)
+    const exists = groups.some(g => g.canonicalKey === targetKey || normalizeSeriesKey(g.displayName) === targetKey)
         || [..._pendingCustomGroups].some(n => normalizeSeriesKey(n) === targetKey);
     if (exists) {
         toast.warning(t('Grouping Group Exists', { name: trimmed }));
@@ -939,7 +923,7 @@ async function onDeleteCustomGroup(seriesKey, container) {
     const settings = getSettings();
     const tree = { ...(settings.groupingTree || {}) };
     const { groups } = buildGroupingData();
-    const group = groups.find(g => normalizeSeriesKey(g.series) === seriesKey);
+    const group = findCanonicalGroup(groups, seriesKey);
     const displayName = group ? group.series : seriesKey;
 
     // 检查是否有子分组
@@ -978,11 +962,9 @@ async function onDeleteCustomGroup(seriesKey, container) {
     delete tree[seriesKey];
 
     // 删除该分组内所有预设的 overrides
-    if (group) {
-        for (const it of group.items) {
-            delete _gmOverrides[it.presetName];
-        }
-    }
+    _gmOverrides = removeGroupMembership({
+        canonicalKey: seriesKey, groups, overrides: _gmOverrides,
+    });
 
     // 也从 _pendingCustomGroups 移除
     for (const pName of _pendingCustomGroups) {

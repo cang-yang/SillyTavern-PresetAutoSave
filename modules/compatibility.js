@@ -14,8 +14,11 @@ import { StorageReadError } from './core/storage-integrity.js';
 import { describePresetLookup } from './core/preset-lookup-diagnostics.js';
 import {
     canonicalizePreset,
-    CONNECTION_FIELDS,
     OPENAI_PRESET_FIELDS,
+} from './core/preset-schema.js';
+export {
+    FIELD_SYNONYMS, normalizePresetFields, filterExtensionPrompts,
+    EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS, extractCanonicalForDiff,
 } from './core/preset-schema.js';
 export { escapeHtml, escapeAttr, escapeTranslationHtml } from './key-utils.js';
 export { formatTime } from './time-utils.js';
@@ -339,51 +342,6 @@ export function getSelectedPresetName() {
 // S-1: 预设字段过滤（从 history-store.js 迁移至此，避免循环依赖）
 // =====================================================
 
-/**
- * OpenAI 特有字段 → 规范字段名的同义映射。
- * ST 的 oai_settings 中同时存在两套字段名（如 `top_p` 和 `top_p_openai`），
- * 但磁盘 presets[] 数据可能只包含其中一套。
- * 对比前先将 alt 名统一到 canonical 名，避免"从有值变空 / 从空变有值"的误导。
- *
- * 基于 ST openai.js settingsToUpdate 中的映射关系。
- */
-export const FIELD_SYNONYMS = new Map([
-    ['temp_openai',                  'temperature'],
-    ['freq_pen_openai',              'frequency_penalty'],
-    ['pres_pen_openai',              'presence_penalty'],
-    ['top_p_openai',                 'top_p'],
-    ['top_k_openai',                 'top_k'],
-    ['top_a_openai',                 'top_a'],
-    ['min_p_openai',                 'min_p'],
-    ['repetition_penalty_openai',    'repetition_penalty'],
-    // 阶段7: 流式开关字段名对齐 —— ST 实际字段名是 stream_openai，
-    // 旧快照可能存为 streaming，统一到规范名称
-    ['streaming',                    'stream_openai'],
-]);
-
-/**
- * 规范化预设字段名：将 OpenAI 特有变体合并到规范名称。
- * 确保来自不同数据源（presets[] 磁盘数据 vs oai_settings 内存数据）的快照可正确比较。
- *
- * 规则：
- *   - alt 字段存在但 canonical 不存在 → 将 alt 值赋给 canonical，删除 alt
- *   - alt 和 canonical 都存在 → 保留 canonical，删除 alt（canonical 是通用显示名）
- *   - 只有 canonical 存在 → 不变
- */
-export function normalizePresetFields(preset) {
-    if (!preset || typeof preset !== 'object') return preset || {};
-    const result = { ...preset };
-    for (const [alt, canonical] of FIELD_SYNONYMS) {
-        if (alt in result) {
-            if (!(canonical in result)) {
-                result[canonical] = result[alt];
-            }
-            delete result[alt];
-        }
-    }
-    return result;
-}
-
 // =====================================================
 // Canonical 预设字段契约（采集、哈希、存储与 diff 共用）
 //
@@ -402,126 +360,6 @@ export function normalizePresetFields(preset) {
 export const CANONICAL_PRESET_FIELDS = OPENAI_PRESET_FIELDS;
 
 /**
- * 从预设对象中提取 canonical 字段（仅用于 diff 比较阶段）。
- *
- * 基于 ST openai.js settingsToUpdate 的白名单设计：
- *   - 只保留 ST 预设定义中 isConnection=false 的标量字段
- *   - prompts / prompt_order / extensions 由专门 diff 处理，不在此提取
- *
- * 这样任何不在 ST 预设定义中的字段（扩展注入、ST 新字段、字段名拼写差异等）
- * 都不会参与比较，从根本上根治"修改1个参数却显示10个字段变化"的问题。
- *
- * 快照采集阶段也使用相同核心契约；这里仅提取标量字段，结构化的
- * prompts / prompt_order / extensions 仍由专用摘要逻辑处理。
- *
- * @param {object} preset - 规范化后的预设对象
- * @returns {object} 只包含 canonical 字段的新对象
- */
-export function extractCanonicalForDiff(preset) {
-    if (!preset || typeof preset !== 'object') return {};
-    const result = {};
-    for (const key of CANONICAL_PRESET_FIELDS) {
-        if (key === 'prompts' || key === 'prompt_order' || key === 'extensions' || key === 'bias_preset_selected') {
-            continue;
-        }
-        if (key in preset) {
-            result[key] = preset[key];
-        }
-    }
-    return result;
-}
-
-// =====================================================
-// =====================================================
-// ST 内置系统 prompt 标识符（不在 prompt_order 中但属于预设数据）
-// 参考 ST 源码 openai.js 中的 OPENAI_PROMPT_IDS / oai_settings.prompts 初始化
-// =====================================================
-const ST_SYSTEM_PROMPT_IDS = new Set([
-    'main',                 // Main Prompt (系统主提示)
-    'nsfw',                 // Auxiliary Prompt (NSFW 辅助提示)
-    'jailbreak',            // Post-History Instructions (越狱/后置指令)
-    'enhanceDefinitions',   // Enhance Definitions (增强定义)
-]);
-
-// UUID v4 格式正则（匹配用户自定义 prompt 的 identifier）
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// R-1 / S-1: 导出预设时排除的敏感/环境配置字段（黑名单）
-// 基于 ST openai.js getChatCompletionPreset() 中不包含的字段。
-// 比 HASH_EXCLUDED_FIELDS 更全面，覆盖所有 provider-specific 配置。
-// =====================================================
-export const EXPORT_EXCLUDED_FIELDS = new Set([
-    ...CONNECTION_FIELDS,
-    // ---- 安全：绝对不能导出 ----
-    'api_key_openai', 'proxy_password',
-
-    // ---- 环境/连接配置 ----
-    'reverse_proxy', 'chat_completion_source',
-    'api_url_scale', 'custom_url',
-    'custom_api_format', 'custom_include_body', 'custom_exclude_body',
-    'custom_include_headers', 'custom_claude_prompt_caching',
-    'custom_prompt_post_processing',
-
-    // ---- 模型选择（所有 provider） ----
-    'openai_model', 'openrouter_model', 'claude_model', 'google_model',
-    'ai21_model', 'mistralai_model', 'cohere_model', 'perplexity_model',
-    'groq_model', 'zerooneai_model', 'blockentropy_model', 'custom_model',
-    'vertexai_model', 'deepseek_model', 'aimlapi_model', 'xai_model',
-    'pollinations_model', 'cometapi_model', 'moonshot_model', 'fireworks_model',
-    'zai_model', 'azure_openai_model',
-    'chutes_model', 'siliconflow_model', 'electronhub_model', 'nanogpt_model',
-
-    // ---- 模型列表（大数组，可能含用户配额信息） ----
-    'model_list', 'openrouter_model_list',
-
-    // ---- Azure 配置 ----
-    'azure_base_url', 'azure_deployment_name', 'azure_api_version',
-
-    // ---- VertexAI 配置 ----
-    'vertexai_auth_mode', 'vertexai_region', 'vertexai_express_project_id',
-
-    // ---- OpenRouter 配置 ----
-    'openrouter_use_fallback', 'openrouter_group_models', 'openrouter_sort_models',
-    'openrouter_providers', 'openrouter_quantizations',
-    'openrouter_allow_fallbacks', 'openrouter_middleout',
-
-    // ---- 其他 provider 配置 ----
-    'chutes_sort_models', 'chutes_group_models',
-    'electronhub_sort_models', 'electronhub_group_models',
-    'zai_endpoint', 'siliconflow_endpoint',
-
-    // ---- 内部/UI 状态 ----
-    'show_external_models', 'bypass_status_check',
-    'bind_preset_to_connection',
-    'preset_settings_openai',
-    // Logit-bias presets are managed by ST as a separate global preset library.
-    // They are deliberately omitted from /api/presets/save and must not make a
-    // native manual save look like it deleted an object from the active preset.
-    'bias_presets', 'bias_preset_selected',
-]);
-
-// =====================================================
-// 显示/对比时统一忽略的字段集合
-// 是 EXPORT_EXCLUDED_FIELDS 的超集，额外包含仅用于"显示过滤"的字段
-// （如 prompts / prompt_order 由专门的 diff 区段处理，不在标量对比中出现）
-// =====================================================
-export const DISPLAY_IGNORED_FIELDS = new Set([
-    ...EXPORT_EXCLUDED_FIELDS,
-
-    // ---- 由 diff / summary 专门处理，不作为标量字段对比 ----
-    'prompts', 'prompt_order', 'extensions',
-
-    // ---- 显示为标题/标签，不参与字段级对比 ----
-    'name',
-
-    // ---- 内部/噪音字段 ----
-    'bias_presets', 'bias_preset_selected',
-    // 注意：names_behavior 已移除——它是"角色行为"栏中的用户可见设置，
-    // 修改后应在变更摘要中正常显示。之前被误列为噪音字段导致用户
-    // 调整角色名前缀设置后摘要显示"细微改动"而非具体变更。
-]);
-
-/**
  * R-1 / S-1: 清理预设数据——过滤掉敏感信息和环境配置字段。
  *
  * 处理流程：
@@ -537,65 +375,7 @@ export const DISPLAY_IGNORED_FIELDS = new Set([
  * @returns {object} 清理后的安全预设对象
  */
 export function sanitizePresetForExport(preset, { apiId = 'openai' } = {}) {
-    if (!preset || typeof preset !== 'object') return {};
-    // 1. 规范化字段名（temp_openai → temperature 等）
-    const cleaned = normalizePresetFields(preset);
-    // 2. 删除所有敏感/环境字段
-    for (const field of EXPORT_EXCLUDED_FIELDS) {
-        delete cleaned[field];
-    }
-    // 3. 过滤 prompts 数组中被扩展动态注入的非用户 prompt
-    if (Array.isArray(cleaned.prompts)) {
-        cleaned.prompts = filterExtensionPrompts(cleaned.prompts, cleaned.prompt_order);
-    }
-    // 所有哈希、摘要与保存路径必须共享同一份 canonical 数据。
-    // canonicalizePreset 只对已知数值/布尔控件做字段感知的类型规范化；
-    // Prompt、extensions 和文本框内容保持原类型，避免篡改用户文本。
-    return canonicalizePreset(cleaned, { apiId }).canonical;
-}
-
-/**
- * 过滤 prompts 数组中被扩展动态注入的非用户 prompt。
- *
- * ST 运行时 oai_settings.prompts 中可能包含其他扩展（如 SPreset 等）
- * 注入的条目，它们的 content 通常包含 HTML/前端代码，不是用户编写的 prompt。
- *
- * 过滤策略：保留以下任一条件成立的 prompt entry：
- *   a) 在 prompt_order 中被引用（用户管理的 prompt）
- *   b) 是 ST 已知的系统 prompt（main/nsfw/jailbreak/enhanceDefinitions）
- *   c) identifier 是 UUID 格式（用户创建的自定义 prompt）
- *
- * 此函数同时用于 sanitizePresetForExport（新快照过滤）和
- * computeChangeSummary（旧快照对比前过滤），确保新旧快照使用相同标准。
- *
- * @param {Array} prompts - prompt 数组
- * @param {Array} [promptOrder] - prompt_order 数组（可选）
- * @returns {Array} 过滤后的 prompts 数组
- */
-export function filterExtensionPrompts(prompts, promptOrder) {
-    if (!Array.isArray(prompts)) return prompts;
-
-    const orderIds = new Set();
-    if (Array.isArray(promptOrder)) {
-        for (const group of promptOrder) {
-            if (group?.order && Array.isArray(group.order)) {
-                for (const entry of group.order) {
-                    if (entry?.identifier) orderIds.add(entry.identifier);
-                }
-            }
-        }
-    }
-
-    return prompts.filter(p => {
-        if (!p || !p.identifier) return false;
-        // a) 在 prompt_order 中
-        if (orderIds.has(p.identifier)) return true;
-        // b) ST 已知系统 prompt
-        if (ST_SYSTEM_PROMPT_IDS.has(p.identifier)) return true;
-        // c) UUID 格式（用户自定义 prompt）
-        if (UUID_RE.test(p.identifier)) return true;
-        return false;
-    });
+    return canonicalizePreset(preset, { apiId }).canonical;
 }
 
 /**
@@ -1015,10 +795,11 @@ export function on(eventName, handler) {
     try {
         const { eventSource } = SillyTavern.getContext();
         eventSource.on(eventName, handler);
-        _registeredListeners.push({ eventName, handler });
+        const binding = { eventName, handler, eventSource };
+        _registeredListeners.push(binding);
         logger.debug('Event subscribed:', eventName);
 
-        return () => off(eventName, handler);
+        return () => detachEventBinding(binding);
     } catch (e) {
         logger.error('Failed to subscribe event:', eventName, e);
         return () => {};
@@ -1028,11 +809,11 @@ export function on(eventName, handler) {
 /**
  * 安全取消订阅
  */
-export function off(eventName, handler) {
-    if (!ENV.hasEventSource) return;
-
+function detachEventBinding(binding) {
+    const idx = _registeredListeners.indexOf(binding);
+    if (idx < 0) return;
     try {
-        const { eventSource } = SillyTavern.getContext();
+        const { eventSource, eventName, handler } = binding;
 
         if (typeof eventSource.removeListener === 'function') {
             eventSource.removeListener(eventName, handler);
@@ -1040,12 +821,15 @@ export function off(eventName, handler) {
             eventSource.off(eventName, handler);
         }
 
-        const idx = _registeredListeners.findIndex(
-            l => l.eventName === eventName && l.handler === handler
-        );
-        if (idx >= 0) _registeredListeners.splice(idx, 1);
+        _registeredListeners.splice(idx, 1);
     } catch (e) {
-        logger.warn('Failed to unsubscribe event:', eventName, e);
+        logger.warn('Failed to unsubscribe event:', binding.eventName, e);
+    }
+}
+
+export function off(eventName, handler) {
+    for (const binding of [..._registeredListeners]) {
+        if (binding.eventName === eventName && binding.handler === handler) detachEventBinding(binding);
     }
 }
 
@@ -1053,10 +837,7 @@ export function off(eventName, handler) {
  * 卸载所有由本扩展注册的事件
  */
 export function offAll() {
-    for (const { eventName, handler } of [..._registeredListeners]) {
-        off(eventName, handler);
-    }
-    _registeredListeners.length = 0;
+    for (const binding of [..._registeredListeners]) detachEventBinding(binding);
 }
 
 /**

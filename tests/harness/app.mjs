@@ -15,6 +15,8 @@ import {
 import { normalizeHarnessOptions } from './config.mjs';
 import { createIndexedDbLocalforage } from './indexeddb-storage.mjs';
 import { evaluateLayoutAudit } from './layout-audit.mjs';
+import { collectTextContrast } from './text-contrast.mjs';
+import { exerciseTakeover } from './takeover-scenario.mjs';
 
 const options = normalizeHarnessOptions(window.location.search);
 const modelKind = options.scenario === 'loading' || options.scenario === 'error'
@@ -28,6 +30,7 @@ let lastRenderMs = 0;
 let lastShellMs = 0;
 let lastViewSwitchMs = null;
 let confirmResult = true;
+let confirmationCalls = 0;
 let panelMetricStart = Number.POSITIVE_INFINITY;
 let performanceStorageBytes = 0;
 const storageMetrics = {
@@ -138,7 +141,10 @@ const presetManager = {
     getSelectedPresetName: () => nativeSelect.options[nativeSelect.selectedIndex]?.textContent || '',
 };
 const popupShow = async () => null;
-popupShow.confirm = async () => confirmResult;
+popupShow.confirm = async () => {
+    confirmationCalls++;
+    return confirmResult;
+};
 class HarnessPopup {
     constructor(html) {
         this.html = html;
@@ -147,14 +153,26 @@ class HarnessPopup {
     }
 
     show() {
-        this.host = document.createElement('div');
+        this.host = document.createElement('dialog');
         this.host.className = 'pas-harness-dialog';
         this.host.innerHTML = this.html;
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'pas-harness-popup-close';
+        close.textContent = translate('Close');
+        close.addEventListener('click', () => this.completeCancelled());
+        this.host.append(close);
+        this.host.addEventListener('cancel', event => {
+            event.preventDefault();
+            this.completeCancelled();
+        });
         document.body.append(this.host);
+        this.host.showModal();
         return new Promise(resolve => { this.resolve = resolve; });
     }
 
     completeCancelled() {
+        this.host?.close();
         this.host?.remove();
         this.resolve?.(false);
         this.resolve = null;
@@ -220,7 +238,7 @@ window.toastr = Object.fromEntries(['success', 'info', 'warning', 'error'].map(l
 
 const [
     { initCompatibility },
-    { initSettings, batchUpdate },
+    { initSettings, batchUpdate, getSettings },
     historyPanel,
     historyStore,
     archiveStore,
@@ -1039,23 +1057,32 @@ function collectMetrics() {
         '.pas-import-confirm', '.pas-import-mode-card',
         '.pas-gm-header-actions button', '.pas-gm-rename-btn', '.pas-gm-mobile-actions button',
         '.pas-gm-search input',
+        '.pas-btn-start-diff', '.pas-btn-clear-diff',
+        '.pas-btn-batch-select-all', '.pas-btn-batch-deselect-all', '.pas-log-actions .pas-mini-btn',
+        '.pas-diff-toolbar button', '.pas-diff-section-toggle', '.pas-diff-prompt-identity > summary',
+        '.pas-settings input', '.pas-settings select', '.pas-settings button',
     ].join(',');
-    const controls = [...metricsRoot.querySelectorAll('button, summary, input, [role="button"], .pas-import-mode-card')].map(element => {
+    const controls = [...metricsRoot.querySelectorAll('button, summary, input, select, [role="button"], .pas-import-mode-card')].map(element => {
         const rect = element.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const hit = element.matches('.pas-diff-toolbar button') && x >= 0 && x < innerWidth && y >= 0 && y < innerHeight
+            ? document.elementFromPoint(x, y) : null;
         return {
             selector: selectorFor(element),
             important: element.matches(importantSelector),
             visible: isVisible(element),
             width: Number(rect.width.toFixed(2)),
             height: Number(rect.height.toFixed(2)),
+            pointerBlocked: !!hit && !element.contains(hit),
         };
     });
     const hiddenFocusable = [...metricsRoot.querySelectorAll('[aria-hidden="true"] button, [aria-hidden="true"] input, [aria-hidden="true"] [tabindex]')]
         .filter(element => element.tabIndex >= 0)
         .map(selectorFor);
-    const requiredLabelSelector = window.innerWidth <= 460
+    const requiredLabelSelector = (window.innerWidth <= 460
         ? '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span, .pas-primary-action .pas-control-face > span, .pas-view-btn > span, .pas-btn-clear-preset > .pas-action-label'
-        : '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span';
+        : '.pas-tab > span:not(.pas-tab-badge), .pas-filter > span') + ', .pas-btn-start-diff > span';
     const requiredLabels = [...metricsRoot.querySelectorAll(requiredLabelSelector)]
         .filter(element => isVisible(element.parentElement))
         .map(element => {
@@ -1153,6 +1180,49 @@ function collectMetrics() {
         fontSize: Number.parseFloat(footerStatsStyle.fontSize),
         contrast: Number(contrastRatio(footerStatsStyle.color, footerStyle.backgroundColor).toFixed(2)),
     }) : null;
+    const metadataText = [...metricsRoot.querySelectorAll([
+        '.pas-series-snapshots', '.pas-series-size', '.pas-series-latest',
+        '.pas-version-count', '.pas-version-size', '.pas-version-latest',
+        '.pas-tag-empty', '.pas-version-empty-hint',
+        '.pas-card-time', '.pas-card-size', '.pas-card-hash',
+        '.pas-diff-side-meta-time', '.pas-diff-side-meta-extra',
+        '.pas-diff-line-label',
+    ].join(','))].filter(isVisible).map(element => ({
+        selector: selectorFor(element),
+        ...collectTextContrast(element),
+    }));
+    const commandNames = [...metricsRoot.querySelectorAll('button, summary')].map(element => ({
+        selector: selectorFor(element),
+        visible: isVisible(element),
+        name: commandAccessibleName(element),
+    }));
+    const settingsControls = [...metricsRoot.querySelectorAll('.pas-settings input, .pas-settings select, .pas-settings button')].map(element => {
+        const rect = element.getBoundingClientRect();
+        const labels = [...(element.labels || [])];
+        const describedBy = (element.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+        return {
+            selector: selectorFor(element),
+            visible: isVisible(element) || labels.some(isVisible),
+            name: element.getAttribute('aria-label') || labels.map(label => label.textContent.trim()).filter(Boolean).join(' ') || commandAccessibleName(element),
+            requiresDescription: element.matches('[data-setting]'),
+            description: describedBy.map(id => document.getElementById(id)?.textContent || '').join(' ').trim(),
+            width: rect.width, height: rect.height,
+            targets: labels.filter(isVisible).map(label => {
+                const bounds = label.getBoundingClientRect();
+                return { width: bounds.width, height: bounds.height };
+            }),
+        };
+    });
+    const diffContentCells = [...metricsRoot.querySelectorAll('.pas-diff-cline-a, .pas-diff-cline-b')]
+        .filter(element => element.querySelector('.pas-diff-ct')).map(element => {
+            const label = element.querySelector('.pas-diff-line-label');
+            return {
+                selector: selectorFor(element), visible: isVisible(element),
+                side: element.dataset.diffSide || '', status: element.dataset.diffStatus || '',
+                labelVisible: !!label && isVisible(label), label: label?.textContent || '',
+                role: element.getAttribute('role') || '', name: element.getAttribute('aria-label') || '',
+            };
+        });
 
     return Object.freeze({
         scenario: options.scenario,
@@ -1174,6 +1244,10 @@ function collectMetrics() {
         viewSwitchMs: lastViewSwitchMs,
         viewMode,
         footerText,
+        metadataText: Object.freeze(metadataText.map(Object.freeze)),
+        commandNames: Object.freeze(commandNames.map(Object.freeze)),
+        settingsControls: Object.freeze(settingsControls.map(Object.freeze)),
+        diffContentCells: Object.freeze(diffContentCells.map(Object.freeze)),
         hiddenFocusable: Object.freeze(hiddenFocusable),
         consoleErrors: Object.freeze([...consoleErrors]),
         performance: Object.freeze({
@@ -1195,7 +1269,126 @@ function collectMetrics() {
     });
 }
 
+function commandAccessibleName(element) {
+    const labelledBy = element.getAttribute('aria-labelledby');
+    if (labelledBy) {
+        return labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim();
+    }
+    const explicit = element.getAttribute('aria-label');
+    if (explicit) return explicit.trim();
+    const visibleText = node => {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+        if (node.nodeType !== Node.ELEMENT_NODE || node.getAttribute('aria-hidden') === 'true') return '';
+        const style = getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden') return '';
+        return [...node.childNodes].map(visibleText).join(' ');
+    };
+    return visibleText(element).trim() || element.getAttribute('title') || '';
+}
+
+async function prepareComparisonSelection() {
+    const version = [...panelRoot.querySelectorAll('.pas-version-header')].find(isVisible);
+    if (version?.getAttribute('aria-expanded') !== 'true') {
+        version?.click();
+        await nextPaint();
+    }
+    const cards = [...panelRoot.querySelectorAll('.pas-card')].filter(isVisible);
+    if (cards.length < 2) throw new Error('Comparison acceptance requires two visible snapshots');
+    const ids = cards.slice(0, 2).map(card => card.dataset.snapshotId);
+    const targetPresetName = cards[1].closest('[data-preset-name]')?.dataset.presetName || '';
+    cards[0].querySelector('.pas-btn-diff-a').click();
+    await nextPaint();
+    const search = panelRoot.querySelector('.pas-search');
+    if (!isVisible(search)) throw new Error('Selecting A must leave search available for B');
+    search.focus();
+    if (document.activeElement !== search) throw new Error('Comparison search cannot receive focus');
+    const searchFor = async value => {
+        search.value = value;
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise(resolve => setTimeout(resolve, 300));
+        await nextPaint();
+    };
+    await searchFor('__PAS_COMPARISON_NO_MATCH__');
+    if (panelRoot.querySelector('.pas-card')) throw new Error('Comparison search did not filter history');
+    await searchFor(targetPresetName);
+    if (!panelRoot.querySelector('#pas-diff-slot-a.pas-diff-slot-set')) {
+        throw new Error('Search lost the selected A target');
+    }
+    panelRoot.querySelector(`[data-snapshot-id="${CSS.escape(ids[1])}"] .pas-btn-diff-b`).click();
+    await nextPaint();
+    const start = panelRoot.querySelector('.pas-btn-start-diff');
+    return Object.freeze({
+        selectedIds: Object.freeze(ids),
+        ready: !start.disabled,
+        searchUsableAfterA: true,
+        name: commandAccessibleName(start),
+        visibleLabel: isVisible(start.querySelector('span')),
+        slotTitles: Object.freeze([...panelRoot.querySelectorAll('.pas-diff-bar-slot-text')].map(slot => slot.title)),
+        audit: evaluateLayoutAudit(collectMetrics()),
+    });
+}
+
+async function showDiffLabelScenario({ language = 'zh-cn' } = {}) {
+    if (language === 'en-us') {
+        Object.assign(translationOverrides, await fetch('../../i18n/en-us.json').then(response => response.json()));
+    }
+    const { showDiffPopup } = await import('../../modules/diff-viewer.js');
+    const prompt = (identifier, content) => ({ identifier, name: identifier, content });
+    const a = {
+        id: 'diff-label-a', apiId: 'openai', presetName: 'Label fixture', name: 'A newer selection',
+        timestamp: Date.UTC(2026, 9, 24),
+        preset: { prompts: [
+            prompt('replacement', 'shared line\nnewer selected A'),
+            prompt('removed whole prompt', 'only A <img src=x onerror=alert(1)>'),
+            prompt('blank removed prompt', ''),
+            prompt('unchanged whole prompt', 'identical prompt'),
+        ] },
+    };
+    const b = {
+        id: 'diff-label-b', apiId: 'openai', presetName: 'Label fixture', name: 'B older selection',
+        timestamp: Date.UTC(2026, 9, 23),
+        preset: { prompts: [
+            prompt('replacement', 'shared line\nolder selected B'),
+            prompt('added whole prompt', 'only B <script>evil()</script>'),
+            prompt('blank added prompt', ''),
+            prompt('unchanged whole prompt', 'identical prompt'),
+        ] },
+    };
+    await showDiffPopup(a, b);
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await nextPaint();
+    return { a: a.name, b: b.name };
+}
+
+async function exerciseBatchTargets() {
+    const originalApi = context.mainApi;
+    try {
+        panelRoot.querySelector('.pas-btn-batch-toggle').click();
+        const checkbox = [...panelRoot.querySelectorAll('.pas-batch-checkbox')]
+            .find(input => !input.disabled);
+        if (!checkbox) throw new Error('No selectable preset in batch mode');
+        checkbox.click();
+        const originalTarget = { apiId: checkbox.dataset.apiId, presetName: checkbox.dataset.presetName };
+        context.mainApi = originalApi === 'openai' ? 'kobold' : 'openai';
+        await context.eventSource.emit('main_api_changed');
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const result = {
+            targetCaptured: originalTarget.apiId === originalApi && !!originalTarget.presetName,
+            scopeCleared: panelRoot.querySelector('#pas-batch-delete-btn').disabled,
+            accessibleName: !!checkbox.getAttribute('aria-label'),
+        };
+        if (Object.values(result).some(value => !value)) {
+            throw new Error(`Batch target safety failed: ${JSON.stringify(result)}`);
+        }
+        return result;
+    } finally {
+        context.mainApi = originalApi;
+        await remountProductionPanel();
+    }
+}
+
 window.__PAS_HARNESS__ = Object.freeze({
+    exerciseTakeover,
     ready: true,
     scenario: options,
     render: () => panelMount.ready,
@@ -1214,7 +1407,15 @@ window.__PAS_HARNESS__ = Object.freeze({
     exerciseDisclosures,
     exerciseUnusedNativeSeries,
     exerciseViewSwitchPerformance,
+    exerciseBatchTargets,
+    prepareComparisonSelection,
+    showDiffLabelScenario,
     setConfirmResult: value => { confirmResult = Boolean(value); },
+    settingsAcceptanceState: async () => ({
+        settings: getSettings(),
+        snapshotIds: (await historyStore.getAllSnapshots()).map(snapshot => snapshot.id).sort(),
+        confirmationCalls,
+    }),
     operationEvents: () => Object.freeze([...operationEvents]),
     collectMetrics,
     audit: () => evaluateLayoutAudit(collectMetrics()),

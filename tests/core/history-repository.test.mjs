@@ -289,3 +289,28 @@ test('failed migrations are counted without making diagnostics throw', async () 
     assert.deepEqual(diagnostics.migration, { attempted: 1, succeeded: 0, failed: 1 });
     assert.equal(diagnostics.legacyKeyCount, 1);
 });
+
+test('a delete queued during lazy migration wins without resurrecting legacy data', async () => {
+    const key = 'openai::Demo';
+    const v2 = new MemoryStore();
+    const originalSet = v2.setItem.bind(v2);
+    let release;
+    let entered;
+    const blocked = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    v2.setItem = async (storedKey, value) => {
+        if (storedKey === key) { entered(); await gate; }
+        return originalSet(storedKey, value);
+    };
+    const repository = new HistoryRepository({
+        legacyStore: new MemoryStore({ [key]: [legacySnapshot()] }), v2Store: v2,
+    });
+    const migration = repository.getItem(key);
+    await blocked;
+    const deletion = repository.removeItem(key);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release();
+    await Promise.all([migration, deletion]);
+    assert.equal(await repository.getItem(key), null);
+    assert.equal((await v2.getItem(migrationMarkerKey(key))).status, 'deleted');
+});

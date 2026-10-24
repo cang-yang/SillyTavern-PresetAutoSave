@@ -111,15 +111,41 @@ export function createHistoryCatalog({
     let verifiedSourceManifest = [];
     let progress = { completed: 0, total: 0 };
     let errorCode = '';
+    let snapshotCount = 0;
+    let flattened = null;
+    let summariesById = null;
 
-    function read() {
+    function invalidateProjection() {
+        snapshotCount = Object.values(verifiedBuckets).reduce((count, list) => count + list.length, 0);
+        flattened = null;
+        summariesById = null;
+    }
+
+    function readState() {
         return {
             status,
-            summaries: structuredClone(flattenBuckets(verifiedBuckets)),
+            snapshotCount,
             progress: { ...progress },
             generation,
             errorCode,
         };
+    }
+
+    function read() {
+        flattened ??= flattenBuckets(verifiedBuckets);
+        return { ...readState(), summaries: structuredClone(flattened) };
+    }
+
+    function findSummary(id) {
+        if (!summariesById) {
+            summariesById = new Map();
+            for (const list of Object.values(verifiedBuckets)) {
+                for (const summary of list) {
+                    if (!summariesById.has(summary.id)) summariesById.set(summary.id, summary);
+                }
+            }
+        }
+        return structuredClone(summariesById.get(id) ?? null);
     }
 
     function documentFor(nextBuckets, nextSourceManifest, nextGeneration, nextStatus = 'ready') {
@@ -137,7 +163,7 @@ export function createHistoryCatalog({
         nextBuckets,
         nextSourceManifest,
         nextStatus = 'ready',
-        { allowTransient = false } = {},
+        { allowTransient = false, includeSummaries = true } = {},
     ) {
         const nextGeneration = generation + 1;
         let persistenceError = null;
@@ -150,12 +176,13 @@ export function createHistoryCatalog({
             if (!allowTransient) throw error;
             persistenceError = error;
         }
-        verifiedBuckets = cloneBuckets(nextBuckets);
+        verifiedBuckets = nextBuckets;
+        invalidateProjection();
         verifiedSourceManifest = structuredClone(nextSourceManifest);
         generation = nextGeneration;
         status = nextStatus;
         errorCode = persistenceError ? 'CATALOG_PERSISTENCE_UNAVAILABLE' : '';
-        return read();
+        return includeSummaries ? read() : readState();
     }
 
     return Object.freeze({
@@ -173,6 +200,7 @@ export function createHistoryCatalog({
                     status = 'missing';
                     generation = 0;
                     verifiedBuckets = {};
+                    invalidateProjection();
                     verifiedSourceManifest = [];
                     progress = { completed: 0, total: 0 };
                     errorCode = '';
@@ -184,6 +212,7 @@ export function createHistoryCatalog({
                     status = 'dirty';
                     generation = 0;
                     verifiedBuckets = {};
+                    invalidateProjection();
                     verifiedSourceManifest = [];
                     progress = { completed: 0, total: 0 };
                     errorCode = 'CATALOG_CORRUPT';
@@ -192,6 +221,7 @@ export function createHistoryCatalog({
                 status = decoded.status;
                 generation = decoded.generation;
                 verifiedBuckets = decoded.buckets;
+                invalidateProjection();
                 verifiedSourceManifest = decoded.sourceManifest;
                 progress = { completed: 0, total: 0 };
                 errorCode = '';
@@ -200,6 +230,8 @@ export function createHistoryCatalog({
         },
 
         read,
+        readState,
+        findSummary,
 
         matchesSourceManifest(sourceManifest) {
             const normalized = normalizeSourceManifest(sourceManifest);
@@ -209,10 +241,11 @@ export function createHistoryCatalog({
                 && manifestsEqual(verifiedSourceManifest, normalized);
         },
 
-        replaceBucket(apiId, presetName, snapshots) {
+        replaceBucket(apiId, presetName, snapshots, { includeSummaries = true } = {}) {
+            const captured = structuredClone(snapshots);
             return writes.run(async () => {
-                const projected = projectBucket(snapshots, { apiId, presetName });
-                const nextBuckets = cloneBuckets(verifiedBuckets);
+                const projected = projectBucket(captured, { apiId, presetName });
+                const nextBuckets = { ...verifiedBuckets };
                 const key = stableBucketKey(apiId, presetName);
                 const sourceKey = `${apiId}::${presetName}`;
                 const nextSourceManifest = verifiedSourceManifest
@@ -222,7 +255,7 @@ export function createHistoryCatalog({
                 if (projected.length > 0) {
                     nextSourceManifest.push({
                         key: sourceKey,
-                        revision: fingerprintSnapshotSummaries(snapshots),
+                        revision: fingerprintSnapshotSummaries(captured),
                     });
                     nextSourceManifest.sort((left, right) => left.key.localeCompare(right.key, 'en'));
                 }
@@ -231,6 +264,7 @@ export function createHistoryCatalog({
                         nextBuckets,
                         nextSourceManifest,
                         status === 'ready' ? 'ready' : 'dirty',
+                        { includeSummaries },
                     );
                 } catch (error) {
                     status = 'error';
@@ -240,9 +274,9 @@ export function createHistoryCatalog({
             });
         },
 
-        removeBucket(apiId, presetName) {
+        removeBucket(apiId, presetName, { includeSummaries = true } = {}) {
             return writes.run(async () => {
-                const nextBuckets = cloneBuckets(verifiedBuckets);
+                const nextBuckets = { ...verifiedBuckets };
                 delete nextBuckets[stableBucketKey(apiId, presetName)];
                 const sourceKey = `${apiId}::${presetName}`;
                 const nextSourceManifest = verifiedSourceManifest
@@ -252,6 +286,7 @@ export function createHistoryCatalog({
                         nextBuckets,
                         nextSourceManifest,
                         status === 'ready' ? 'ready' : 'dirty',
+                        { includeSummaries },
                     );
                 } catch (error) {
                     status = 'error';
@@ -317,10 +352,10 @@ export function createHistoryCatalog({
                         }
                     }
                     if (signal?.aborted) throw abortError();
-                    const resolvedManifest = suppliedManifest
+                    const resolvedManifest = normalizeSourceManifest(suppliedManifest
                         ?? (resolveSourceManifest
-                            ? normalizeSourceManifest(await resolveSourceManifest())
-                            : derivedManifest);
+                            ? await resolveSourceManifest()
+                            : derivedManifest));
                     if (!resolvedManifest) {
                         throw new TypeError('Catalog rebuild resolved an invalid source manifest');
                     }

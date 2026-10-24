@@ -17,7 +17,15 @@ const MODULE_NAME = 'preset_auto_save';
 // =====================================================
 // 默认配置
 // =====================================================
-export const DEFAULT_SETTINGS = Object.freeze({
+function deepFreeze(value) {
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+        for (const child of Object.values(value)) deepFreeze(child);
+        Object.freeze(value);
+    }
+    return value;
+}
+
+export const DEFAULT_SETTINGS = deepFreeze({
     // 总开关
     enabled: true,
 
@@ -149,6 +157,7 @@ function sameSettingValue(left, right) {
 let _settings = null;
 const _listeners = new Set();
 let _initialized = false;
+let _publicSnapshot = null;
 
 // =====================================================
 // 初始化
@@ -157,6 +166,7 @@ let _initialized = false;
  * 初始化配置（从 extensionSettings 读取）
  */
 export async function initSettings() {
+    _publicSnapshot = null;
     try {
         const ctx = getContextSafe();
         if (!ctx) throw new Error('SillyTavern context unavailable');
@@ -239,22 +249,22 @@ export async function initSettings() {
 // =====================================================
 /**
  * 获取整个配置对象
- * 注意：未初始化时返回的是 DEFAULT_SETTINGS 的浅拷贝，避免被外部冻结。
+ * Read-only revision snapshot; callers update exclusively through this module.
  */
 export function getSettings() {
     if (!_initialized) {
         logger.warn('getSettings called before init');
-        return structuredClone(DEFAULT_SETTINGS);
+        return DEFAULT_SETTINGS;
     }
-    return _settings;
+    if (!_publicSnapshot) _publicSnapshot = deepFreeze(structuredClone(_settings));
+    return _publicSnapshot;
 }
 
 /**
  * 获取单个配置项
  */
 export function getSetting(key) {
-    if (!_initialized) return DEFAULT_SETTINGS[key];
-    return _settings[key];
+    return getSettings()[key];
 }
 
 /**
@@ -291,6 +301,7 @@ export function updateSetting(key, value) {
     if (sameSettingValue(oldValue, validated)) return false;
 
     _settings[key] = validated;
+    _publicSnapshot = null;
 
     // 特殊处理: debugMode 改变时立即应用
     if (key === 'debugMode') {
@@ -332,6 +343,7 @@ export function batchUpdate(updates) {
     }
 
     if (changed.length > 0) {
+        _publicSnapshot = null;
         // 一次性写入磁盘
         persistSettings();
         // 然后通知所有订阅者
@@ -351,6 +363,7 @@ export function resetSettings() {
 
     const oldSettings = { ..._settings };
     Object.assign(_settings, structuredClone(DEFAULT_SETTINGS));
+    _publicSnapshot = null;
 
     logger.setDebugMode(_settings.debugMode);
     persistSettings();
@@ -380,9 +393,14 @@ export function onSettingChange(callback) {
 }
 
 function notifyListeners(key, newValue, oldValue) {
+    const event = deepFreeze({
+        key,
+        newValue: structuredClone(newValue),
+        oldValue: structuredClone(oldValue),
+    });
     for (const cb of _listeners) {
         try {
-            cb({ key, newValue, oldValue });
+            cb(event);
         } catch (e) {
             logger.error('Settings listener error:', e);
         }

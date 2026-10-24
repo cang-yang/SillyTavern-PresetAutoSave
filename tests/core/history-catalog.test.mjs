@@ -195,3 +195,52 @@ test('aborted rebuild keeps the prior verified catalog and yields a diagnosable 
     assert.equal(catalog.read().status, 'dirty');
     assert.deepEqual(catalog.read().summaries.map(item => item.id), ['verified']);
 });
+
+test('metadata reads do not clone snapshots and full reads stay independent', async () => {
+    const catalog = createHistoryCatalog({ store: new MemoryStore() });
+    await catalog.rebuild({ keys: ['openai::Demo'], readBucket: async () => [snapshot('a', 1)] });
+    const original = globalThis.structuredClone;
+    let clones = 0;
+    globalThis.structuredClone = (...args) => { clones++; return original(...args); };
+    try {
+        const state = catalog.readState();
+        assert.equal(state.status, 'ready');
+        assert.equal(state.snapshotCount, 1);
+        assert.equal(Object.hasOwn(state, 'summaries'), false);
+        assert.equal(clones, 0);
+        state.progress.completed = 999;
+        assert.notEqual(catalog.readState().progress.completed, 999);
+    } finally {
+        globalThis.structuredClone = original;
+    }
+});
+
+test('indexed lookup is defensive and invalidates only after a committed bucket generation', async () => {
+    const store = new MemoryStore();
+    const catalog = createHistoryCatalog({ store });
+    await catalog.rebuild({ keys: ['openai::Demo'], readBucket: async () => [snapshot('a', 1)] });
+    const first = catalog.findSummary('a');
+    first.name = 'outside';
+    const generation = catalog.readState().generation;
+    assert.equal(catalog.findSummary('a').name, '');
+    store.failSet = true;
+    await assert.rejects(catalog.replaceBucket('openai', 'Demo', [snapshot('b', 2)]), /quota/);
+    assert.equal(catalog.readState().generation, generation);
+    assert.equal(catalog.findSummary('b'), null);
+    assert.equal(catalog.findSummary('a').id, 'a');
+    store.failSet = false;
+    const result = await catalog.replaceBucket('openai', 'Demo', [snapshot('b', 2)], { includeSummaries: false });
+    assert.equal(Object.hasOwn(result, 'summaries'), false);
+    assert.equal(catalog.findSummary('a'), null);
+    assert.equal(catalog.findSummary('b').id, 'b');
+});
+
+test('rebuild accepts unordered storage keys without reporting a manifest mismatch', async () => {
+    const catalog = createHistoryCatalog({ store: new MemoryStore() });
+    const state = await catalog.rebuild({
+        keys: ['openai::B', 'openai::A'],
+        readBucket: async key => [snapshot(key, 1, { presetName: key.slice(8) })],
+    });
+    assert.equal(state.status, 'ready');
+    assert.equal(state.summaries.length, 2);
+});

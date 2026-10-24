@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const source = await readFile(new URL('../modules/panel-group-manager.js', import.meta.url), 'utf8');
-const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+const css = await readFile(new URL('../styles/group-manager.css', import.meta.url), 'utf8');
 
 test('the modern group manager renderer is the single active markup path', () => {
     assert.match(source, /function renderModernGroupingHTML/);

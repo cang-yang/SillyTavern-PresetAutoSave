@@ -149,31 +149,108 @@ dialog:has(.pas-import-preview),
     .pas-import-mode-card { transition: none; }
 }
 
-/* Native group-menu buttons preserve the established menu hook and appearance. */
-button.pas-gm-ctx-item {
+.pas-diff-popup button.pas-diff-section-toggle {
     width: 100%;
-    min-height: 40px;
-    margin: 0;
+    min-height: 44px;
     border: 0;
-    border-radius: 0;
-    appearance: none;
-    background: transparent;
-    color: var(--pas-fg);
+    color: inherit;
     font: inherit;
     text-align: left;
 }
 
-button.pas-gm-ctx-item:focus-visible {
-    outline: 2px solid var(--pas-accent);
-    outline-offset: -3px;
-    background: var(--pas-surface-2);
+.pas-diff-popup button.pas-diff-section-toggle:focus-visible,
+.pas-diff-technical > summary:focus-visible,
+.pas-summary-technical > summary:focus-visible {
+    outline: 2px solid var(--pas-accent, #a78bfa);
+    outline-offset: -2px;
 }
 
-button.pas-gm-ctx-item:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
+.pas-diff-technical > summary,
+.pas-summary-technical > summary {
+    cursor: pointer;
+    padding: 6px 0;
+}
+
+.pas-diff-technical code,
+.pas-summary-technical code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 @media (max-width: 640px) {
-    button.pas-gm-ctx-item { min-height: 44px; }
+    .pas-diff-technical > summary,
+    .pas-summary-technical > summary {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+    }
+}
+.pas-diff-prompt-identity {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+}
+.pas-diff-prompt-identity > summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.pas-diff-popup {
+    --pas-dialog-metadata: #b5bdce;
+    --pas-dialog-label-bg: #1f2430;
+}
+
+body.pas-light .pas-diff-popup {
+    --pas-dialog-metadata: #4b5268;
+    --pas-dialog-label-bg: #f1f3f8;
+}
+
+.pas-diff-popup .pas-diff-side-meta-time,
+.pas-diff-popup .pas-diff-side-meta-extra {
+    color: var(--pas-dialog-metadata);
+    font-size: 12px;
+}
+
+.pas-diff-popup .pas-diff-toolbar button,
+.pas-diff-popup .pas-diff-toolbar label {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.pas-diff-popup .pas-diff-toolbar button:focus-visible,
+.pas-diff-prompt-identity > summary:focus-visible {
+    outline: 2px solid var(--pas-accent, #a78bfa);
+    outline-offset: 2px;
+}
+
+.pas-diff-popup .pas-diff-cline-a,
+.pas-diff-popup .pas-diff-cline-b {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) 2ch minmax(0, 1fr);
+    align-items: start;
+    gap: 6px;
+    min-width: 0;
+}
+.pas-diff-popup .pas-diff-line-label {
+    color: var(--pas-dialog-metadata);
+    background: var(--pas-dialog-label-bg);
+    font-family: var(--mainFontFamily, sans-serif);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: nowrap;
+}
+.pas-diff-popup .pas-diff-ln { width: auto; margin: 0; }
+
+@media (max-width: 768px) {
+    .pas-diff-popup .pas-diff-cline > [aria-hidden="true"] { display: none; }
+    .pas-diff-popup .pas-diff-meta-arrow {
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        justify-self: center;
+        pointer-events: none;
+    }
 }

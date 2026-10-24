@@ -9,24 +9,15 @@
  *   - startOfToday / startOfWeek — 时间工具
  */
 
-import { logger } from './logger.js';
 import { getSettings } from './settings.js';
 import { formatBytes } from './history-store.js';
 import {
     t, getCurrentApiId, getSelectedPresetName,
 } from './compatibility.js';
 import {
-    parsePresetName,
-    getSeriesInfo,
-    groupSnapshotsBySeries,
     normalizeSeriesKey,
-    buildNestedGroupTree,
     getNodePath,
 } from './preset-grouping.js';
-import { buildSeriesKeyResolver } from './core/series-key-resolver.js';
-import {
-    listAllPresetsIncludingDetached,
-} from './preset-takeover.js';
 import {
     escapeHtml, escapeAttr, formatTime,
 } from './panel-summary.js';
@@ -35,7 +26,7 @@ import {
     getBoundedSnapshotWindow,
 } from './core/bounded-snapshot-list.js';
 import {
-    presetKey, parsePresetKey, groupSnapshotsByPreset,
+    presetKey, parsePresetKey, groupSnapshotsByPreset, resolvePanelSeriesProjection,
 } from './panel-list-model.js';
 import { renderSnapshotCard } from './panel-snapshot-card.js';
 
@@ -137,7 +128,7 @@ function renderPresetGroup(key, snapshots, panelCtx) {
  */
 function renderSeriesGroup(info, panelCtx) {
     const _state = panelCtx.state();
-    const seriesKey = info.series;
+    const seriesKey = info.canonicalKey;
     const isExpanded = _state.expandedSeries.has(seriesKey);
     const safeKey = escapeAttr(seriesKey);
     const currentName = getSelectedPresetName();
@@ -150,7 +141,7 @@ function renderSeriesGroup(info, panelCtx) {
         <div class="pas-series-header-row pas-series-header-row-title">
             <i class="fa-solid ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} pas-series-chevron"></i>
             <i class="fa-solid fa-folder${isExpanded ? '-open' : ''} pas-series-icon"></i>
-            <span class="pas-series-name" title="${escapeAttr(seriesKey)}">${escapeHtml(seriesKey)}</span>
+            <span class="pas-series-name" title="${escapeAttr(info.displayName)}">${escapeHtml(info.displayName)}</span>
             <span class="pas-series-version-pill" title="${escapeAttr(t('Grouping Series Header Versions', { count: info.versionCount }))}">
                 <i class="fa-solid fa-code-branch"></i> ${info.versionCount}
             </span>
@@ -226,19 +217,20 @@ function renderVersionGroup(ver, seriesKey, allVersions, panelCtx) {
         isCurrent ? `<span class="pas-tag pas-tag-current">${escapeHtml(t('Current Preset'))}</span>` : '',
         ver.manualOverride ? `<span class="pas-tag pas-tag-manual-override" title="${escapeAttr(t('Grouping Manual Tag Title'))}">${escapeHtml(t('Grouping Manual Tag'))}</span>` : '',
         ver.archived ? `<span class="pas-tag pas-tag-archived" title="${escapeAttr(t('Archived Version Title'))}"><i class="fa-solid fa-box-archive"></i> ${escapeHtml(t('Archived Version'))}</span>` : '',
+        ver.available === false && !ver.archived ? `<span class="pas-tag pas-tag-unavailable" title="${escapeAttr(t('Preset Unavailable Hint'))}">${escapeHtml(t('Preset Unavailable'))}</span>` : '',
         isEmpty ? `<span class="pas-tag pas-tag-empty" title="${escapeAttr(t('No Snapshots Yet Title'))}">${escapeHtml(t('No Snapshots Yet'))}</span>` : '',
     ].filter(Boolean).join('');
 
 
     // 应用版本按钮（已归档版本不可应用）
-    const applyBtn = ver.archived
+    const applyBtn = ver.archived || ver.available === false
         ? ''
         : `<button class="pas-btn-action pas-btn-apply-version" data-action="apply-version" data-preset-name="${safePresetName}" title="${escapeAttr(t('Apply This Version'))}" type="button" aria-label="${escapeAttr(t('Apply This Version'))}">
             <span class="pas-control-face"><i class="fa-solid fa-circle-check"></i><span class="pas-action-label">${escapeHtml(t('Apply Version Short'))}</span></span>
         </button>`;
 
     // AR-0: 删除预设按钮（当前预设 disabled）
-    const deletePresetBtn = `<button class="pas-version-delete-btn" data-action="delete-preset" data-preset-name="${safePresetName}" data-api-id="${escapeAttr(ver.apiId)}" title="${escapeAttr(t('Delete Preset Btn'))}" type="button" aria-label="${escapeAttr(t('Delete Preset Btn'))}" ${isCurrent ? 'disabled' : ''}>
+    const deletePresetBtn = ver.available === false ? '' : `<button class="pas-version-delete-btn" data-action="delete-preset" data-preset-name="${safePresetName}" data-api-id="${escapeAttr(ver.apiId)}" title="${escapeAttr(t('Delete Preset Btn'))}" type="button" aria-label="${escapeAttr(t('Delete Preset Btn'))}" ${isCurrent ? 'disabled' : ''}>
             <span class="pas-control-face"><i class="fa-solid fa-trash-can"></i><span class="pas-action-label">${escapeHtml(t('Delete'))}</span></span>
         </button>`;
     const versionActionsHtml = `<div class="pas-version-actions" role="group" aria-label="${escapeAttr(t('Grouping Preset Actions'))}">
@@ -314,274 +306,15 @@ function renderShowMoreSnapshots(key, remaining, total) {
  */
 export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
     const settings = getSettings();
-    const currentApi = getCurrentApiId() || 'openai';
-
-    // 1) 历史快照：按当前 API 过滤（snapshot.apiId 必须 === currentApi）
-    const filteredByApi = (filtered || []).filter(s => s && s.apiId === currentApi);
-
-    // 性能优化：如果 loadData() 已缓存 seriesMap，则复用并按 filter/search 过滤，
-    // 避免 O(N) 的 groupSnapshotsBySeries() 重复计算
-    let seriesMap;
-    if (cachedSeriesMap && cachedSeriesMap.size > 0) {
-        const filteredSnapshotIds = new Set(filteredByApi.map(s => s.id).filter(Boolean));
-        seriesMap = new Map();
-        for (const [key, series] of cachedSeriesMap) {
-            const filteredVersions = [];
-            let seriesSnapCount = 0, seriesTotalSize = 0, seriesLatest = 0;
-            for (const v of series.versions) {
-                if (v.apiId !== currentApi) continue;
-                const matchingSnaps = (v.snapshots || []).filter(s => filteredSnapshotIds.has(s.id));
-                // 既无匹配快照又非归档 → 跳过（保留归档项以显示"已归档"空壳）
-                if (matchingSnaps.length === 0 && !v.archived) continue;
-                const verSnapCount = matchingSnaps.length;
-                const verTotalSize = matchingSnaps.reduce((sum, s) => sum + (s.size || 0), 0);
-                const verLatest = matchingSnaps.reduce((max, s) => Math.max(max, s.timestamp || 0), 0);
-                filteredVersions.push({
-                    ...v,
-                    snapshots: matchingSnaps,
-                    snapshotCount: verSnapCount,
-                    totalSize: verTotalSize,
-                    latestTime: Math.max(verLatest, v.latestTime || 0),
-                });
-                seriesSnapCount += verSnapCount;
-                seriesTotalSize += verTotalSize;
-                seriesLatest = Math.max(seriesLatest, verLatest, v.latestTime || 0);
-            }
-            if (filteredVersions.length > 0) {
-                seriesMap.set(key, {
-                    ...series,
-                    versions: filteredVersions,
-                    versionCount: filteredVersions.length,
-                    snapshotCount: seriesSnapCount,
-                    totalSize: seriesTotalSize,
-                    latestTime: seriesLatest,
-                });
-            }
-        }
-    } else {
-        seriesMap = groupSnapshotsBySeries(filteredByApi, {
-            overrides: settings.groupingManualOverrides,
-            aliases: settings.groupingSeriesAliases,
-        });
-    }
-
-    // ⚡ 关键修复 B3：用 normKey 做"二次归并"
-    //   seriesMap 的 key 是首次出现的"显示名"形式（如"mur 鹿鹿 API"），
-    //   后续 native list / archives 来的数据如果是另一种大小写/空格形式
-    //   （如"Mur 鹿鹿 API"或"mur鹿鹿 API"），必须归到已存在的系列里，
-    //   否则面板里会显示成多个独立的一级条目（用户报告的"一级里只有一个版本"假象）。
-    const _resolveSeriesKey = buildSeriesKeyResolver(seriesMap, normalizeSeriesKey);
-
-    // ⭐ 唯一可信数据源：DOM 上的 select.options（用户实际看到的下拉）
-    //
-    // ⚠️ 不再使用 getAllPresetNames() —— 它返回的是 ST 内部 oai_settings.preset_settings_openai
-    //    在某些 ST 版本下，这个数组可能包含损坏对象（{name: 数字, ...}）或纯索引。
-    //    那些"数字垃圾"会被当成预设名出现在面板里（用户看到的"15/17/18/19..."）。
-    //
-    //    DOM 上的 select 是 ST 渲染给用户看的下拉，里面只有真实的预设名，
-    //    所以是绝对干净、可信的唯一数据源。
-    // ⚡ C1 修复：将 allEntries 提升到函数作用域，使后续的"幽灵版本清理"代码块也能访问
-    let allEntries = new Map();
-
-    try {
-        const overrides = settings.groupingManualOverrides || {};
-
-        // 唯一来源：DOM select.options（含被接管摘除的）—— 严格按 currentApi 过滤
-        let fromDOM = [];
-        try { fromDOM = listAllPresetsIncludingDetached(currentApi) || []; } catch (_) {}
-
-        // 进一步过滤：丢弃任何"看起来像数字 ID"的预设名（防御 ST 把数字 ID 误塞进 select）
-        const isPureNumberLike = (n) => {
-            if (typeof n !== 'string') return true;
-            const s = n.trim();
-            if (!s) return true;
-            // 纯数字（"15"、"17"）或带空格/标点（"  15  "）
-            if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
-            return false;
-        };
-
-        // 合并去重：以 apiId::presetName 为 key
-        allEntries = new Map();
-        for (const e of fromDOM) {
-            if (e.apiId && e.apiId !== currentApi) continue;
-            if (!e.presetName || isPureNumberLike(e.presetName)) continue;
-            const k = `${currentApi}::${e.presetName}`;
-            if (!allEntries.has(k)) allEntries.set(k, { apiId: currentApi, presetName: e.presetName });
-        }
-
-        for (const { apiId, presetName } of allEntries.values()) {
-            const info = getSeriesInfo(presetName, overrides);
-            const seriesKey = _resolveSeriesKey(info.series || presetName);
-
-            let series = seriesMap.get(seriesKey);
-            if (!series) {
-                series = {
-                    series: seriesKey,
-                    versions: [],
-                    latestTime: 0,
-                    totalSize: 0,
-                    snapshotCount: 0,
-                    versionCount: 0,
-                };
-                seriesMap.set(seriesKey, series);
-            }
-
-            // 用归一化键判断"该系列中是否已有这个版本"，避免大小写差异重复加
-            const existsKey = (n) => normalizeSeriesKey(n);
-            const exists = series.versions.some(v => v.apiId === apiId && existsKey(v.presetName) === existsKey(presetName));
-            if (!exists) {
-                series.versions.push({
-                    apiId,
-                    presetName,
-                    version: info.version,
-                    duplicate: info.duplicate,
-                    kind: info.kind,
-                    manualOverride: info.manualOverride,
-                    snapshots: [],
-                    latestTime: 0,
-                    totalSize: 0,
-                    snapshotCount: 0,
-                    archived: false,
-                });
-                series.versionCount = series.versions.length;
-            }
-        }
-    } catch (e) {
-        logger.debug('renderSeriesView merge native list failed:', e);
-    }
-
-    // ⭐ 把"已归档预设"也合并进来（数据接管模式下）—— 同样按当前 API 过滤
-    const _archivedCache = panelCtx.archivedCache();
-    if (_archivedCache && _archivedCache.length > 0) {
-        try {
-            const overrides = settings.groupingManualOverrides || {};
-            for (const arch of _archivedCache) {
-                if (arch.apiId && arch.apiId !== currentApi) continue;
-                const presetName = arch.presetName;
-                if (!presetName) continue;
-                const info = getSeriesInfo(presetName, overrides);
-                const seriesKey = _resolveSeriesKey(info.series || presetName);
-
-                let series = seriesMap.get(seriesKey);
-                if (!series) {
-                    series = {
-                        series: seriesKey,
-                        versions: [],
-                        latestTime: 0,
-                        totalSize: 0,
-                        snapshotCount: 0,
-                        versionCount: 0,
-                    };
-                    seriesMap.set(seriesKey, series);
-                }
-
-                const exists = series.versions.some(v => v.apiId === arch.apiId && v.presetName === presetName);
-                if (!exists) {
-                    series.versions.push({
-                        apiId: arch.apiId,
-                        presetName,
-                        version: info.version,
-                        duplicate: info.duplicate,
-                        kind: info.kind,
-                        manualOverride: info.manualOverride,
-                        snapshots: [],
-                        latestTime: arch.archivedAt || 0,
-                        totalSize: 0,
-                        snapshotCount: 0,
-                        archived: true,
-                    });
-                    series.versionCount = series.versions.length;
-                }
-            }
-        } catch (e) {
-            logger.debug('renderSeriesView merge archives failed:', e);
-        }
-    }
-
-    // ⚡ B29 修复：过滤掉旧的"系列名快照"——
-    //   旧版本的 seedSnapshotsIfNeeded 曾把代表 option 的系列名（如"梦境思客"）
-    //   当成预设名存入快照。这些快照会在面板中显示为"二级条目中混入一级名称"。
-    //   判断条件：版本的 presetName 精确等于其所在系列的 seriesKey，
-    //             且该 presetName 不是真正的原生预设（不在 allEntries 中）
-    try {
-        for (const [seriesKey, series] of seriesMap) {
-            if (!series.versions || series.versions.length <= 1) continue;
-            series.versions = series.versions.filter(ver => {
-                if (ver.presetName !== seriesKey) return true; // 名字不同于系列名 → 保留
-                // presetName === seriesKey 时，检查是否真的是原生预设
-                const nativeKey = `${currentApi}::${ver.presetName}`;
-                if (allEntries && allEntries.has(nativeKey)) return true; // 原生存在 → 保留
-                // 不在原生列表中 → 是旧的系列名幽灵条目，但保留其快照（合并到同系列其他版本）
-                if (ver.snapshots && ver.snapshots.length > 0) {
-                    // 把幽灵版本的快照分配到系列中的第一个真实版本
-                    const realVer = series.versions.find(v => v.presetName !== seriesKey);
-                    if (realVer) {
-                        realVer.snapshots.push(...ver.snapshots);
-                        realVer.snapshotCount = (realVer.snapshotCount || 0) + ver.snapshots.length;
-                        realVer.totalSize = (realVer.totalSize || 0) + (ver.totalSize || 0);
-                        if (ver.latestTime > realVer.latestTime) realVer.latestTime = ver.latestTime;
-                    }
-                }
-                return false; // 过滤掉幽灵版本
-            });
-            series.versionCount = series.versions.length;
-        }
-    } catch (e) {
-        logger.debug('renderSeriesView ghost version cleanup failed:', e);
-    }
-
-    // 防御性清理：删除 versions 为空的系列（理论不应该有）
-    for (const [k, s] of seriesMap) {
-        if (!s.versions || s.versions.length === 0) {
-            seriesMap.delete(k);
-        }
-    }
-
-    // O-2: 筛选/搜索激活时，隐藏无匹配快照的版本组和空系列组
-    //   当 filter !== 'all' 或搜索词非空时，面板只展示有实际匹配快照的版本，
-    //   不再显示 "无快照 · 0 · 0 B" 空壳条目。
     const _state = panelCtx.state();
-    const hasActiveFilter = (_state.filter && _state.filter !== 'all') || !!_state.search;
-    if (hasActiveFilter) {
-        for (const [k, series] of seriesMap) {
-            // 移除没有快照的版本组
-            series.versions = series.versions.filter(v => (v.snapshotCount || 0) > 0);
-            series.versionCount = series.versions.length;
-            // 如果该系列下所有版本都被过滤掉了，移除整个系列
-            if (series.versions.length === 0) {
-                seriesMap.delete(k);
-            }
-        }
-    }
+    const { groups: seriesMap, tree: rootNodes } = resolvePanelSeriesProjection(filtered, panelCtx, cachedSeriesMap);
 
     if (seriesMap.size === 0) {
-        return `<div class="pas-empty-state pas-empty-state-grouping">
-            <i class="fa-solid fa-folder-tree"></i>
-            <div class="pas-empty-state-text">${escapeHtml(t('Grouping Empty Series'))}</div>
-        </div>`;
+        return renderEmptyState(panelCtx);
     }
 
     // 嵌套模式：使用 buildNestedGroupTree 构建树并递归渲染
-    if (settings.nestingEnabled && settings.groupingTree && Object.keys(settings.groupingTree).length > 0) {
-        // 收集所有 presetName → 用于 buildNestedGroupTree
-        const allPresetNames = [];
-        for (const series of seriesMap.values()) {
-            for (const v of series.versions) {
-                allPresetNames.push(v.presetName);
-            }
-        }
-
-        // 构建嵌套树
-        const tree = settings.groupingTree || {};
-        const maxDepth = settings.nestingMaxDepth || 3;
-        const rootNodes = buildNestedGroupTree(
-            allPresetNames,
-            settings.groupingManualOverrides || {},
-            tree,
-            maxDepth,
-            settings.groupingSeriesAliases || {},
-        );
-
+    if (rootNodes) {
         // 构建 normKey → seriesInfo（从 seriesMap 查找版本数据）
         const normKeyToSeries = new Map();
         for (const series of seriesMap.values()) {
@@ -592,7 +325,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
         const presetToVersion = new Map();
         for (const series of seriesMap.values()) {
             for (const v of series.versions) {
-                presetToVersion.set(v.presetName, { ver: v, seriesKey: series.series, allVersions: series.versions });
+                presetToVersion.set(v.presetName, { ver: v, seriesKey: series.canonicalKey, allVersions: series.versions });
             }
         }
 
@@ -664,43 +397,16 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
 
             if (!hasItems && !hasChildren && !seriesData) return '';
 
-            // 构建这个节点下的版本列表
-            let versionsHtml = '';
-            // 元信息
-            let versionCount = 0, snapshotCount = 0, totalSize = 0, latestTime = 0;
-            if (isExpanded && seriesData && seriesData.versions && seriesData.versions.length > 0) {
-                versionCount = seriesData.versionCount || seriesData.versions.length;
-                snapshotCount = seriesData.snapshotCount || 0;
-                totalSize = seriesData.totalSize || 0;
-                latestTime = seriesData.latestTime || 0;
-                versionsHtml = seriesData.versions.map(v => renderVersionGroup(v, node.key, seriesData.versions, panelCtx)).join('');
-            } else if (isExpanded && hasItems) {
-                versionCount = node.items.length;
-                versionsHtml = node.items.map(presetName => {
-                    const found = presetToVersion.get(presetName);
-                    if (found) {
-                        return renderVersionGroup(found.ver, found.seriesKey, found.allVersions, panelCtx);
-                    }
-                    return `<div class="pas-version-group pas-version-empty" data-series-key="${escapeAttr(node.key)}" data-preset-name="${escapeAttr(presetName)}">
-                        <div class="pas-version-header">
-                            <div class="pas-version-header-row pas-version-header-row-title">
-                                <i class="fa-solid fa-code-branch pas-version-icon"></i>
-                                <span class="pas-version-rawname">${escapeHtml(presetName)}</span>
-                            </div>
-                            <div class="pas-version-header-row pas-version-header-row-tags">
-                                <span class="pas-tag pas-tag-empty">${escapeHtml(t('No Snapshots Yet'))}</span>
-                            </div>
-                        </div>
-                    </div>`;
-                }).join('');
-            } else if (seriesData) {
-                versionCount = seriesData.versionCount || seriesData.versions?.length || 0;
-                snapshotCount = seriesData.snapshotCount || 0;
-                totalSize = seriesData.totalSize || 0;
-                latestTime = seriesData.latestTime || 0;
-            } else {
-                versionCount = node.items?.length || 0;
-            }
+            // Depth-limited trees can flatten child versions into a populated
+            // parent. Resolve every item while retaining its original group key.
+            const nodeVersions = (node.items || []).map(name => presetToVersion.get(name)).filter(Boolean);
+            const versionCount = nodeVersions.length;
+            const snapshotCount = nodeVersions.reduce((sum, item) => sum + item.ver.snapshotCount, 0);
+            const totalSize = nodeVersions.reduce((sum, item) => sum + item.ver.totalSize, 0);
+            const latestTime = Math.max(0, ...nodeVersions.map(item => item.ver.latestTime));
+            const versionsHtml = isExpanded ? nodeVersions.map(item => renderVersionGroup(
+                item.ver, item.seriesKey, item.allVersions, panelCtx,
+            )).join('') : '';
 
 
             const displayName = node.displayName || node.key;

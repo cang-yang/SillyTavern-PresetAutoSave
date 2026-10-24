@@ -80,6 +80,12 @@ test('rejects unsupported versions and malformed data before planning writes', (
         version: 2,
         data: { 'openai::Demo': [snapshot({ preset: null })] },
     }), /preset/i);
+    assert.throws(() => validateHistoryBackup({
+        version: 2,
+        data: { '__history_v2_meta__::import-transaction': [
+            snapshot({ apiId: '__history_v2_meta__', presetName: 'import-transaction' }),
+        ] },
+    }), /key/i);
 });
 
 test('rejects duplicate snapshot IDs across the complete backup', () => {
@@ -124,6 +130,39 @@ test('backup creation defensively removes secrets from already stored snapshots'
     assert.equal(JSON.stringify(backup).includes('secret-proxy.example'), false);
 });
 
+test('production backup export and import exclude nested provider connection fields', () => {
+    const preset = {
+        temperature: 0.7,
+        prompts: [{ identifier: 'password', content: 'Authorization: Bearer literal prompt example' }],
+        extensions: { provider: {
+            api_key_openai: 'SYNTHETIC_CREDENTIAL_A',
+            custom_include_headers: 'Authorization: Bearer SYNTHETIC_CREDENTIAL_B',
+            nested: [{
+                apiKeyOpenAI: 'SYNTHETIC_CREDENTIAL_C',
+                'custom-include-headers': { Authorization: 'SYNTHETIC_CREDENTIAL_D' },
+                api_key_claude: 'SYNTHETIC_CREDENTIAL_E',
+                openaiApiKey: 'SYNTHETIC_CREDENTIAL_F',
+                'x-api-key': 'SYNTHETIC_CREDENTIAL_G',
+                max_tokens: 256, token_count: 12,
+                template: 'custom_include_headers: Authorization example',
+            }],
+        } },
+    };
+    const data = { 'openai::Demo': [snapshot({ preset })] };
+    const before = structuredClone(data);
+    const exported = createHistoryBackup(data).data['openai::Demo'][0].preset;
+    const imported = validateHistoryBackup({ version: 2, data }).data.get('openai::Demo')[0].preset;
+    for (const result of [exported, imported]) {
+        assert.equal(JSON.stringify(result).includes('SYNTHETIC_CREDENTIAL_'), false);
+        assert.deepEqual(result.prompts, preset.prompts);
+        assert.deepEqual(result.extensions.provider, { nested: [{
+            max_tokens: 256, token_count: 12,
+            template: 'custom_include_headers: Authorization example',
+        }] });
+    }
+    assert.deepEqual(data, before);
+});
+
 test('merge planning deduplicates IDs, sorts, trims, and preserves pinned records', () => {
     const existing = new Map([['openai::Demo', [
         snapshot({ id: 'existing-new', timestamp: 30 }),
@@ -152,6 +191,16 @@ test('merge planning rejects a same-ID snapshot with different content', () => {
         /conflicting snapshot id/i,
     );
     assert.equal(existing.get('openai::Demo')[0].hash, 'old');
+});
+
+test('merge rejects IDs owned by another existing preset and preview explains the conflict', () => {
+    const existing = new Map([['openai::Other', [snapshot({ id: 'collision', presetName: 'Other' })]]]);
+    const payload = { version: 2, data: { 'openai::Demo': [snapshot({ id: 'collision' })] } };
+    assert.throws(() => buildHistoryImportPlan(payload, existing), /conflicting snapshot id/i);
+    const preview = analyzeHistoryImport(payload, existing);
+    assert.equal(preview.conflictCount, 1);
+    assert.equal(preview.modes.merge.available, false);
+    assert.equal(preview.modes.replace.available, true);
 });
 
 test('replace planning produces a complete replacement image', () => {

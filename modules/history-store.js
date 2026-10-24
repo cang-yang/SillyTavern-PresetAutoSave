@@ -23,8 +23,10 @@
 
 import { logger } from './logger.js';
 import { getSettings } from './settings.js';
-import { createStorage, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, extractCanonicalForDiff, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
-import { createChangeSet, assertExplainableChange } from './core/change-set.js';
+import { createStorage, normalizePresetFields, sanitizePresetForExport, FIELD_SYNONYMS, EXPORT_EXCLUDED_FIELDS, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
+import { comparePresetStates } from './core/preset-comparison.js';
+import { hashCanonicalPreset, hashPresetSerialization, requireCanonicalPreset, PRESET_CONTRACT_VERSION } from './core/preset-schema.js';
+import { stableStringify as serializeCanonicalValue } from './core/value-utils.js';
 import { HistoryRepository } from './core/history-repository.js';
 import { readHistoryBucket, readHistoryBuckets } from './core/history-bucket-reader.js';
 import { SerialTaskQueue } from './core/serial-task-queue.js';
@@ -116,7 +118,7 @@ export async function initHistoryStore() {
             });
         }
         const sourceManifest = await _store.getCatalogManifest();
-        if (_catalog.read().status === 'ready') {
+        if (_catalog.readState().status === 'ready') {
             if (_catalog.matchesSourceManifest(sourceManifest)) {
                 _catalogRuntimeVerified = true;
             } else {
@@ -169,52 +171,8 @@ function generateId() {
  *  - 处理循环引用（避免堆栈溢出）
  *  - 处理 NaN/Infinity（JSON.stringify 默认输出 null，这里保持一致）
  */
-const _SEEN_DURING_CALL = new WeakSet();
-
 export function stableStringify(obj) {
-    if (obj === null || obj === undefined) return 'null';
-    if (typeof obj !== 'object') return JSON.stringify(obj);
-    return stableStringifyImpl(obj);
-}
-
-function stableStringifyImpl(obj) {
-    if (obj === null || obj === undefined) return 'null';
-    if (typeof obj !== 'object') return JSON.stringify(obj);
-
-    // 防御循环引用
-    if (_SEEN_DURING_CALL.has(obj)) return '"[Circular]"';
-    _SEEN_DURING_CALL.add(obj);
-
-    try {
-        if (Array.isArray(obj)) {
-            const parts = new Array(obj.length);
-            for (let i = 0; i < obj.length; i++) {
-                parts[i] = stableStringifyImpl(obj[i]);
-            }
-            return '[' + parts.join(',') + ']';
-        }
-        const keys = Object.keys(obj).sort();
-        const parts = new Array(keys.length);
-        for (let i = 0; i < keys.length; i++) {
-            const k = keys[i];
-            parts[i] = JSON.stringify(k) + ':' + stableStringifyImpl(obj[k]);
-        }
-        return '{' + parts.join(',') + '}';
-    } finally {
-        _SEEN_DURING_CALL.delete(obj);
-    }
-}
-
-/**
- * FNV-1a 32-bit 哈希（直接对字符串）
- */
-function fnv1aHash(str) {
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) {
-        hash ^= str.charCodeAt(i);
-        hash = (hash * 0x01000193) >>> 0;
-    }
-    return hash.toString(36);
+    return serializeCanonicalValue(obj);
 }
 
 /**
@@ -225,8 +183,7 @@ function fnv1aHash(str) {
  */
 export function hashPreset(obj, apiId = 'openai') {
     if (!obj || typeof obj !== 'object') return '';
-    const canonical = sanitizePresetForExport(obj, { apiId });
-    return fnv1aHash(stableStringify(canonical));
+    return hashCanonicalPreset(obj, { apiId });
 }
 
 // S-1: FIELD_SYNONYMS, normalizePresetFields, sanitizePresetForExport, EXPORT_EXCLUDED_FIELDS
@@ -265,373 +222,7 @@ export function formatBytes(bytes) {
  * }}
  */
 export function computeChangeSummary(prev, curr, apiId = 'openai') {
-    const result = {
-        isFirst: false,
-        sections: [],
-        counts: {
-            promptAdded: 0,
-            promptRemoved: 0,
-            promptModified: 0,
-            promptReordered: 0,
-            promptToggledOn: 0,
-            promptToggledOff: 0,
-            fieldChanged: 0,
-        },
-    };
-
-    if (!curr || typeof curr !== 'object') return result;
-    if (!prev || typeof prev !== 'object') {
-        result.isFirst = true;
-        return result;
-    }
-
-    const canonicalPrev = sanitizePresetForExport(prev, { apiId });
-    const canonicalCurr = sanitizePresetForExport(curr, { apiId });
-    const rawChangeSet = createChangeSet(prev, curr);
-    const changeSet = createChangeSet(canonicalPrev, canonicalCurr);
-    assertExplainableChange(canonicalPrev, canonicalCurr, changeSet);
-    result.rawChangedPaths = changeSet.changed.map(item => item.path);
-    const canonicalPaths = new Set(result.rawChangedPaths);
-    result.ignoredPaths = rawChangeSet.changed
-        .map(item => item.path)
-        .filter(path => !canonicalPaths.has(path));
-    result.unchanged = changeSet.changed.length === 0;
-    result.onlyIgnoredChanges = result.unchanged && result.ignoredPaths.length > 0;
-
-    // 对比前过滤扩展注入的 prompt（确保新旧快照使用相同标准，
-    // 避免旧快照包含而新快照不包含时产生虚假的"删除"摘要）
-    const prevPrompts = filterExtensionPrompts(
-        Array.isArray(canonicalPrev.prompts) ? canonicalPrev.prompts : [],
-        canonicalPrev.prompt_order,
-    );
-    const currPrompts = filterExtensionPrompts(
-        Array.isArray(canonicalCurr.prompts) ? canonicalCurr.prompts : [],
-        canonicalCurr.prompt_order,
-    );
-
-    // 1. Prompts 增删改（带 name + 改动字段明细）
-    const promptDiff = comparePromptsDetail(prevPrompts, currPrompts);
-    if (promptDiff.added.length > 0) {
-        result.sections.push({ kind: 'prompt-add', items: promptDiff.added });
-        result.counts.promptAdded = promptDiff.added.length;
-    }
-    if (promptDiff.removed.length > 0) {
-        result.sections.push({ kind: 'prompt-del', items: promptDiff.removed });
-        result.counts.promptRemoved = promptDiff.removed.length;
-    }
-    if (promptDiff.modified.length > 0) {
-        result.sections.push({ kind: 'prompt-edit', items: promptDiff.modified });
-        result.counts.promptModified = promptDiff.modified.length;
-    }
-
-    // 2. 顺序调整（仅在 prompts 数组本身没增减时才单独显示）
-    const prevOrder = extractOrder(canonicalPrev.prompt_order);
-    const currOrder = extractOrder(canonicalCurr.prompt_order);
-    const reorderCount = countReorderedPositions(prevOrder, currOrder);
-    if (reorderCount > 0) {
-        result.sections.push({ kind: 'prompt-reorder', items: [{ count: reorderCount }] });
-        result.counts.promptReordered = reorderCount;
-    }
-
-    // 3. enabled 切换（按提示词名）
-    const enabledDiff = compareEnabledDetail(canonicalPrev.prompt_order, canonicalCurr.prompt_order, currPrompts, prevPrompts);
-    if (enabledDiff.toggledOn.length > 0) {
-        result.sections.push({ kind: 'prompt-toggle-on', items: enabledDiff.toggledOn });
-        result.counts.promptToggledOn = enabledDiff.toggledOn.length;
-    }
-    if (enabledDiff.toggledOff.length > 0) {
-        result.sections.push({ kind: 'prompt-toggle-off', items: enabledDiff.toggledOff });
-        result.counts.promptToggledOff = enabledDiff.toggledOff.length;
-    }
-
-    // 4. 标量字段
-    const scalarDiff = compareScalars(canonicalPrev, canonicalCurr);
-    const representedKeys = new Set(scalarDiff.map(item => item.key));
-    for (const item of changeSet.changed) {
-        if (item.path === 'prompts' || item.path.startsWith('prompts[')) continue;
-        if (item.path === 'prompt_order' || item.path.startsWith('prompt_order[')) continue;
-        if (representedKeys.has(item.path)) continue;
-        scalarDiff.push({
-            key: item.path,
-            kind: 'scalar',
-            from: item.before,
-            to: item.after,
-        });
-        representedKeys.add(item.path);
-    }
-    if (scalarDiff.length > 0) {
-        // 留 12 项给 UI 决定显示几条（默认显示 5）
-        result.sections.push({ kind: 'field', items: scalarDiff.slice(0, 12) });
-        result.counts.fieldChanged = scalarDiff.length;
-    }
-
-    return result;
-}
-
-/**
- * 详细比较 prompts，返回 added / removed / modified（含 name 与改动字段）
- */
-function comparePromptsDetail(prev, curr) {
-    const prevMap = new Map();
-    for (const p of prev) {
-        if (p && p.identifier) prevMap.set(p.identifier, p);
-    }
-    const currMap = new Map();
-    for (const p of curr) {
-        if (p && p.identifier) currMap.set(p.identifier, p);
-    }
-
-    const added = [];
-    const removed = [];
-    const modified = [];
-
-    for (const id of currMap.keys()) {
-        const b = currMap.get(id);
-        if (!prevMap.has(id)) {
-            added.push({
-                identifier: id,
-                name: getPromptDisplayName(b),
-                marker: !!b?.marker,
-            });
-            continue;
-        }
-        const a = prevMap.get(id);
-        const fields = diffPromptFields(a, b);
-        if (fields.length > 0) {
-            modified.push({
-                identifier: id,
-                name: getPromptDisplayName(b) || getPromptDisplayName(a),
-                fields,
-            });
-        }
-    }
-    for (const id of prevMap.keys()) {
-        if (!currMap.has(id)) {
-            const a = prevMap.get(id);
-            removed.push({
-                identifier: id,
-                name: getPromptDisplayName(a),
-                marker: !!a?.marker,
-            });
-        }
-    }
-    return { added, removed, modified };
-}
-
-/**
- * 取一个用于显示的提示词名：优先 name，回落到 identifier 截断
- */
-function getPromptDisplayName(p) {
-    if (!p) return '';
-    if (typeof p.name === 'string' && p.name.trim()) return p.name.trim();
-    if (typeof p.identifier === 'string' && p.identifier) {
-        // identifier 通常是 UUID 或 main/jailbreak 等关键字
-        return p.identifier.length > 16 ? p.identifier.slice(0, 8) + '…' : p.identifier;
-    }
-    return '';
-}
-
-/**
- * 比较两个 prompt 对象，返回改动了的字段列表
- * 对 content 字段不存原值（太长），只记录长度差。
- */
-function diffPromptFields(a, b) {
-    const watchKeys = ['name', 'content', 'role', 'system_prompt', 'marker', 'injection_position', 'injection_depth', 'forbid_overrides'];
-    const out = [];
-    for (const k of watchKeys) {
-        const av = a?.[k];
-        const bv = b?.[k];
-        if (av === bv) continue;
-        if (k === 'content') {
-            const fromLen = (typeof av === 'string') ? av.length : 0;
-            const toLen = (typeof bv === 'string') ? bv.length : 0;
-            if (fromLen !== toLen || av !== bv) {
-                out.push({ key: 'content', isContent: true, fromLen, toLen });
-            }
-            continue;
-        }
-        // 其他字段保留原值（短）
-        out.push({ key: k, from: av, to: bv });
-    }
-    return out;
-}
-
-/**
- * 提取 prompt_order 的 identifier 顺序
- */
-function extractOrder(prompt_order) {
-    if (!Array.isArray(prompt_order) || !prompt_order.length) return [];
-    const merged = [];
-    for (const group of prompt_order) {
-        if (group && Array.isArray(group.order)) {
-            for (const o of group.order) {
-                if (o?.identifier) merged.push(o.identifier);
-            }
-        }
-    }
-    return merged;
-}
-
-/**
- * 计算"位置变了的条目"个数
- * 长度变化时返回 0（认为属于增删，由 prompt-add/prompt-del 显示更准确）
- */
-function countReorderedPositions(prevOrder, currOrder) {
-    if (prevOrder.length !== currOrder.length) return 0;
-    let diff = 0;
-    for (let i = 0; i < prevOrder.length; i++) {
-        if (prevOrder[i] !== currOrder[i]) diff++;
-    }
-    return diff;
-}
-
-/**
- * 详细比较 enabled 切换：按 identifier 匹配，输出启用/禁用各自的列表
- * 同时附带 name 用于显示（从当前预设的 prompts 取，找不到再回落到旧的）
- */
-function compareEnabledDetail(prevOrder, currOrder, currPrompts, prevPrompts) {
-    const prevMap = new Map();
-    if (Array.isArray(prevOrder)) {
-        for (const group of prevOrder) {
-            if (!group || !Array.isArray(group.order)) continue;
-            for (const o of group.order) {
-                if (o?.identifier) prevMap.set(o.identifier, !!o.enabled);
-            }
-        }
-    }
-
-    const nameMap = new Map();
-    for (const p of currPrompts) {
-        if (p?.identifier) nameMap.set(p.identifier, getPromptDisplayName(p));
-    }
-    for (const p of prevPrompts) {
-        if (p?.identifier && !nameMap.has(p.identifier)) {
-            nameMap.set(p.identifier, getPromptDisplayName(p));
-        }
-    }
-
-    const toggledOn = [];
-    const toggledOff = [];
-    if (Array.isArray(currOrder)) {
-        for (const group of currOrder) {
-            if (!group || !Array.isArray(group.order)) continue;
-            for (const o of group.order) {
-                if (!o?.identifier) continue;
-                if (!prevMap.has(o.identifier)) continue;
-                const wasEnabled = prevMap.get(o.identifier);
-                const isEnabled = !!o.enabled;
-                if (wasEnabled === isEnabled) continue;
-                const item = {
-                    identifier: o.identifier,
-                    name: nameMap.get(o.identifier) || '',
-                };
-                if (isEnabled) toggledOn.push(item);
-                else toggledOff.push(item);
-            }
-        }
-    }
-    return { toggledOn, toggledOff };
-}
-
-/**
- * 标量字段比较 - 排除明显属于 prompt 范畴或内部用途的键
- */
-function compareScalars(prev, curr) {
-    // 规范化字段名后再比较，避免同义字段产生虚假 diff
-    const nPrev = normalizePresetFields(prev);
-    const nCurr = normalizePresetFields(curr);
-
-    // 阶段7：Canonical 提取 —— 只比较 ST 预设定义中的有效标量字段
-    // 基于 ST openai.js settingsToUpdate 白名单，而非黑名单排除法。
-    // 任何不在 ST 预设定义中的字段（扩展注入、ST 新字段、字段名拼写差异等）
-    // 都不会参与比较，从根本上根治"修改1个参数却显示10个字段变化"的问题。
-    const canonPrev = extractCanonicalForDiff(nPrev);
-    const canonCurr = extractCanonicalForDiff(nCurr);
-    const allKeys = new Set([...Object.keys(canonPrev), ...Object.keys(canonCurr)]);
-
-    const out = [];
-    for (const k of allKeys) {
-        const a = canonPrev[k];
-        const b = canonCurr[k];
-        if (deepEqualStrict(a, b)) continue;
-
-        const ta = typeof a, tb = typeof b;
-        if ((ta === 'function') || (tb === 'function')) continue;
-
-        // 复杂对象/数组：只记录长度差异（避免输出 [object Object]）
-        if (typeof a === 'object' || typeof b === 'object') {
-            if (Array.isArray(a) || Array.isArray(b)) {
-                const la = Array.isArray(a) ? a.length : 0;
-                const lb = Array.isArray(b) ? b.length : 0;
-                if (la !== lb) {
-                    out.push({ key: k, kind: 'array-length', from: la, to: lb });
-                }
-                continue;
-            }
-            out.push({ key: k, kind: 'object' });
-            continue;
-        }
-        out.push({ key: k, kind: 'scalar', from: a, to: b });
-    }
-    // 排序：用户最关心的字段在前
-    const PRIORITY = [
-        'temperature', 'top_p', 'top_k', 'min_p', 'top_a', 'tfs',
-        'frequency_penalty', 'presence_penalty', 'repetition_penalty',
-        'reasoning_effort', 'show_thoughts',
-        'max_context_unlocked', 'openai_max_tokens', 'openai_max_context',
-        'stream_openai',
-        'function_calling', 'request_images',
-        // 角色行为 / Character Behavior 栏目
-        'names_behavior', 'continue_prefill', 'continue_postfix',
-        'squash_system_messages', 'wrap_in_quotes',
-        'assistant_prefill', 'assistant_impersonation',
-        'use_sysprompt', 'media_inlining', 'inline_image_quality',
-        'enable_web_search', 'send_if_empty', 'verbosity',
-        'request_image_aspect_ratio', 'request_image_resolution',
-    ];
-    out.sort((a, b) => {
-        const ai = PRIORITY.indexOf(a.key);
-        const bi = PRIORITY.indexOf(b.key);
-        if (ai !== bi) {
-            if (ai < 0) return 1;
-            if (bi < 0) return -1;
-            return ai - bi;
-        }
-        return a.key.localeCompare(b.key);
-    });
-    return out;
-}
-
-function deepEqualStrict(a, b) {
-    if (a === b) return true;
-
-    // 阶段7：空值归一化 —— 将 null / undefined / '' 统一视为等价的"空值"
-    // ST 内部字段在不存在时可能是 undefined，在预设重建后又变成 ""，
-    // 这导致 deepEqualStrict 将 undefined 和 "" 视为不等，产生"从空变为X"的无意义变更。
-    // 归一化后："" == null == undefined → 视为相同，不产生 diff。
-    const isNullish = (v) => v === null || v === undefined || v === '';
-    if (isNullish(a) && isNullish(b)) return true;
-    // 一个为空、另一个非空 → 不等
-    if (isNullish(a) || isNullish(b)) return false;
-
-    // AU-0: 数字/字符串类型宽松比较
-    // ST 内部的数值字段会在 number 和 string 之间波动（如 2000000 vs "2000000"），
-    // 旧快照可能存了字符串、新快照经 normalizeScalarTypes 后已是数字。
-    // 将两者视为相同，避免产生虚假 diff（如"从2万变2万"）。
-    if (typeof a !== typeof b) {
-        if ((typeof a === 'number' || typeof a === 'string') &&
-            (typeof b === 'number' || typeof b === 'string')) {
-            // 两者都是数字或能安全转换为数字时比较数值
-            const na = Number(a);
-            const nb = Number(b);
-            if (Number.isFinite(na) && Number.isFinite(nb) && na === nb) return true;
-            // 如果不是数字，按字符串比较
-            if (String(a) === String(b)) return true;
-        }
-        return false;
-    }
-    if (typeof a !== 'object') return a === b;
-    return stableStringify(a) === stableStringify(b);
+    return comparePresetStates(prev, curr, { apiId }).summary;
 }
 
 async function ensureStore() {
@@ -707,31 +298,15 @@ function trimListWithPinned(list, max) {
  * @returns {Promise<object|null>} 创建的快照（跳过时返回 null）
  */
 export function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.AUTO) {
-    return _historyMutations.run(() => addSnapshotMutation(presetName, apiId, preset, trigger));
+    const captured = structuredClone(preset);
+    return _historyMutations.run(() => addSnapshotMutation(presetName, apiId, captured, trigger));
 }
 
 async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.AUTO) {
     await ensureStore();
 
-    if (!presetName || !apiId || !preset) {
-        logger.warn('addSnapshot: invalid params', { presetName, apiId, hasPreset: !!preset });
-        return null;
-    }
-
-    // 空预设保护：避免存入 {} 这类无效快照
-    if (typeof preset !== 'object' || Array.isArray(preset)) {
-        logger.warn(`addSnapshot: preset is not a plain object, type=${typeof preset}`);
-        return null;
-    }
-    const canonicalPreset = sanitizePresetForExport(preset, { apiId });
-    const presetKeys = Object.keys(canonicalPreset);
-    if (presetKeys.length < 5) {
-        logger.warn(
-            `addSnapshot: rejecting preset with only ${presetKeys.length} fields ` +
-            `(${presetKeys.slice(0, 5).join(',')}). This is likely a bad snapshot from a broken read.`
-        );
-        return null;
-    }
+    if (!presetName || !apiId) throw new TypeError('Snapshot requires a stable preset target');
+    const canonicalPreset = requireCanonicalPreset(preset, { apiId });
 
     const key = makeKey(apiId, presetName);
     const list = await readHistoryBucket(_store, key);
@@ -744,15 +319,17 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
     // 1. 去重: 与最新一条相同则跳过
     //   manual trigger 不受 skipUnchangedSave 限制 —— 用户明确要求"立即快照"时
     //   不应该被静默跳过（resetLastSavedHash 已重置内部 hash，但 store 层也应放行）
-    const previousCanonicalHash = list.length > 0
-        ? hashPreset(list[0]?.preset, apiId)
-        : '';
+    // Persisted hashes are legacy metadata, not proof of canonical equality.
+    const previousPreset = list[0]?.preset;
+    const previousCanonicalContent = previousPreset && typeof previousPreset === 'object'
+        ? stableStringify(sanitizePresetForExport(previousPreset, { apiId }))
+        : null;
     if (
         settings.skipUnchangedSave
         && trigger !== TRIGGER.MANUAL
         && trigger !== TRIGGER.RESTORE
         && list.length > 0
-        && (list[0].hash === hash || previousCanonicalHash === hash)
+        && previousCanonicalContent === presetStr
     ) {
         logger.debug(`Snapshot skipped (unchanged): ${presetName}`);
         return null;
@@ -783,6 +360,8 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
                 timestamp: now,
                 preset: structuredClone(canonicalPreset),
                 hash,
+                canonicalHash: hash,
+                contractVersion: PRESET_CONTRACT_VERSION,
                 size,
                 summary: mergedSummary,
             };
@@ -803,6 +382,8 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
         trigger,
         preset: structuredClone(canonicalPreset),
         hash,
+        canonicalHash: hash,
+        contractVersion: PRESET_CONTRACT_VERSION,
         size,
         summary,
         name: '',          // 用户自定义名（"跑通了！"等），默认空
@@ -845,12 +426,7 @@ function describeSummaryForLog(summary) {
 
 /** 复用 hashPreset 但避免再次序列化 */
 function computeHashFromString(str) {
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) {
-        hash ^= str.charCodeAt(i);
-        hash = (hash * 0x01000193) >>> 0;
-    }
-    return hash.toString(36);
+    return hashPresetSerialization(str);
 }
 
 /**
@@ -899,11 +475,11 @@ async function syncCatalogBucketAfterCommit(key, snapshots) {
     }
     try {
         if (Array.isArray(snapshots) && snapshots.length > 0) {
-            await _catalog.replaceBucket(target.apiId, target.presetName, snapshots);
+            await _catalog.replaceBucket(target.apiId, target.presetName, snapshots, { includeSummaries: false });
         } else {
-            await _catalog.removeBucket(target.apiId, target.presetName);
+            await _catalog.removeBucket(target.apiId, target.presetName, { includeSummaries: false });
         }
-        _catalogRuntimeVerified = _catalog.read().status === 'ready';
+        _catalogRuntimeVerified = _catalog.readState().status === 'ready';
     } catch (error) {
         _catalogRuntimeVerified = false;
         logger.warn('History catalog sync failed after authoritative commit', {
@@ -924,7 +500,7 @@ async function syncCatalogBucketAfterMigration(key, snapshots) {
         return;
     }
     try {
-        await _catalog.replaceBucket(target.apiId, target.presetName, snapshots);
+        await _catalog.replaceBucket(target.apiId, target.presetName, snapshots, { includeSummaries: false });
     } catch (error) {
         _catalogRuntimeVerified = false;
         await _catalog.markDirty('CATALOG_MIGRATION_SYNC_FAILED');
@@ -983,13 +559,13 @@ export function ensureHistoryCatalog({ onProgress = () => {}, signal } = {}) {
     _catalogBuildAbortController = internalAbortController;
     const buildSignal = combineAbortSignals(signal, internalAbortController.signal);
     const operation = _historyMutations.run(async () => {
-        const current = catalog.read();
-        if (_catalogRuntimeVerified && current.status === 'ready') return current;
+        const current = catalog.readState();
+        if (_catalogRuntimeVerified && current.status === 'ready') return catalog.read();
 
         const sourceManifest = await store.getCatalogManifest();
         if (catalog.matchesSourceManifest(sourceManifest)) {
             _catalogRuntimeVerified = true;
-            return current;
+            return catalog.read();
         }
         if (current.status === 'ready') {
             await catalog.markDirty('CATALOG_SOURCE_CHANGED');
@@ -1061,7 +637,7 @@ export async function getAllSnapshots() {
  */
 export async function getSnapshotById(snapshotId) {
     await ensureStore();
-    const catalogMatch = _catalog?.read().summaries.find(summary => summary.id === snapshotId);
+    const catalogMatch = _catalog?.findSummary(snapshotId);
     const catalogKey = catalogMatch
         ? makeKey(catalogMatch.apiId, catalogMatch.presetName)
         : null;
@@ -1386,9 +962,8 @@ async function clearAllMutation() {
 }
 
 /**
- * 清理所有"损坏"的快照（preset 为空或字段过少）
- * 这些通常是早期 bug 留下的污染数据
- * @returns {Promise<{cleaned: number, scanned: number}>}
+ * Inspect suspect snapshots without deleting unverified recovery data.
+ * @returns {Promise<{cleaned: number, scanned: number, quarantined: number}>}
  */
 export function cleanCorruptSnapshots() {
     return _historyMutations.run(cleanCorruptSnapshotsMutation);
@@ -1397,34 +972,24 @@ export function cleanCorruptSnapshots() {
 async function cleanCorruptSnapshotsMutation() {
     await ensureStore();
     const keys = await getKeys(true);
-    let cleaned = 0;
+    const cleaned = 0;
     let scanned = 0;
+    let quarantined = 0;
 
     // 性能优化：并行读取，但写入仍按顺序避免并发冲突
     const lists = await readHistoryBuckets(_store, keys);
     for (let i = 0; i < keys.length; i++) {
         const list = lists[i] || [];
         scanned += list.length;
-        const filtered = list.filter(s => {
-            if (!s || !s.preset || typeof s.preset !== 'object') return false;
-            const fieldCount = Object.keys(s.preset).length;
-            return fieldCount >= 5;
-        });
-        const removed = list.length - filtered.length;
-        if (removed > 0) {
-            cleaned += removed;
-            if (filtered.length === 0) {
-                await _store.removeItem(keys[i]);
-            } else {
-                await _store.setItem(keys[i], filtered);
-            }
+        for (const snapshot of list) {
+            try { requireCanonicalPreset(snapshot?.preset, { apiId: snapshot?.apiId }); }
+            catch (_) { quarantined++; }
         }
     }
 
     invalidateKeysCache();
-    if (cleaned > 0) await markCatalogDirtyAfterCommit('CATALOG_CLEANUP');
-    logger.info(`Cleanup: removed ${cleaned} corrupt snapshots out of ${scanned} scanned`);
-    return { cleaned, scanned };
+    logger.info(`History inspection: ${quarantined} records need review out of ${scanned}; all recovery data preserved`);
+    return { cleaned, scanned, quarantined };
 }
 
 /**

@@ -23,10 +23,10 @@ function fakeDot(initialClasses = []) {
 test('status indicator exposes every state visually and accessibly', () => {
     const dot = fakeDot(['pas-status-dot', 'pas-status-idle', 'pas-status-pending']);
 
-    for (const state of ['pending', 'saving', 'saved', 'error', 'idle']) {
+    for (const state of ['pending', 'saving', 'saved', 'error', 'partial', 'idle']) {
         assert.equal(applyStatusIndicatorState(dot, state, `label:${state}`), true);
         assert.equal(dot.classList.contains(`pas-status-${state}`), true);
-        assert.equal(dot.classes.filter(name => /^pas-status-(idle|pending|saving|saved|error)$/.test(name)).length, 1);
+        assert.equal(dot.classes.filter(name => /^pas-status-(idle|pending|saving|saved|error|partial)$/.test(name)).length, 1);
         assert.equal(dot.dataset.status, state);
         assert.equal(dot.title, `label:${state}`);
         assert.equal(dot.attributes.get('aria-label'), `label:${state}`);

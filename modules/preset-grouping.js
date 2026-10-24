@@ -24,6 +24,7 @@
  */
 
 import { logger } from './logger.js';
+import { projectPresetGroups } from './core/group-projection.js';
 
 // =====================================================
 // 全角 → 半角字符归一化映射表
@@ -986,57 +987,14 @@ export function pickRepresentativeVersion(seriesKey, items, seriesDefaultApply =
  */
 export function groupNamesBySeries(names, overrides = null, aliases = null) {
     if (!Array.isArray(names) || names.length === 0) return [];
-
-    // normKey -> { displayName, items[] }
-    // 用归一化键归并不同大小写的同系列；显示名沿用第一次出现的版本
-    const map = new Map();
-    for (const n of names) {
-        const info = getSeriesInfo(n, overrides);
-        const series = info.series || n;
-        const normKey = normalizeSeriesKey(series);
-
-        if (!map.has(normKey)) {
-            map.set(normKey, { displayName: series, items: [] });
-        }
-        map.get(normKey).items.push({
-            presetName: n,
-            version: info.version,
-            duplicate: info.duplicate,
-            kind: info.kind,
-            manualOverride: info.manualOverride,
-        });
-    }
-
-    // 每个系列内按版本排序（新版本排前面）
-    const groups = [];
-    for (const [canonicalKey, { displayName: automaticName, items }] of map.entries()) {
-        items.sort((a, b) => compareVersion(b.version, a.version));
-        const resolved = resolveSeriesDisplayName(automaticName, aliases);
-        groups.push({
-            key: canonicalKey,
-            canonicalKey,
-            automaticName,
-            displayName: resolved.displayName,
-            series: resolved.displayName,
-            customized: resolved.customized,
-            items,
-        });
-    }
-    const displayCounts = new Map();
-    for (const group of groups) {
-        const key = normalizeSeriesKey(group.displayName);
-        displayCounts.set(key, (displayCounts.get(key) || 0) + 1);
-    }
-    for (const group of groups) {
-        if (!group.customized) continue;
-        if ((displayCounts.get(normalizeSeriesKey(group.displayName)) || 0) < 2) continue;
-        group.displayName = group.automaticName;
-        group.series = group.automaticName;
-        group.customized = false;
-    }
-    // 系列名 A→Z
-    groups.sort((a, b) => a.series.localeCompare(b.series));
-    return groups;
+    return projectPresetGroups(
+        [...new Set(names)].map(presetName => ({ presetName, ...getSeriesInfo(presetName, overrides) })),
+        {
+            normalize: normalizeSeriesKey,
+            resolveName: name => resolveSeriesDisplayName(name, aliases),
+            compareVersion,
+        },
+    );
 }
 
 /** Find a visible group by its automatic identity for safe import assignment. */
@@ -1082,8 +1040,7 @@ export function findSeriesAssignment(candidate, groups = []) {
 export function groupSnapshotsBySeries(snapshots, options = {}) {
     const overrides = options.overrides || null;
     const aliases = options.aliases || null;
-    // seriesMap 的 key 仍然是"显示名"（首次出现的大小写形式）
-    // 但归并查找用归一化键，避免 "mur API" 与 "Mur API" 分两组
+    // Canonical keys remain stable across aliases and display-name conflicts.
     const seriesMap = new Map();
     const normToDisplay = new Map();  // normKey → displayName
 
@@ -1114,16 +1071,17 @@ export function groupSnapshotsBySeries(snapshots, options = {}) {
         }
         const automaticName = normToDisplay.get(normKey);
         const resolved = resolvedGroups.get(normKey) || resolveSeriesDisplayName(automaticName, aliases);
-        const seriesKey = resolved.displayName || resolved.series;
+        const displayName = resolved.displayName || resolved.series;
+        const seriesKey = normKey;
         const versionKey = `${apiId}::${presetName}`;
 
         let series = seriesMap.get(seriesKey);
         if (!series) {
             series = {
-                series: seriesKey,
+                series: displayName,
                 canonicalKey: normKey,
                 automaticName,
-                displayName: seriesKey,
+                displayName,
                 customized: resolved.customized,
                 _versionMap: new Map(),
                 versions: [],

@@ -54,7 +54,7 @@ import {
     escapeHtml, escapeAttr, formatTime,
 } from './panel-summary.js';
 import {
-    renderSettingsTab, renderLogTab,
+    renderSettingsTab, renderLogTab, disposeSettingsMount,
     updateLogBadge, updateStats,
     onLogClear, onLogCopy, onLogExport,
     onCleanup, onExport, onImport,
@@ -65,7 +65,7 @@ import {
     renderSeriesView, renderFlatView, renderEmptyState,
 } from './panel-list-render.js';
 import {
-    presetKey, parsePresetKey, groupSnapshotsByPreset, applyFiltersAndSearch,
+    presetKey, parsePresetKey, groupSnapshotsByPreset, applyFiltersAndSearch, resolveSeriesExpansion,
 } from './panel-list-model.js';
 import {
     handleListClick as _handleListClick,
@@ -150,7 +150,8 @@ function newState() {
         diffSel: { a: null, b: null },
         log: { level: 'all', search: '', autoScroll: true },
         batchMode: false,           // AR-0: 批量模式
-        batchSelected: new Set(),   // AR-0: 批量选中的预设名
+        batchSelected: new Set(),   // Stable apiId::presetName targets.
+        batchApiId: null,
         _cachedSeriesMap: null,     // 性能优化：缓存 groupSnapshotsBySeries() 结果，避免 loadData→render 重复计算
     };
 }
@@ -358,6 +359,7 @@ export function mountHistoryPanel(root, { loadDataset = loadPanelDataset } = {})
 
 export function disposeHistoryPanelMount(root = _root) {
     if (!_root || (root && root !== _root)) return false;
+    disposeSettingsMount(_root);
     _panelMountGeneration++;
     if (_logUnsubscribe) {
         try { _logUnsubscribe(); } catch (_) {}
@@ -506,15 +508,11 @@ async function loadData({ mountGeneration = _panelMountGeneration } = {}) {
         const expandMode = settings.groupingDefaultExpand || 'none';
 
         if (expandMode === 'all') {
-            for (const k of seriesMap.keys()) _state.expandedSeries.add(k);
+            const { seriesKeys } = resolveSeriesExpansion(_state.snapshots, _panelCtx());
+            for (const key of seriesKeys) _state.expandedSeries.add(key);
         } else if (expandMode === 'current') {
-            // O-1: 'current' 模式仅展开当前预设所在的系列，不再展开所有多版本系列
-            for (const [k, info] of seriesMap.entries()) {
-                const isCurrent = curName && info.versions.some(v => v.apiId === curApi && v.presetName === curName);
-                if (isCurrent) {
-                    _state.expandedSeries.add(k);
-                }
-            }
+            const { seriesKeys } = resolveSeriesExpansion(_state.snapshots, _panelCtx(), { currentOnly: true });
+            for (const key of seriesKeys) _state.expandedSeries.add(key);
         }
         // none → 不预展开
     }
@@ -685,18 +683,11 @@ function bindEvents() {
     $('.pas-btn-expand-all')?.addEventListener('click', () => {
         const filtered = applyFiltersAndSearch(_state.snapshots, _panelCtx());
         if (_state.viewMode === 'series') {
-            const settings = getSettings();
-                const seriesMap = groupSnapshotsBySeries(filtered, {
-                    overrides: settings.groupingManualOverrides,
-                    aliases: settings.groupingSeriesAliases,
-                });
-            for (const [seriesKey, info] of seriesMap.entries()) {
-                _state.expandedSeries.add(seriesKey);
-                for (const ver of info.versions) {
-                    const key = presetKey(ver.apiId, ver.presetName);
-                    _state.expandedVersions.add(key);
-                    _state.snapshotRenderLimits.set(key, BULK_SNAPSHOT_RENDER_LIMIT);
-                }
+            const { seriesKeys, versionKeys } = resolveSeriesExpansion(filtered, _panelCtx());
+            for (const key of seriesKeys) _state.expandedSeries.add(key);
+            for (const key of versionKeys) {
+                _state.expandedVersions.add(key);
+                _state.snapshotRenderLimits.set(key, BULK_SNAPSHOT_RENDER_LIMIT);
             }
         } else {
             const presets = groupSnapshotsByPreset(filtered);
@@ -718,6 +709,7 @@ function bindEvents() {
     $('.pas-btn-batch-toggle')?.addEventListener('click', () => {
         _state.batchMode = !_state.batchMode;
         _state.batchSelected.clear();
+        _state.batchApiId = getCurrentApiId();
         updateBatchUI();
         renderListTab();
     });
@@ -725,9 +717,9 @@ function bindEvents() {
     $('.pas-btn-batch-select-all')?.addEventListener('click', () => {
         if (!_root) return;
         _root.querySelectorAll('.pas-batch-checkbox').forEach(cb => {
-            const name = cb.getAttribute('data-preset-name');
-            if (name && !cb.disabled) {
-                _state.batchSelected.add(name);
+            const key = cb.getAttribute('data-preset-key');
+            if (key && !cb.disabled) {
+                _state.batchSelected.add(key);
                 cb.checked = true;
             }
         });
@@ -743,10 +735,9 @@ function bindEvents() {
     });
     // AR-0: 批量删除
     $('#pas-batch-delete-btn')?.addEventListener('click', async () => {
-        const apiId = getCurrentApiId();
-        const names = Array.from(_state.batchSelected);
-        if (!names.length) return;
-        const count = await _onBatchDeletePresets(names, apiId);
+        const targets = Array.from(_state.batchSelected, parsePresetKey);
+        if (!targets.length) return;
+        const count = await _onBatchDeletePresets(targets);
         if (count > 0) {
             _state.batchMode = false;
             _state.batchSelected.clear();
@@ -762,10 +753,10 @@ function bindEvents() {
             // AR-0: 批量模式下拦截 checkbox 点击
             const cb = e.target.closest('.pas-batch-checkbox');
             if (cb && _state.batchMode) {
-                const name = cb.getAttribute('data-preset-name');
-                if (name) {
-                    if (cb.checked) _state.batchSelected.add(name);
-                    else _state.batchSelected.delete(name);
+                const key = cb.getAttribute('data-preset-key');
+                if (key) {
+                    if (cb.checked) _state.batchSelected.add(key);
+                    else _state.batchSelected.delete(key);
                     updateBatchUI();
                 }
                 return;
@@ -799,8 +790,12 @@ function bindEvents() {
     }
     $$('.pas-log-filter').forEach(btn => {
         btn.addEventListener('click', () => {
-            $$('.pas-log-filter').forEach(b => b.classList.remove('pas-filter-active'));
+            $$('.pas-log-filter').forEach(b => {
+                b.classList.remove('pas-filter-active');
+                b.setAttribute('aria-pressed', 'false');
+            });
             btn.classList.add('pas-filter-active');
+            btn.setAttribute('aria-pressed', 'true');
             _state.log.level = btn.getAttribute('data-level');
             renderLogTab(_panelCtx());
         });
@@ -835,6 +830,11 @@ function bindEvents() {
     // ⚡ 订阅预设切换事件 → 实时更新"当前预设"金色高亮
     //   不重新加载所有快照（避免性能问题），只重新渲染列表
     const onPresetChanged = () => {
+        if (_state.batchApiId !== getCurrentApiId()) {
+            _state.batchSelected.clear();
+            _state.batchApiId = getCurrentApiId();
+            updateBatchUI();
+        }
         if (_panelPresetRefreshTimer) {
             clearTimeout(_panelPresetRefreshTimer);
             _panelPresetRefreshTimer = null;
@@ -952,7 +952,7 @@ function _renderListTabImpl({ reuseViewCache = false } = {}) {
     };
 
     const filtered = applyFiltersAndSearch(_state.snapshots, _panelCtx());
-    if (filtered.length === 0) {
+    if (filtered.length === 0 && _state.viewMode !== 'series') {
         list.innerHTML = renderEmptyState(_panelCtx());
         updateBadge(0);
         restoreInteractionPosition();
@@ -1250,48 +1250,44 @@ function updateBatchUI() {
     }
 
     // 注入/移除复选框
-    _root.querySelectorAll('.pas-version-group').forEach(vg => {
-        const presetName = vg.getAttribute('data-preset-name');
-        if (!presetName) return;
-        const header = vg.querySelector('.pas-version-header-row-title');
+    _root.querySelectorAll('.pas-version-group, .pas-preset-group').forEach(vg => {
+        const key = vg.getAttribute('data-version-key') || vg.getAttribute('data-preset-key')
+            || vg.querySelector('[data-preset-key]')?.getAttribute('data-preset-key');
+        const target = key ? parsePresetKey(key) : {
+            apiId: vg.getAttribute('data-api-id'),
+            presetName: vg.getAttribute('data-preset-name'),
+        };
+        const { apiId, presetName } = target;
+        if (!apiId || !presetName) return;
+        const targetKey = presetKey(apiId, presetName);
+        const header = vg.querySelector('.pas-version-header-row-title, .pas-preset-header');
         if (!header) return;
 
-        // 移除旧的
-        header.querySelectorAll('.pas-batch-checkbox').forEach(el => el.remove());
-
-        if (_state.batchMode) {
+        let cb = header.querySelector('.pas-batch-checkbox');
+        if (!_state.batchMode) {
+            cb?.remove();
+        } else {
             const currentPreset = getSelectedPresetName();
-            const isCurrent = presetName === currentPreset;
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.className = 'pas-batch-checkbox';
-            cb.setAttribute('data-preset-name', presetName);
-            cb.checked = _state.batchSelected.has(presetName);
-            if (isCurrent) {
-                cb.disabled = true;
-                cb.title = t('Delete Preset Current Warning');
+            const isCurrent = apiId === getCurrentApiId() && presetName === currentPreset;
+            if (!cb) {
+                cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'pas-batch-checkbox';
+                header.insertBefore(cb, header.firstChild);
             }
-            // 阻止 checkbox 点击触发折叠
-            // AT-1 fix: stopPropagation 会阻止事件到达 list 的委托处理器，
-            //   所以必须在此处直接更新批量选中状态和删除按钮
-            cb.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const pName = cb.getAttribute('data-preset-name');
-                if (pName) {
-                    if (cb.checked) _state.batchSelected.add(pName);
-                    else _state.batchSelected.delete(pName);
-                }
-                // 更新删除按钮文本和可用性（不调用完整的 updateBatchUI 避免重建复选框）
-                const delBtn = _root?.querySelector('#pas-batch-delete-btn');
-                if (delBtn) {
-                    const cnt = _state.batchSelected.size;
-                    const sp = delBtn.querySelector('span');
-                    if (sp) sp.textContent = t('Batch Delete Btn', { count: cnt });
-                    if (cnt > 0) delBtn.removeAttribute('disabled');
-                    else delBtn.setAttribute('disabled', 'disabled');
-                }
-            });
-            header.insertBefore(cb, header.firstChild);
+            cb.setAttribute('data-preset-name', presetName);
+            cb.setAttribute('data-api-id', apiId);
+            cb.setAttribute('data-preset-key', targetKey);
+            cb.setAttribute('aria-label', t('Select Preset', { name: presetName }));
+            cb.checked = _state.batchSelected.has(targetKey);
+            cb.disabled = isCurrent;
+            if (isCurrent) {
+                cb.title = t('Delete Preset Current Warning');
+                _state.batchSelected.delete(targetKey);
+                cb.checked = false;
+            } else {
+                cb.title = presetName;
+            }
         }
     });
 }

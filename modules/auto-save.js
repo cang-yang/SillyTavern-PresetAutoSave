@@ -12,7 +12,7 @@
  *   - 切换预设期间忽略输入（_ignoreInput）+ 自动超时重置
  *   - 内部保存中标志（_isInternalSave）防递归
  *   - 排除敏感字段（API Key 等）
- *   - 哈希去重 + 详细诊断日志
+ *   - 规范化内容去重 + 详细诊断日志
  */
 
 import { logger } from './logger.js';
@@ -27,23 +27,27 @@ import {
     getStoredPresetSnapshot,
     getPresetManager,
     savePresetSafe,
+    deletePresetSafe,
     syncPresetToMemory,
-    sanitizePresetForExport,
     toast,
     t,
 } from './compatibility.js';
 import { addSnapshot, TRIGGER, hashPreset } from './history-store.js';
-import { seedSnapshotForPreset } from './preset-takeover.js';
+import { seedSnapshotForPreset, cancelPresetSeeding, allowPresetSeeding } from './history-seeding.js';
+import { canonicalizePreset, requireCanonicalPreset } from './core/preset-schema.js';
+import { stableStringify } from './core/value-utils.js';
 import { SaveCoordinator, sameSaveTarget } from './core/save-coordinator.js';
 import { shouldAcceptUserMutation } from './core/input-gate.js';
 import { getDeferredSaveDelay } from './core/deferred-save.js';
-import { commitPresetSave, PresetSaveTransactionError } from './core/save-transaction.js';
+import { PresetSaveTransactionError } from './core/save-transaction.js';
+import { assessSaveCompletion } from './core/save-completion.js';
+import { executePresetWrite, prepareRestoreCommand } from './core/preset-write-commands.js';
 import { createJsonFingerprint } from './core/json-fingerprint.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
-import { observeNativePresetSaves } from './core/native-preset-save-observer.js';
+import { observeNativePresetSaves } from './host/native-preset-save-observer.js';
 import { resolveNativePresetSaveTarget } from './core/native-preset-save-target.js';
 import { PRESET_WATCH_SELECTORS, isInsidePresetWatchArea } from './core/preset-dom-watch.js';
-import { getSaveStatus, setSaveStatus } from './core/save-status.js';
+import { setSaveStatus } from './core/save-status.js';
 import { classifyCoordinatorResult } from './core/save-outcome.js';
 import { createPresetSwitchConvergence } from './core/preset-switch-convergence.js';
 
@@ -69,35 +73,15 @@ const EXCLUDED_ID_PREFIXES = [
 // =====================================================
 // 状态指示器接口（由 ui-injector 注册）
 // =====================================================
-let _statusSetter = () => {};
-
 function _setStatus(state) {
-    if (!setSaveStatus(state)) return;
-    try {
-        _statusSetter(state);
-    } catch (error) {
-        logger.debug('Status observer failed:', error);
-    }
-}
-
-/**
- * 注册状态指示器更新函数（供 ui-injector 调用）
- */
-export function registerStatusSetter(fn) {
-    if (typeof fn === 'function') {
-        _statusSetter = fn;
-        try {
-            fn(getSaveStatus());
-        } catch (error) {
-            logger.debug('Initial status observer failed:', error);
-        }
-    }
+    setSaveStatus(state);
 }
 
 // =====================================================
 // 内部状态
 // =====================================================
 let _initialized = false;
+let _closing = false;
 let _enabled = false;
 let _debounceTimer = null;
 
@@ -106,11 +90,16 @@ let _ignoreInputTimer = null;      // 自动重置定时器，防止永久卡死
 let _isInternalSave = false;       // 内部保存中（防递归）
 let _saveCoordinator = null;       // 单写入者：串行化所有预设写入
 let _saveRevision = 0;             // 单调递增请求版本
+let _mutationGeneration = 0;
+let _restoreRequests = 0;
 const _latestRevisionByTarget = new Map();
 const _retryAttemptsByTarget = new Map();
+const _deletedTargets = new Map();
+const _deleteCallbacks = new Map();
 let _restoreInProgress = false;    // AL-1: 原子恢复操作进行中（抑制所有事件副作用）
 let _dirty = false;                // 是否有未保存的修改
 let _lastSavedHash = null;         // 最后保存的内容哈希
+let _lastSavedContent = null;      // Exact canonical content; short hashes are diagnostic only.
 let _lastQuickFingerprint = null;  // 快速预检指纹（轻量级，避免每次做完整深拷贝+hash）
 let _suspendUntil = 0;             // SETTINGS_UPDATED 风暴期间临时挂起，用 Date.now()
 let _suspendNoticeShown = false;   // 在挂起期内只 log 一次，避免日志爆量
@@ -144,8 +133,8 @@ const _stats = {
     saved: 0,
     skippedUnchanged: 0,
     aborted: 0,
-    switchGuardSaved: 0,    // switch_guard 真实保存次数（hash != lastSavedHash）
-    switchGuardSkipped: 0,  // switch_guard 静默跳过次数（hash 一致 / 不脏）
+    switchGuardSaved: 0,    // switch_guard 真实保存次数（规范化内容不同）
+    switchGuardSkipped: 0,  // switch_guard 静默跳过次数（内容一致 / 不脏）
 };
 
 // =====================================================
@@ -158,6 +147,7 @@ export async function initAutoSave() {
     }
 
     _initialized = true;
+    _closing = false;
     _noChangeCount = 0;
 
     // 记录当前预设
@@ -168,6 +158,7 @@ export async function initAutoSave() {
     const initialPreset = getPresetSnapshot();
     if (initialPreset) {
         _lastSavedHash = hashPreset(initialPreset, _currentApiId);
+        _lastSavedContent = serializeCanonicalContent(initialPreset, _currentApiId);
         _lastQuickFingerprint = _computeQuickFingerprint(_currentApiId);
         const keys = Object.keys(initialPreset).length;
         logger.debug(
@@ -189,6 +180,7 @@ export async function initAutoSave() {
     bindPresetEvents();
     _nativeSaveUnsubscribe = observeNativePresetSaves({
         onSaved: recordNativeManualSave,
+        captureContext: () => ++_saveRevision,
         onError: error => logger.error('Native manual preset snapshot failed:', error),
         shouldCapture: () => !_isInternalSave && !_restoreInProgress,
     });
@@ -275,8 +267,9 @@ function startPolling() {
             const preset = getPresetSnapshot();
             if (!preset) return;
             const h = hashPreset(preset, _currentApiId);
-            if (_lastSavedHash && h !== _lastSavedHash) {
-                logger.debug(`[Polling] hash mismatch ${_lastSavedHash} -> ${h}, scheduling save`);
+            if (_lastSavedContent !== null
+                && serializeCanonicalContent(preset, _currentApiId) !== _lastSavedContent) {
+                logger.debug(`[Polling] content changed (hash ${_lastSavedHash} -> ${h}), scheduling save`);
                 scheduleAutoSave(getSettings().debounceMs, 'polling');
             }
         } catch (e) {
@@ -465,6 +458,7 @@ function onElementInput(event) {
     // 滑块: 始终在 input 阶段不触发实际保存（拖动时频繁触发会卡）
     // 等 change 事件（即"松开"）再保存
     if (el.type === 'range') {
+        _mutationGeneration++;
         _dirty = true;
         _setStatus('pending');
         return;
@@ -735,7 +729,8 @@ function onPresetSelectChangeCapture(event) {
         return;
     }
     const liveHash = hashPreset(preset, _currentApiId);
-    if (_lastSavedHash && liveHash === _lastSavedHash) {
+    if (_lastSavedContent !== null
+        && serializeCanonicalContent(preset, _currentApiId) === _lastSavedContent) {
         noteSwitchTrace('dom-capture:unchanged', { liveHash, lastSavedHash: _lastSavedHash });
         cancelPendingSave();
         _dirty = false;
@@ -762,6 +757,7 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified', { preserv
     // 切换中 / 内部保存中 / 未启用 / 原子恢复中 -> 静默忽略
     if (!_enabled) return;
     if (_restoreInProgress) return;
+    _mutationGeneration++;
     if (_ignoreInput) {
         if (preserveDuringSwitch) queueCompensationSave(reason);
         return;
@@ -878,6 +874,7 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
         _currentPresetName = presetName;
         _currentApiId = apiId;
         _lastSavedHash = null;
+        _lastSavedContent = null;
         _lastQuickFingerprint = null;
         _dirty = false;
         _setStatus('idle');
@@ -896,7 +893,7 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
     //    settings_updated 是"高频无变化重复触发"的主要来源（ST 内部大量操作都会触发），
     //    快速预检在此场景下收益最高，且完整字符串比较不会采样漏检。
     const isSettingsUpdated = reason === 'settings_updated';
-    if (!explicitTarget && isSettingsUpdated && _lastSavedHash && _lastQuickFingerprint) {
+    if (!explicitTarget && isSettingsUpdated && _lastSavedContent !== null && _lastQuickFingerprint) {
         const qfp = _computeQuickFingerprint(apiId);
         if (qfp && qfp === _lastQuickFingerprint) {
             _noChangeCount++;
@@ -912,13 +909,8 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
         }
     }
 
-    const preset = presetOverride || getPresetSnapshot(presetName, { apiId });
-    if (!preset) {
-        logger.warn('Cannot read current preset:', presetName);
-        _setStatus('error');
-        _stats.aborted++;
-        return null;
-    }
+    const preset = requireCanonicalPreset(presetOverride || getPresetSnapshot(presetName, { apiId }), { apiId });
+    const canonicalContent = stableStringify(preset);
 
     // 计算 hash 并诊断
     const newHash = hashPreset(preset, apiId);
@@ -930,18 +922,7 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
     // 关键字段指纹（便于排查"toggle 改了但 hash 没变"这类幻觉）
     const fingerprint = computeFingerprint(preset);
 
-    // 异常预设检测：字段过少强烈暗示快照获取失败
-    if (fieldCount < 5) {
-        logger.warn(
-            `[doSave] Suspicious preset: only ${fieldCount} fields, reason=${reason}. ` +
-            `Snapshot may be incomplete. Aborting to avoid corruption.`
-        );
-        _stats.aborted++;
-        _setStatus('error');
-        return null;
-    }
-
-    if (_lastSavedHash && newHash === _lastSavedHash) {
+    if (_lastSavedContent !== null && canonicalContent === _lastSavedContent) {
         // 与上次比较没变化（可能是 SETTINGS_UPDATED 重复触发）
         // 仅在前 3 次相同 hash 内打日志，超出后采样降噪
         _noChangeCount++;
@@ -958,7 +939,13 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
     // 重置无变化计数器
     _noChangeCount = 0;
 
-    return { apiId, presetName, preset, newHash, fingerprint, fieldCount, promptCount, promptOrderCount };
+    return {
+        apiId, presetName, preset, newHash, canonicalContent, fingerprint, fieldCount, promptCount, promptOrderCount,
+        quickFingerprint: sameSaveTarget({ apiId, presetName }, {
+            apiId: getCurrentApiId(), presetName: getSelectedPresetName(),
+        }) ? _computeQuickFingerprint(apiId) : null,
+        mutationGeneration: _mutationGeneration,
+    };
 }
 
 function ensureSaveCoordinator() {
@@ -975,6 +962,7 @@ function saveTargetKey(target) {
 const SAVE_RETRY_DELAYS_MS = [1000, 3000, 8000];
 
 function scheduleFailedSaveRetry(request) {
+    if (request.kind === 'restore' || request.kind === 'native-observation') return;
     if (!_enabled || !_initialized) return;
     const key = saveTargetKey(request);
     const attempt = _retryAttemptsByTarget.get(key) || 0;
@@ -1010,22 +998,29 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
 
     // 在进入队列前冻结目标和数据。即使等待期间用户切换预设，
     // worker 也不会重新读取全局 UI 并把数据写到错误名称下。
-    await new Promise(resolve => setTimeout(resolve, 0));
-    // teardown/disable may run while the capture deferral yields to the event loop.
-    // Revalidate here so an old callback cannot create a fresh coordinator afterwards.
-    if (!_validateSaveConditions(reason, explicitTarget)) return detailed ? { status: 'unavailable' } : null;
-    const payload = _buildSavePayload(reason, explicitTarget);
+    let payload;
+    try {
+        payload = _buildSavePayload(reason, explicitTarget);
+    } catch (error) {
+        _stats.aborted++;
+        _setStatus('error');
+        if (detailed) return { status: 'failed', error };
+        throw error;
+    }
     if (!payload) return detailed ? { status: 'unavailable' } : null;
     return await submitSavePayload(payload, trigger, reason, { detailed });
 }
 
 async function submitSavePayload(payload, trigger, reason, { detailed = false } = {}) {
     const key = saveTargetKey(payload);
+    if (_deletedTargets.has(key)) return detailed ? { status: 'unavailable' } : null;
     if (!String(reason).startsWith('retry:')) _retryAttemptsByTarget.delete(key);
     const revision = ++_saveRevision;
     _latestRevisionByTarget.set(key, revision);
     const result = await ensureSaveCoordinator().enqueue({
         ...payload,
+        canonicalContent: payload.canonicalContent ?? stableStringify(payload.preset),
+        coalesce: payload.coalesce ?? trigger === TRIGGER.AUTO,
         trigger,
         reason,
         revision,
@@ -1034,7 +1029,7 @@ async function submitSavePayload(payload, trigger, reason, { detailed = false } 
     if (outcome.status === 'failed' || outcome.status === 'partial') {
         logger.error('Save coordinator worker failed:', outcome.error);
         if (sameSaveTarget(payload, { apiId: _currentApiId, presetName: _currentPresetName })) {
-            _setStatus('error');
+            _setStatus(outcome.status === 'partial' ? 'partial' : 'error');
         }
         scheduleFailedSaveRetry(outcome.request || result.request);
         return detailed ? outcome : null;
@@ -1047,6 +1042,19 @@ async function submitSavePayload(payload, trigger, reason, { detailed = false } 
 }
 
 async function executeSaveRequest(request) {
+    if (request.kind === 'delete') {
+        if (isProtectedDeletionTarget(request)) return { protected: true };
+        await cancelPresetSeeding(request);
+        if (isProtectedDeletionTarget(request)) return { protected: true };
+        const deleted = await deletePresetSafe(request.presetName, request.apiId);
+        if (deleted !== true) throw new Error('Host preset deletion was not confirmed');
+        try {
+            await _deleteCallbacks.get(request.revision)?.();
+        } catch (cleanupError) {
+            return { deleted: true, cleanupError };
+        }
+        return { deleted: true };
+    }
     const {
         trigger, reason, apiId, presetName, preset, newHash, fingerprint,
         fieldCount, promptCount, promptOrderCount,
@@ -1074,47 +1082,53 @@ async function executeSaveRequest(request) {
     }, SAVE_TIMEOUT_MS);
 
     try {
-        logger.debug(
-            `[doSave] Persisting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
-        );
+        try {
+            logger.debug(
+                `[doSave] Persisting reason=${reason} hash=${_lastSavedHash}->${newHash} fields=${fieldCount} prompts=${promptCount} order=${promptOrderCount} fp=${fingerprint}`
+            );
+        } catch (_) { /* Diagnostics cannot prevent persistence. */ }
 
-        const transaction = await commitPresetSave(request, {
-            persistPreset: () => savePresetSafe(presetName, preset, { skipUpdate: true, apiId }),
+        const transaction = await executePresetWrite(request, {
+            persistPreset: () => savePresetSafe(presetName, preset, { skipUpdate: request.kind !== 'restore', apiId }),
             syncMemory: () => syncPresetToMemory(presetName, preset, apiId),
             commitHistory: () => addSnapshot(presetName, apiId, preset, trigger),
         });
         const snapshot = transaction.snapshot;
 
-        if (!snapshot) {
-            // 预设已成功落盘；history store 判断无需新增记录。
-            if (isCurrentTarget()) {
-                _lastSavedHash = newHash;
-                _lastQuickFingerprint = _computeQuickFingerprint(apiId);
-                _dirty = false;
-                _setStatus('saved');
-            }
-            _stats.skippedUnchanged++;
-            return null;
-        }
-
         if (isCurrentTarget()) {
-            _lastSavedHash = snapshot.hash;
-            _lastQuickFingerprint = _computeQuickFingerprint(apiId);
-            _dirty = false;
-            _setStatus('saved');
+            const completion = assessSaveCompletion(request, {
+                liveFingerprint: _computeQuickFingerprint(apiId),
+                liveCanonicalContent: request.quickFingerprint == null
+                    ? serializeCanonicalContent(getLivePresetSnapshot(apiId), apiId) : null,
+                mutationGeneration: _mutationGeneration,
+                latestRevision: _latestRevisionByTarget.get(saveTargetKey(request)),
+            });
+            _lastSavedHash = snapshot?.hash || completion.committedHash;
+            _lastSavedContent = completion.committedCanonicalContent;
+            _lastQuickFingerprint = completion.committedFingerprint;
+            _dirty = completion.pending;
+            _setStatus(_dirty ? 'pending' : 'saved');
+            if (_dirty && !_debounceTimer && !_restoreInProgress) {
+                scheduleAutoSave(null, 'newer-edit-after-commit');
+            }
         } else {
             logger.debug(`[Saved] completion belongs to inactive target [${apiId}] ${presetName}; tracking state unchanged`);
+        }
+        if (!snapshot) {
+            _stats.skippedUnchanged++;
+            return null;
         }
         _stats.saved++;
 
         const settings = getSettings();
-        if (settings.notifyOnSave) {
-            toast.success(t('Saved Toast', { name: presetName }));
-        }
-
-        logger.info(
-            `[Saved] [${apiId}] ${presetName} (hash=${snapshot.hash}, size=${snapshot.size}, reason=${reason})`
-        );
+        try {
+            if (settings.notifyOnSave && request.kind !== 'restore') {
+                toast.success(t('Saved Toast', { name: presetName }));
+            }
+            logger.info(
+                `[Saved] [${apiId}] ${presetName} (hash=${snapshot.hash}, size=${snapshot.size}, reason=${reason})`
+            );
+        } catch (_) { /* Presentation cannot reverse a committed transaction. */ }
         return snapshot;
     } catch (e) {
         if (e instanceof PresetSaveTransactionError) {
@@ -1123,7 +1137,9 @@ async function executeSaveRequest(request) {
             logger.error('Save failed:', e);
         }
         if (isCurrentTarget()) _setStatus('error');
-        toast.error(t('Save Failed Toast', { message: e?.message || String(e) }));
+        try {
+            if (request.kind !== 'restore') toast.error(t('Save Failed Toast', { message: e?.message || String(e) }));
+        } catch (_) { /* Preserve the original transaction failure. */ }
         throw e;
     } finally {
         _isInternalSave = false;
@@ -1148,35 +1164,31 @@ export async function saveNowDetailed(trigger = TRIGGER.MANUAL) {
     return await doSave(trigger, 'manual', null, { detailed: true });
 }
 
-async function recordNativeManualSave({ apiId, name, preset }) {
+async function recordNativeManualSave({ apiId, name, preset }, capturedRevision = -1) {
     if (!_enabled || _restoreInProgress) return null;
 
     cancelPendingSave();
-    const coordinator = _saveCoordinator;
-    if (coordinator) await coordinator.whenIdle();
-
     const target = resolveNativePresetSaveTarget(
         { apiId, name },
         { apiId: _currentApiId, presetName: _currentPresetName },
     );
+    const key = saveTargetKey(target);
+    if (_deletedTargets.has(key)) {
+        const selected = { apiId: getCurrentApiId(), presetName: getSelectedPresetName() };
+        if (capturedRevision <= _deletedTargets.get(key) || !sameSaveTarget(target, selected)) return null;
+        _deletedTargets.delete(key);
+        allowPresetSeeding(target);
+    }
     // Native save payloads and live snapshots must share one canonical schema.
     // In particular ST keeps bias_presets outside the completion-preset file.
-    const canonicalPreset = sanitizePresetForExport(preset, { apiId: target.apiId });
-    const snapshot = await addSnapshot(target.presetName, target.apiId, canonicalPreset, TRIGGER.MANUAL);
-    if (!snapshot) return null;
-
-    if (sameSaveTarget(
-        target,
-        { apiId: _currentApiId, presetName: _currentPresetName },
-    )) {
-        _lastSavedHash = snapshot.hash;
-        _lastQuickFingerprint = _computeQuickFingerprint(target.apiId);
-        _dirty = false;
-        _setStatus('saved');
-    }
-    _stats.saved++;
-    logger.info(`[Native manual save] Snapshot recorded for [${target.apiId}] ${target.presetName}`);
-    return snapshot;
+    const canonicalPreset = requireCanonicalPreset(preset, { apiId: target.apiId });
+    return submitSavePayload({
+        ...target, preset: canonicalPreset,
+        newHash: hashPreset(canonicalPreset, target.apiId),
+        quickFingerprint: null,
+        mutationGeneration: _mutationGeneration,
+        kind: 'native-observation', coalesce: false,
+    }, TRIGGER.MANUAL, 'native-manual');
 }
 
 /**
@@ -1298,7 +1310,7 @@ function bindPresetEvents() {
     // ----- SETTINGS_UPDATED：所有内部 state 变化的可靠信号 -----
     const settingsUpdated = getEventType('SETTINGS_UPDATED', 'settings_updated');
     _eventUnsubscribers.push(on(settingsUpdated, () => {
-        if (!_enabled || _ignoreInput || _isInternalSave || _restoreInProgress) return;
+        if (!_enabled || _ignoreInput || _restoreInProgress) return;
         if (Date.now() < _suspendUntil) return;
         _stats.triggeredBySettingsUpdated++;
         logger.debug('[ST event] SETTINGS_UPDATED');
@@ -1309,9 +1321,9 @@ function bindPresetEvents() {
     // ----- OpenAI 专属切换前事件（最可靠的保护点）-----
     //
     // 设计理念：switch_guard 是"兜底保护"，不是"必须执行"。
-    //   1. 先看是否真的有未保存修改：用真实 hash 比较，而非 _dirty 标志
+    //   1. 先看是否真的有未保存修改：用规范化内容比较，而非 _dirty 标志
     //      （_dirty 仅表示"有过 input 事件"，但内容可能已被普通自动保存兜底了）
-    //   2. 只有 hash != lastSavedHash 才需要 switch_guard 保存
+    //   2. 只有规范化内容不同时才需要 switch_guard 保存
     //   3. 否则只设置 ignoreInput 跳过即可（高频切换场景几乎不写盘）
     const oaiBefore = getEventType('OAI_PRESET_CHANGED_BEFORE', 'oai_preset_changed_before');
     _eventUnsubscribers.push(on(oaiBefore, async (eventData = {}) => {
@@ -1348,9 +1360,9 @@ function bindPresetEvents() {
                 logger.debug('Switch guard skipped: not dirty, no pending save');
                 return;
             }
-            // 第三步：用真实 hash 判断"内容是否真变了"
+            // 第三步：用完整规范化内容判断"内容是否真变了"
             //   防止自动保存已经把内容写盘但 _dirty 还没复位的边缘情况
-            //   （正常情况：doSave 完成后 _dirty=false，hash 相等就跳过）
+            //   （正常情况：doSave 完成后 _dirty=false，内容相等就跳过）
             const preset = getPresetSnapshot(_currentPresetName, { apiId: _currentApiId });
             if (!preset) {
                 noteSwitchTrace('oai-before:lookup-failed-fallback', {
@@ -1366,13 +1378,14 @@ function bindPresetEvents() {
                 return;
             }
             const liveHash = hashPreset(preset, _currentApiId);
-            if (_lastSavedHash && liveHash === _lastSavedHash) {
+            if (_lastSavedContent !== null
+                && serializeCanonicalContent(preset, _currentApiId) === _lastSavedContent) {
                 // 内容跟上次保存一致：取消未触发的 debounce，纯跳过
                 _stats.switchGuardSkipped++;
                 noteSwitchTrace('oai-before:unchanged', { liveHash, lastSavedHash: _lastSavedHash });
                 cancelPendingSave();
                 _dirty = false;
-                logger.debug(`Switch guard skipped: hash unchanged (${liveHash})`);
+                logger.debug(`Switch guard skipped: canonical content unchanged (${liveHash})`);
                 return;
             }
 
@@ -1448,6 +1461,9 @@ function readSwitchCandidate() {
         apiId,
         presetName,
         preset,
+        canonicalContent: serializeCanonicalContent(preset, apiId),
+        storedCanonicalContent: serializeCanonicalContent(storedPreset, apiId),
+        quickFingerprint: _computeQuickFingerprint(apiId),
         liveHash: hashPreset(preset, apiId),
         storedHash: storedPreset ? hashPreset(storedPreset, apiId) : null,
     };
@@ -1458,9 +1474,8 @@ function finishSwitchConvergence(candidate) {
     _currentApiId = candidate.apiId;
     _currentPresetName = candidate.presetName;
     _lastSavedHash = candidate.verified ? candidate.liveHash : null;
-    _lastQuickFingerprint = candidate.verified
-        ? _computeQuickFingerprint(candidate.apiId)
-        : null;
+    _lastSavedContent = candidate.verified ? candidate.canonicalContent : null;
+    _lastQuickFingerprint = candidate.verified ? candidate.quickFingerprint : null;
     _suspendUntil = 0;
     setIgnoreInput(false);
 
@@ -1497,6 +1512,7 @@ function timeoutSwitchConvergence(result) {
     _currentApiId = getCurrentApiId() || result?.hint?.apiId || null;
     _currentPresetName = getSelectedPresetName() || result?.hint?.presetName || null;
     _lastSavedHash = null;
+    _lastSavedContent = null;
     _lastQuickFingerprint = null;
     _suspendUntil = 0;
     setIgnoreInput(false);
@@ -1580,97 +1596,93 @@ export function getCurrentTracking() {
  */
 export function resetLastSavedHash() {
     _lastSavedHash = null;
+    _lastSavedContent = null;
     _lastQuickFingerprint = null;
     _dirty = false;
     logger.warn('lastSavedHash forcibly reset');
 }
 
-/**
- * AL-1: 开始原子恢复操作。
- * 在此期间，所有自动保存事件处理器（SETTINGS_UPDATED、preset_changed、
- * OAI_PRESET_CHANGED_BEFORE/AFTER、DOM input/change、MAIN_API_CHANGED）
- * 均被完全屏蔽，不会产生任何副作用。
- *
- * 调用者必须确保在操作完成后调用 endAtomicRestore()。
- * 内置 10 秒超时自愈，防止异常导致永久卡住。
- */
-let _restoreAutoResetTimer = null;
-const RESTORE_TIMEOUT_MS = 10_000;
-
-export function beginAtomicRestore() {
-    _switchConvergence?.cancel();
-    _restoreInProgress = true;
+/** Restore is an immutable command on the same writer, never a timed lock. */
+export async function restoreSnapshotDetailed(target) {
+    if (!_initialized || _closing) return { status: 'unavailable' };
+    let command;
+    try {
+        command = prepareRestoreCommand(target, {
+            canonicalize: requireCanonicalPreset,
+            hashPreset,
+        });
+    } catch (error) {
+        return { status: 'failed', error };
+    }
+    const coordinator = ensureSaveCoordinator();
+    coordinator.cancelPending(request => sameSaveTarget(request, command)
+        && request.coalesce !== false && request.trigger === TRIGGER.AUTO);
     cancelPendingSave();
-    setIgnoreInput(true, RESTORE_TIMEOUT_MS + 1000);
-
-    // 超时自愈
-    if (_restoreAutoResetTimer) clearTimeout(_restoreAutoResetTimer);
-    _restoreAutoResetTimer = setTimeout(() => {
-        if (_restoreInProgress) {
-            logger.warn('Atomic restore auto-reset after timeout');
-            endAtomicRestore(null);
+    if (_suspendCompensationTimer) clearTimeout(_suspendCompensationTimer);
+    _suspendCompensationTimer = null;
+    _switchConvergence?.cancel();
+    _restoreRequests++;
+    _restoreInProgress = true;
+    setIgnoreInput(true, 0);
+    command.mutationGeneration = _mutationGeneration;
+    try {
+        return await submitSavePayload(command, TRIGGER.RESTORE, 'restore', { detailed: true });
+    } finally {
+        _restoreRequests--;
+        if (_restoreRequests === 0) {
+            _restoreInProgress = false;
+            _suspendUntil = 0;
+            setIgnoreInput(false);
         }
-    }, RESTORE_TIMEOUT_MS);
-
-    logger.debug('Atomic restore started — all event handlers suppressed');
+    }
 }
 
-/**
- * AL-1: 结束原子恢复操作，恢复正常事件处理。
- *
- * @param {string|null} hash - 恢复后预设的指纹哈希。
- *   传入具体 hash 值：将 _lastSavedHash 设为该值，表示"恢复后的状态就是已保存状态"
- *   传入 null：回退到 resetLastSavedHash 行为（强制下次认为有变化）
- * @param {object} [tracking] - 可选的跟踪信息更新
- * @param {string} [tracking.apiId] - 新的 API ID
- * @param {string} [tracking.presetName] - 新的预设名
- */
-export function endAtomicRestore(hash, tracking = null) {
-    if (_restoreAutoResetTimer) {
-        clearTimeout(_restoreAutoResetTimer);
-        _restoreAutoResetTimer = null;
+function isProtectedDeletionTarget(target) {
+    return sameSaveTarget(target, { apiId: getCurrentApiId(), presetName: getSelectedPresetName() })
+        || sameSaveTarget(target, { apiId: _currentApiId, presetName: _currentPresetName });
+}
+
+export async function deleteHostPresetDetailed(target, { afterDelete } = {}) {
+    if (!_initialized || _closing) return { status: 'unavailable' };
+    const request = { apiId: target?.apiId, presetName: target?.presetName, kind: 'delete', coalesce: false };
+    if (!request.apiId || !request.presetName) return { status: 'failed', error: new TypeError('Preset target is required') };
+    if (isProtectedDeletionTarget(request)) return { status: 'protected' };
+    const key = saveTargetKey(request);
+    const coordinator = ensureSaveCoordinator();
+    const revision = ++_saveRevision;
+    if (afterDelete !== undefined && typeof afterDelete !== 'function') {
+        return { status: 'failed', error: new TypeError('Deletion cleanup must be a function') };
     }
-
-    // 更新跟踪信息
-    if (tracking) {
-        if (tracking.apiId) _currentApiId = tracking.apiId;
-        if (tracking.presetName) _currentPresetName = tracking.presetName;
+    _deletedTargets.set(key, revision);
+    _latestRevisionByTarget.set(key, revision);
+    _retryAttemptsByTarget.delete(key);
+    coordinator.cancelPending(pending => sameSaveTarget(pending, request));
+    if (afterDelete) _deleteCallbacks.set(revision, afterDelete);
+    let result;
+    try {
+        result = await coordinator.enqueue({ ...request, revision });
+    } finally {
+        _deleteCallbacks.delete(revision);
     }
-
-    // 设置 hash：传入具体值表示"已保存"，null 表示强制下次变化
-    if (hash !== null && hash !== undefined) {
-        _lastSavedHash = hash;
-        _lastQuickFingerprint = _computeQuickFingerprint(_currentApiId);
-        logger.debug(`Atomic restore ended — hash set to ${hash}`);
-    } else {
-        _lastSavedHash = null;
-        _lastQuickFingerprint = null;
-        logger.debug('Atomic restore ended — hash reset to null');
+    if (result.status === 'committed' && result.value?.deleted === true) {
+        if (result.value.cleanupError) {
+            return { status: 'partial', deleted: true, target: request, error: result.value.cleanupError };
+        }
+        return { status: 'committed', deleted: true, target: request };
     }
-
-    _dirty = false;
-    _restoreInProgress = false;
-
-    // AM-0 P1b: 恢复后 2 秒抑制窗口，防止 PromptManager DOM 变化触发 doSave
-    // savePresetSafe(skipUpdate:false) 会让 ST 重新加载预设数据到 UI，
-    // PromptManager 重建 DOM 子树的 childList mutations 在此后数百毫秒内才完成。
-    // 与 OAI_PRESET_CHANGED_AFTER 的处理模式一致（参见 bindPresetEvents）。
-    const POST_RESTORE_SUSPEND_MS = 2000;
-    _suspendUntil = Date.now() + POST_RESTORE_SUSPEND_MS;
-    setIgnoreInput(true, POST_RESTORE_SUSPEND_MS + 500);
-    _runtimeTimers.schedule(() => {
-        setIgnoreInput(false);
-    }, POST_RESTORE_SUSPEND_MS);
-
-    _setStatus('idle');
-
-    logger.debug('Atomic restore completed — event handlers resumed, 2s suppress window active');
+    if (_deletedTargets.get(key) === revision) {
+        _deletedTargets.delete(key);
+        allowPresetSeeding(request);
+    }
+    return result.value?.protected ? { status: 'protected' }
+        : { status: result.status === 'committed' ? 'failed' : result.status, error: result.error };
 }
 
 // =====================================================
 // 卸载（供 onDelete hook 使用）
 // =====================================================
 export async function teardown() {
+    _closing = true;
     cancelPendingSave();
     _enabled = false;
     _switchConvergence?.cancel();
@@ -1708,20 +1720,28 @@ export async function teardown() {
         if (_saveCoordinator === coordinator) _saveCoordinator = null;
     }
     _initialized = false;
+    _lastSavedHash = null;
+    _lastSavedContent = null;
+    _lastQuickFingerprint = null;
+    _suspendUntil = 0;
+    _suspendNoticeShown = false;
     _ignoreInput = false;
     _dirty = false;
     _isInternalSave = false;
     _saveRevision = 0;
+    _mutationGeneration = 0;
     _latestRevisionByTarget.clear();
     _retryAttemptsByTarget.clear();
+    _deletedTargets.clear();
+    _deleteCallbacks.clear();
     _restoreInProgress = false;
-    if (_restoreAutoResetTimer) {
-        clearTimeout(_restoreAutoResetTimer);
-        _restoreAutoResetTimer = null;
-    }
     if (_suspendCompensationTimer) {
         clearTimeout(_suspendCompensationTimer);
         _suspendCompensationTimer = null;
     }
     logger.info('AutoSave torn down');
+}
+
+function serializeCanonicalContent(preset, apiId) {
+    return preset ? stableStringify(canonicalizePreset(preset, { apiId }).canonical) : null;
 }

@@ -162,7 +162,16 @@ export async function listArchivedPresets({ strict = false } = {}) {
     try {
         const keys = (await store.keys()).filter(isArchiveDataKey);
         if (!keys || keys.length === 0) return [];
-        const items = await Promise.all(keys.map(k => store.getItem(k).catch(() => null)));
+        const items = await Promise.all(keys.map(async key => {
+            if (!strict) return store.getItem(key).catch(() => null);
+            const entry = await store.getItem(key);
+            if (!projectArchiveSummary(entry)
+                || makeKey(entry.apiId, entry.presetName) !== key
+                || !entry.data || typeof entry.data !== 'object' || Array.isArray(entry.data)) {
+                throw new TypeError('Invalid archive entry; recovery data was preserved');
+            }
+            return entry;
+        }));
         return items.filter(x => x && x.apiId && x.presetName);
     } catch (e) {
         logger.warn('listArchivedPresets failed:', e);

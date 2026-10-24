@@ -13,7 +13,7 @@ test('canonical preset excludes the separate logit-bias preset library', () => {
 });
 
 test('summary values never expose JavaScript object coercion text', () => {
-    assert.equal(formatSummaryValue({ enabled: true }), '对象（1 项）');
-    assert.equal(formatSummaryValue(['a', 'b']), '列表（2 项）');
+    assert.equal(formatSummaryValue({ enabled: true }), 'Summary Object Value');
+    assert.equal(formatSummaryValue(['a', 'b']), 'Summary List Value');
     assert.doesNotMatch(formatSummaryValue({ enabled: true }), /\[object Object\]/);
 });

@@ -3,4 +3,7 @@
 @import url('../style.css');
 @import url('./panel-v4.css');
 @import url('./dialogs.css');
+@import url('./group-manager.css');
+@import url('./preset-dropdown.css');
+@import url('./settings.css');
 @import url('./responsive.css');

@@ -33,6 +33,7 @@ export function createDebugInterface({
     showHistoryPanel,
     refreshTakeover,
     phaseState,
+    isActive,
     ensureRuntimeReady,
     listSeries,
     parsePresetName,
@@ -44,6 +45,12 @@ export function createDebugInterface({
     documentObject = globalThis.document,
 }) {
     const currentPhases = () => phaseState?.() || {};
+    const mutate = action => (...args) => {
+        if (!(isActive ? isActive() : currentPhases().phase1)) {
+            throw new Error('Preset Auto Save runtime is inactive');
+        }
+        return action(...args);
+    };
     const debug = Object.freeze({
         phase1Done: () => Boolean(currentPhases().phase1),
         takeoverDone: () => Boolean(currentPhases().takeover),
@@ -62,8 +69,8 @@ export function createDebugInterface({
         group: names => groupNamesBySeries(names || [], {}, {}),
         listAllOptions: () => collectPresetOptions(documentObject, logger),
         listArchived: () => listArchived(),
-        restoreArchives: () => restoreArchives(),
-        reseed: () => reseed(),
+        restoreArchives: mutate(() => restoreArchives()),
+        reseed: mutate(() => reseed()),
         listPanelPresets: () => listPanelPresets(),
     });
 
@@ -71,7 +78,7 @@ export function createDebugInterface({
         version,
         ENV: env,
         showHistoryPanel,
-        refreshTakeover,
+        refreshTakeover: mutate((...args) => refreshTakeover(...args)),
         logger,
         debug,
     });

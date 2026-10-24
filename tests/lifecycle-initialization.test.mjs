@@ -6,7 +6,8 @@ const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 
 test('all lifecycle entry points share the serialized readiness path', () => {
     assert.match(source, /function ensureRuntimeReady\(\)/);
-    assert.match(source, /if \(_runtimeReadyPromise\) return _runtimeReadyPromise/);
+    assert.match(source, /createRuntimeLifecycle/);
+    assert.match(source, /return _lifecycle\.start\(\)/);
     assert.match(source, /APP_INITIALIZED received'[\s\S]{0,120}ensureRuntimeReady\(\)/);
     assert.match(source, /APP_READY received'[\s\S]{0,120}ensureRuntimeReady\(\)/);
     assert.doesNotMatch(source, /Auto-save phase deferred because its storage\/takeover dependencies are not ready/);

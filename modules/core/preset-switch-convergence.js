@@ -19,12 +19,12 @@ function normalizeHint(hint = {}) {
 }
 
 function candidateKey(candidate) {
-    return [
+    return JSON.stringify([
         candidate.apiId,
         candidate.presetName,
-        candidate.liveHash,
-        candidate.storedHash || '',
-    ].join('\u0000');
+        candidate.canonicalContent,
+        candidate.storedCanonicalContent ?? null,
+    ]);
 }
 
 function assessCandidate(candidate, hint) {
@@ -33,17 +33,19 @@ function assessCandidate(candidate, hint) {
     if (typeof candidate.presetName !== 'string' || !candidate.presetName) return { ready: false };
     if (!candidate.preset || typeof candidate.preset !== 'object') return { ready: false };
     if (typeof candidate.liveHash !== 'string' || !candidate.liveHash) return { ready: false };
+    if (typeof candidate.canonicalContent !== 'string' || !candidate.canonicalContent) return { ready: false };
     if (hint.apiId && candidate.apiId !== hint.apiId) return { ready: false };
     if (hint.presetName && candidate.presetName !== hint.presetName) return { ready: false };
 
-    const hasStoredHash = typeof candidate.storedHash === 'string' && candidate.storedHash.length > 0;
-    if (hasStoredHash && candidate.liveHash !== candidate.storedHash) {
+    const hasStoredContent = typeof candidate.storedCanonicalContent === 'string'
+        && candidate.storedCanonicalContent.length > 0;
+    if (hasStoredContent && candidate.canonicalContent !== candidate.storedCanonicalContent) {
         return { ready: false };
     }
 
     return {
         ready: true,
-        verified: hasStoredHash,
+        verified: hasStoredContent,
         key: candidateKey(candidate),
     };
 }
@@ -121,6 +123,9 @@ export function createPresetSwitchConvergence({
                     preset: cloneValue(candidate.preset),
                     liveHash: candidate.liveHash,
                     storedHash: candidate.storedHash || null,
+                    canonicalContent: candidate.canonicalContent,
+                    storedCanonicalContent: candidate.storedCanonicalContent ?? null,
+                    quickFingerprint: candidate.quickFingerprint ?? null,
                     verified: assessment.verified,
                     generation: currentGeneration,
                 });

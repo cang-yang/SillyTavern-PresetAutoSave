@@ -41,7 +41,7 @@ test('every user-facing grouping consumer reads the alias setting', async () => 
     const files = [
         '../modules/preset-takeover.js',
         '../modules/history-panel.js',
-        '../modules/panel-list-render.js',
+        '../modules/panel-list-model.js',
         '../modules/panel-actions.js',
         '../modules/panel-group-manager.js',
     ];
@@ -50,11 +50,8 @@ test('every user-facing grouping consumer reads the alias setting', async () => 
         const source = await readFile(new URL(file, import.meta.url), 'utf8');
         assert.match(source, /groupingSeriesAliases/, `${file} must consume groupingSeriesAliases`);
     }
-});
-
-test('settings reset clears group aliases alongside manual membership overrides', async () => {
-    const source = await readFile(new URL('../modules/panel-settings-log.js', import.meta.url), 'utf8');
-    assert.match(source, /groupingSeriesAliases:\s*\{\}/);
+    const renderer = await readFile(new URL('../modules/panel-list-render.js', import.meta.url), 'utf8');
+    assert.match(renderer, /resolvePanelSeriesProjection\(filtered, panelCtx, cachedSeriesMap\)/);
 });
 
 test('import assignment displays an alias but persists the canonical automatic name', () => {

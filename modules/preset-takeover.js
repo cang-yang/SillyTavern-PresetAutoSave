@@ -19,10 +19,10 @@
  *   oai_preset_changed_after ──→ 更新 Custom Dropdown trigger 显示
  */
 import { logger } from './logger.js';
-import { getSettings, onSettingChange, updateSetting } from './settings.js';
+import { getSettings, onSettingChange } from './settings.js';
 import {
     on, getEventType, getCurrentApiId, escapeHtml, escapeAttr,
-    getPresetSnapshot, savePresetSafe,
+    savePresetSafe,
     toast, t,
 } from './compatibility.js';
 import {
@@ -40,9 +40,14 @@ import {
     listArchivedPresets,
     removeArchivedPreset,
 } from './archive-store.js';
-import { getSnapshots, addSnapshot, TRIGGER } from './history-store.js';
+import { getSnapshots } from './history-store.js';
+import { readPresetInventory, getPresetSelectApiId as getApiIdOfSelect,
+    fingerprintPresetSelect as computeSelectFingerprint } from './host/preset-inventory.js';
+import { seedSnapshotsIfNeeded } from './history-seeding.js';
+export { seedSnapshotsIfNeeded, seedSnapshotForPreset, forceReseedSnapshots } from './history-seeding.js';
 import { restoreArchiveEntries } from './core/archive-recovery.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
+import { bindPresetDropdown, renderDropdownControls } from './dropdown-controller.js';
 // =====================================================
 // 常量
 // =====================================================
@@ -77,32 +82,12 @@ let _forceNextRefresh = false;
 let _cachedOverrides = null;
 let _cachedTree = null;
 const _runtimeTimers = new RuntimeTimerRegistry();
-let _tearingDown = false;
-let _seedActivityCount = 0;
-let _seedIdleWaiters = [];
-
-function beginSeedActivity() {
-    _seedActivityCount++;
-}
-
-function endSeedActivity() {
-    _seedActivityCount = Math.max(0, _seedActivityCount - 1);
-    if (_seedActivityCount === 0) {
-        const waiters = _seedIdleWaiters.splice(0);
-        for (const resolve of waiters) resolve();
-    }
-}
-
-function whenSeedIdle() {
-    return _seedActivityCount === 0
-        ? Promise.resolve()
-        : new Promise(resolve => _seedIdleWaiters.push(resolve));
-}
 const REFRESH_DEBOUNCE_MS = 220;
 const REFRESH_MIN_INTERVAL_MS = 350;
 const REFRESH_FORCE_MIN_INTERVAL_MS = 50;   // P0-4: force 模式下的硬节流，防止连续调用导致性能雪崩
 // 每个 select 对应的 option 指纹（用于判断是否需要重新渲染 dropdown）
 const _selectFingerprints = new WeakMap();
+let _dropdownId = 0;
 // =====================================================
 // 预设名有效性检查（模块级，消除重复定义）
 // =====================================================
@@ -113,10 +98,7 @@ const _selectFingerprints = new WeakMap();
  */
 function _isInvalidPresetName(name) {
     if (typeof name !== 'string') return true;
-    const s = name.trim();
-    if (!s) return true;
-    if (/^[\s\-_.]*\d+[\s\-_.]*$/.test(s)) return true;
-    return false;
+    return name.length === 0;
 }
 // =====================================================
 // 初始化
@@ -127,7 +109,6 @@ export async function initPresetTakeover() {
         return;
     }
     _initialized = true;
-    _tearingDown = false;
     logger.info('[Takeover] Starting initialization (Custom Dropdown Overlay)...');
     // 初始化归档存储
     const archiveStore = await initArchiveStore();
@@ -221,17 +202,6 @@ function scheduleRefresh() {
 // =====================================================
 // 计算 select 的 option 列表指纹（幂等判断）
 // =====================================================
-function computeSelectFingerprint(select) {
-    if (!select) return '';
-    const opts = select.options;
-    const len = opts ? opts.length : 0;
-    if (len === 0) return `${select.id || ''}::0`;
-    const getText = (opt) => opt ? (opt.textContent || '') : '';
-    const firstT = getText(opts[0]);
-    const lastT = getText(opts[len - 1]);
-    const midT = getText(opts[Math.floor(len / 2)]);
-    return `${select.id || select.getAttribute('data-preset-manager-for') || ''}::${len}::${firstT}::${midT}::${lastT}::${select.value}`;
-}
 // =====================================================
 // 主刷新逻辑
 // =====================================================
@@ -250,6 +220,13 @@ function refresh(forceOverrides = null, forceTree = null) {
             _takeoverActive = false;
         }
         return;
+    }
+    setupDocObserver();
+    for (const select of _managedSelects) {
+        if (!select.isConnected) {
+            teardownDropdown(select);
+            _managedSelects.delete(select);
+        }
     }
     let selects;
     try {
@@ -338,6 +315,11 @@ function applyTakeoverToSelect(select, forceOverrides = null, forceTree = null) 
     try {
         select.parentNode.insertBefore(wrapper, select);
         wrapper.appendChild(select);
+        wrapper._pasNativeState = {
+            style: select.getAttribute('style'),
+            tabIndex: select.getAttribute('tabindex'),
+            ariaHidden: select.getAttribute('aria-hidden'),
+        };
         // 隐藏原生 select（CSS only — ST 仍可通过 ID/selector 正常访问）
         select.style.opacity = '0';
         select.style.pointerEvents = 'none';
@@ -348,10 +330,15 @@ function applyTakeoverToSelect(select, forceOverrides = null, forceTree = null) 
         select.style.left = '0';
         select.style.zIndex = '-1';
         select.setAttribute(TAKEOVER_DATA_ATTR, '1');
+        select.setAttribute('tabindex', '-1');
+        select.setAttribute('aria-hidden', 'true');
         // 创建 trigger 按钮
         trigger = document.createElement('div');
         trigger.className = 'pas-dd-trigger';
         trigger.tabIndex = 0;
+        trigger.id = `pas-dropdown-trigger-${++_dropdownId}`;
+        trigger.setAttribute('role', 'button');
+        trigger.setAttribute('aria-expanded', 'false');
         trigger.innerHTML = `
             <span class="pas-dd-label"></span>
             <i class="fas fa-chevron-down pas-dd-chevron"></i>
@@ -361,6 +348,9 @@ function applyTakeoverToSelect(select, forceOverrides = null, forceTree = null) 
         panel = document.createElement('div');
         panel.className = 'pas-dd-panel';
         panel.style.display = 'none';
+        panel.id = `pas-dropdown-panel-${_dropdownId}`;
+        panel.setAttribute('aria-labelledby', trigger.id);
+        trigger.setAttribute('aria-controls', panel.id);
         wrapper.appendChild(panel);
     } finally {
         _selfMutating = false;
@@ -368,47 +358,13 @@ function applyTakeoverToSelect(select, forceOverrides = null, forceTree = null) 
     // 渲染分组内容
     renderDropdownContent(panel, select, apiId, overrides, seriesDefaults);
     updateTriggerDisplay(select, wrapper);
-    // ---------- 事件绑定 ----------
-    // trigger 点击 → 显示/隐藏 panel
-    trigger.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isOpen = panel.style.display !== 'none';
-        if (isOpen) {
-            closePanel(panel, trigger);
-        } else {
-            openPanel(panel, trigger);
-        }
+    wrapper._pasDispose = bindPresetDropdown({
+        panel, trigger, wrapper,
+        onSelect: value => onItemClick(select, value, panel),
+        toggleGroup,
+        open: () => openPanel(panel, trigger),
+        close: () => closePanel(panel, trigger),
     });
-    // 键盘导航
-    trigger.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            trigger.click();
-        } else if (e.key === 'Escape') {
-            closePanel(panel, trigger);
-        }
-    });
-    panel.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            closePanel(panel, trigger);
-            trigger.focus();
-        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            e.preventDefault();
-            navigateItems(panel, e.key === 'ArrowDown' ? 1 : -1);
-        } else if (e.key === 'Enter') {
-            const focused = panel.querySelector('.pas-dd-item--focused');
-            if (focused) focused.click();
-        }
-    });
-    // 点击外部 → 关闭 panel
-    const onDocClick = (e) => {
-        if (!wrapper.contains(e.target)) {
-            closePanel(panel, trigger);
-        }
-    };
-    document.addEventListener('click', onDocClick, true);
-    // 保存引用以便 teardown
-    wrapper._pasDocClickHandler = onDocClick;
     // 标记为已管理
     _managedSelects.add(select);
     // 设置 select observer
@@ -444,7 +400,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
     const seriesDisplayNames = new Map();    // normKey → 首次出现的原始大小写名
     const standaloneOptions = []; // 不参与分组的
     for (const option of optionList) {
-        const presetName = (option.textContent || '').trim();
+        const presetName = option.textContent || '';
         const value = option.value;
         const realName = presetName || value;
         if (!realName || _isInvalidPresetName(realName)) {
@@ -514,33 +470,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
             <span class="pas-dd-item-name">${escapeHtml(it.presetName)}</span>
         </div>`;
     }
-    panel.innerHTML = html;
-    // ---------- 绑定 panel 内事件（事件委托，只绑定一次） ----------
-    if (!panel._pasClickBound) {
-        panel._pasClickBound = true;
-    // item 点击 → 切换预设
-    panel.addEventListener('click', (e) => {
-        const item = e.target.closest('.pas-dd-item');
-        if (item) {
-            e.stopPropagation();
-            const value = item.getAttribute('data-value');
-            if (value !== null) {
-                onItemClick(select, value, panel);
-            }
-            return;
-        }
-        // 组头点击 → 展开/收起
-        const header = e.target.closest('.pas-dd-group-header');
-        if (header) {
-            e.stopPropagation();
-            const group = header.closest('.pas-dd-group');
-            if (group) {
-                toggleGroup(group);
-            }
-            return;
-        }
-    });
-    } // end if (!panel._pasClickBound)
+    renderDropdownControls(panel, html, select, toggleGroup);
 }
 // =====================================================
 // 嵌套模式渲染：构建嵌套树并递归生成 HTML
@@ -561,7 +491,7 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     /** @type {Map<string, {value: string, presetName: string, version: string, duplicate: string, manualOverride: boolean}>} */
     const optionsMap = new Map();
     for (const opt of optionList) {
-        const name = (opt.textContent || '').trim();
+        const name = opt.textContent || '';
         if (!name || _isInvalidPresetName(name)) continue;
         if (optionsMap.has(name)) continue; // 去重
         allPresetNames.push(name);
@@ -606,7 +536,7 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     let html = renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrides);
     // 5. 无效预设名 → 独立项
     for (const opt of optionList) {
-        const name = (opt.textContent || '').trim();
+        const name = opt.textContent || '';
         if (!name || !_isInvalidPresetName(name)) continue;
         if (!name && !opt.value) continue;
         const display = name || opt.value;
@@ -615,34 +545,9 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
             <span class="pas-dd-item-name">${escapeHtml(display)}</span>
         </div>`;
     }
-    panel.innerHTML = html;
+    renderDropdownControls(panel, html, select, toggleGroup);
     // 存储路径映射，供 updateTriggerDisplay 使用
     panel._pasNestedPathMap = nestedPathMap;
-    // 6. 绑定 panel 点击事件（与扁平模式共用同一个事件委托）
-    if (!panel._pasClickBound) {
-        panel._pasClickBound = true;
-        panel.addEventListener('click', (e) => {
-            const item = e.target.closest('.pas-dd-item');
-            if (item) {
-                e.stopPropagation();
-                const value = item.getAttribute('data-value');
-                if (value !== null) {
-                    onItemClick(select, value, panel);
-                }
-                return;
-            }
-            // 组头点击 → 展开/收起（嵌套组头同样使用 .pas-dd-group-header）
-            const header = e.target.closest('.pas-dd-group-header');
-            if (header) {
-                e.stopPropagation();
-                const group = header.closest('.pas-dd-group');
-                if (group) {
-                    toggleGroup(group);
-                }
-                return;
-            }
-        });
-    }
 }
 /**
  * 递归检查节点及其子树是否包含当前激活的预设。
@@ -714,6 +619,7 @@ function renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrid
 // item 点击 → 通过原生 select 切换预设
 // =====================================================
 function onItemClick(select, value, panel) {
+    if (Array.from(select.options || []).find(option => option.value === value)?.disabled) return;
     // 通过 jQuery 设值并触发 change — ST 原生 handler 完全接管
     try {
         // Native dispatch preserves capture-phase switch guards. jQuery.trigger()
@@ -759,6 +665,7 @@ function toggleGroup(group) {
         chevron.classList.toggle('fa-chevron-down', !isOpen);
     }
     group.classList.toggle('pas-dd-group--open', !isOpen);
+    group.querySelector('.pas-dd-group-header')?.setAttribute('aria-expanded', String(!isOpen));
 }
 // =====================================================
 // 更新 trigger 显示文字
@@ -780,7 +687,7 @@ function updateTriggerDisplay(select, wrapper) {
         label.title = '';
         return;
     }
-    const presetName = selectedOpt.textContent.trim();
+    const presetName = selectedOpt.textContent;
     const settings = getSettings();
     const overrides = settings.groupingManualOverrides || {};
     const info = getSeriesInfo(presetName, overrides);
@@ -830,6 +737,7 @@ function updateActiveState(select, wrapper) {
 // =====================================================
 function openPanel(panel, trigger) {
     panel.style.display = 'block';
+    trigger.setAttribute('aria-expanded', 'true');
     // 阶段11：动态 max-width（面板左边缘到视口右边缘-16px安全边距）
     const triggerRect = trigger.getBoundingClientRect();
     panel.style.maxWidth = Math.min(380, window.innerWidth - triggerRect.left - 16) + 'px';
@@ -884,6 +792,7 @@ function closePanel(panel, trigger) {
         panel.style.maxWidth = '';
     }
     if (trigger) {
+        trigger.setAttribute('aria-expanded', 'false');
         trigger.classList.remove('pas-dd-trigger--open');
         const chevron = trigger.querySelector('.pas-dd-chevron');
         if (chevron) {
@@ -895,27 +804,6 @@ function closePanel(panel, trigger) {
 // =====================================================
 // 键盘导航
 // =====================================================
-function navigateItems(panel, direction) {
-    // 收集所有可聚焦项（排除 display:none 的元素及其祖先被隐藏的元素）
-    const allCandidates = panel.querySelectorAll('.pas-dd-item');
-    const items = Array.from(allCandidates).filter(el => {
-        // 排除自身 display:none
-        if (el.style.display === 'none') return false;
-        // 排除被隐藏的 group-body 内的元素（通过检查祖先 .pas-dd-group-body 的 display 状态）
-        const body = el.closest('.pas-dd-group-body');
-        if (body && body.style.display === 'none') return false;
-        return true;
-    });
-    if (items.length === 0) return;
-    const current = panel.querySelector('.pas-dd-item--focused');
-    let idx = current ? items.indexOf(current) : -1;
-    if (current) current.classList.remove('pas-dd-item--focused');
-    idx += direction;
-    if (idx < 0) idx = items.length - 1;
-    if (idx >= items.length) idx = 0;
-    items[idx].classList.add('pas-dd-item--focused');
-    items[idx].scrollIntoView({ block: 'nearest' });
-}
 // =====================================================
 // 拆除所有自定义 dropdown（还原原生 select）
 // =====================================================
@@ -947,20 +835,16 @@ function teardownDropdown(select) {
     _selfMutating = true;
     try {
         // 还原 select 样式
-        select.style.opacity = '';
-        select.style.pointerEvents = '';
-        select.style.position = '';
-        select.style.width = '';
-        select.style.height = '';
-        select.style.top = '';
-        select.style.left = '';
-        select.style.zIndex = '';
-        select.removeAttribute(TAKEOVER_DATA_ATTR);
-        // 从 document 上移除 click handler
-        if (wrapper._pasDocClickHandler) {
-            document.removeEventListener('click', wrapper._pasDocClickHandler, true);
-            wrapper._pasDocClickHandler = null;
+        for (const [attribute, key] of [['style', 'style'], ['tabindex', 'tabIndex'], ['aria-hidden', 'ariaHidden']]) {
+            const value = wrapper._pasNativeState?.[key];
+            if (value == null) select.removeAttribute(attribute);
+            else select.setAttribute(attribute, value);
         }
+        select.removeAttribute(TAKEOVER_DATA_ATTR);
+        delete select.dataset.pasObserved;
+        // 从 document 上移除 click handler
+        wrapper._pasDispose?.();
+        wrapper._pasDispose = null;
         // 将 select 移回 wrapper 的 parent，然后移除 wrapper
         const parent = wrapper.parentNode;
         if (parent) {
@@ -978,18 +862,9 @@ function setupSelectObserver(select) {
     if (!_selectObserver) {
         _selectObserver = new MutationObserver((mutations) => {
             if (_selfMutating) return;
-            if (Date.now() < _refreshSuppressUntil) return;
             let needRefresh = false;
             for (const m of mutations) {
-                if (m.type !== 'childList') continue;
-                if (!m.addedNodes.length && !m.removedNodes.length) continue;
-                const hasOption = (nodes) => {
-                    for (const n of nodes) {
-                        if (n && n.nodeType === 1 && n.tagName === 'OPTION') return true;
-                    }
-                    return false;
-                };
-                if (hasOption(m.addedNodes) || hasOption(m.removedNodes)) {
+                if (m.type === 'characterData' || m.type === 'attributes' || m.type === 'childList') {
                     needRefresh = true;
                     break;
                 }
@@ -1000,7 +875,8 @@ function setupSelectObserver(select) {
     if (!select.dataset.pasObserved) {
         select.dataset.pasObserved = '1';
         try {
-            _selectObserver.observe(select, { childList: true });
+            _selectObserver.observe(select, { childList: true, subtree: true,
+                characterData: true, attributes: true, attributeFilter: ['value', 'label', 'disabled'] });
         } catch (_) {}
     }
 }
@@ -1008,7 +884,6 @@ function setupDocObserver() {
     if (_docObserver) return;
     _docObserver = new MutationObserver((mutations) => {
         if (_selfMutating) return;
-        if (Date.now() < _refreshSuppressUntil) return;
         for (const m of mutations) {
             if (m.type !== 'childList' || !m.addedNodes.length) continue;
             for (const n of m.addedNodes) {
@@ -1030,11 +905,6 @@ function setupDocObserver() {
 // =====================================================
 // 工具函数
 // =====================================================
-function getApiIdOfSelect(select) {
-    const apiIds = (select.getAttribute('data-preset-manager-for') || '')
-        .split(',').map(s => s.trim()).filter(Boolean);
-    return apiIds[0] || 'openai';
-}
 // escapeAttr 已从 compatibility.js 导入（见文件顶部）
 // compareVersion 已从 preset-grouping.js 统一导入（见文件顶部）
 // =====================================================
@@ -1087,33 +957,11 @@ export function refreshTakeover({ force = false, _overrides = null, _tree = null
  * @returns {Array<{apiId: string, presetName: string, detached: boolean}>}
  */
 export function listAllPresetsIncludingDetached(filterApiId) {
-    const out = [];
-    let selects;
-    try {
-        selects = document.querySelectorAll(SELECT_SELECTOR);
-    } catch (_) {
-        return out;
-    }
     let target = filterApiId;
     if (target === undefined || target === null) {
         try { target = getCurrentApiId(); } catch (_) { target = 'openai'; }
     }
-    const wantAll = (target === '*');
-    const seen = new Set();
-    for (const sel of selects) {
-        if (!sel || !sel.isConnected) continue;
-        const apiId = getApiIdOfSelect(sel);
-        if (!wantAll && apiId !== target) continue;
-        for (const opt of sel.options || []) {
-            const realName = (opt.textContent || opt.value || '').trim();
-            if (_isInvalidPresetName(realName)) continue;
-            const key = `${apiId}::${realName}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push({ apiId, presetName: realName, detached: false });
-        }
-    }
-    return out;
+    return readPresetInventory({ apiId: target });
 }
 /**
  * 列出所有 select 当前可见的"系列代表"
@@ -1135,7 +983,7 @@ export function listSeriesFromNativeSelects() {
         const apiId = getApiIdOfSelect(select);
         // 直接从 select.options 读取所有预设名（不再有 detached）
         const allNames = Array.from(select.options || [])
-            .map(o => (o.textContent || '').trim())
+            .map(o => o.textContent || '')
             .filter(Boolean);
         const unique = [...new Set(allNames)];
         // T4 fix: 使用 normalizeSeriesKey 确保与 renderDropdownContent 分组一致
@@ -1185,7 +1033,6 @@ export function getSeriesDefaultApply(seriesKey) {
 // 卸载
 // =====================================================
 export async function teardown() {
-    _tearingDown = true;
     _runtimeTimers.clearAll();
     try { teardownAllDropdowns(); } catch (_) {}
     if (_refreshTimer) {
@@ -1219,179 +1066,7 @@ export async function teardown() {
     _refreshSuppressUntil = 0;
     _takeoverActive = false;
     _initialized = false;
-    await whenSeedIdle();
     logger.info('Preset takeover torn down');
-}
-// =====================================================
-// 种子快照
-// =====================================================
-let _seedingRunning = false;
-/**
- * 给当前 ST 所有现存预设建立"初始快照"
- *
- * @param {object} [opts]
- * @param {boolean} [opts.force=false]
- * @param {boolean} [opts.silent=false]
- */
-export async function seedSnapshotsIfNeeded(opts = {}) {
-    const { force = false, silent = false } = opts;
-    if (_seedingRunning) {
-        logger.debug('[Seed] already running, skip');
-        return { skipped: true };
-    }
-    const settings = getSettings();
-    if (!settings.enabled || !settings.groupingEnabled) {
-        logger.debug('[Seed] disabled by settings, skip');
-        return { skipped: true };
-    }
-    // AT0: 如果首次扫描向导尚未完成（用户还没确认"建立分组"），跳过自动种子
-    if (!force && !settings.groupingFirstScanDone) {
-        logger.debug('[Seed] groupingFirstScanDone=false, skip until user confirms');
-        return { skipped: true };
-    }
-    if (!force && !settings.autoSeedOnTakeover) {
-        logger.debug('[Seed] autoSeedOnTakeover=false, skip');
-        return { skipped: true };
-    }
-    _seedingRunning = true;
-    beginSeedActivity();
-    try {
-        const apiId = getCurrentApiId();
-        if (!apiId) {
-            logger.warn('[Seed] no current API id, skip');
-            return { skipped: true };
-        }
-        // 直接用 listAllPresetsIncludingDetached（现在读 select.options，不再有 detached）
-        const fromDOM = listAllPresetsIncludingDetached(apiId) || [];
-        const allNames = fromDOM
-            .filter(e => e && e.apiId === apiId && typeof e.presetName === 'string' && e.presetName)
-            .map(e => e.presetName);
-        if (allNames.length === 0) {
-            logger.debug('[Seed] no presets in ST');
-            return { skipped: true, total: 0 };
-        }
-        if (silent) {
-            logger.debug(`[Seed] checking ${allNames.length} presets for missing initial snapshots...`);
-        } else {
-            logger.info(`[Seed] checking ${allNames.length} presets for missing initial snapshots...`);
-        }
-        if (!silent) {
-            try { toast.info(t('Seed Snapshots Start', { count: allNames.length })); } catch (_) {}
-        }
-        let added = 0;
-        let skipped = 0;
-        let failed = 0;
-        const total = allNames.length;
-        for (let i = 0; i < allNames.length; i++) {
-            if (_tearingDown) {
-                logger.debug('[Seed] stopped because takeover is tearing down');
-                break;
-            }
-            const name = allNames[i];
-            try {
-                const existing = await getSnapshots(apiId, name);
-                if (Array.isArray(existing) && existing.length > 0) {
-                    skipped++;
-                } else {
-                    const data = getPresetSnapshot(name);
-                    if (!data || typeof data !== 'object') {
-                        failed++;
-                        continue;
-                    }
-                    const snap = await addSnapshot(name, apiId, data, TRIGGER.MANUAL);
-                    if (snap) {
-                        added++;
-                    } else {
-                        failed++;
-                    }
-                }
-            } catch (e) {
-                logger.debug(`[Seed] error for "${name}":`, e);
-                failed++;
-            }
-            if (i % 5 === 4 && i < allNames.length - 1) {
-                await new Promise(r => setTimeout(r, 0));
-            }
-        }
-        const seedLogMsg =
-            `[Seed] complete: added=${added}, skipped=${skipped}` +
-            (failed > 0 ? `, failed=${failed}` : '') +
-            ` (total=${total})`;
-        if (added > 0) {
-            logger.success(seedLogMsg);
-        } else {
-            logger.debug(seedLogMsg);
-        }
-        if (!silent) {
-            try {
-                if (added > 0) {
-                    toast.success(t('Seed Snapshots Done', { added, skipped, total }));
-                }
-            } catch (_) {}
-        }
-        if (!_tearingDown) {
-            try {
-                updateSetting('seedSnapshotsDone', true);
-            } catch (_) {}
-        }
-        return { added, skipped, failed, total };
-    } catch (e) {
-        logger.error('[Seed] seedSnapshotsIfNeeded failed:', e);
-        return { error: String(e) };
-    } finally {
-        _seedingRunning = false;
-        endSeedActivity();
-    }
-}
-/**
- * 为单个预设创建初始快照（如果尚无快照）
- * V-1: 用于导入检测和切换时补种，避免新导入预设显示 "0 · 0 B · —"
- *
- * @param {string} presetName
- * @param {string} [apiId] - 不传则自动获取当前 API
- * @returns {Promise<{seeded: boolean}>}
- */
-export async function seedSnapshotForPreset(presetName, apiId, options = {}) {
-    if (_tearingDown) return { seeded: false };
-    beginSeedActivity();
-    try {
-        const aid = apiId || getCurrentApiId();
-        if (!aid || !presetName) return { seeded: false };
-        const existing = await getSnapshots(aid, presetName);
-        if (_tearingDown) return { seeded: false };
-        if (Array.isArray(existing) && existing.length > 0) {
-            return { seeded: false };
-        }
-        const hasPresetOverride = options.preset && typeof options.preset === 'object';
-        if (hasPresetOverride && options.verified !== true) {
-            logger.debug(`[Seed] unverified preset override rejected for "${presetName}"`);
-            return { seeded: false, reason: 'unverified' };
-        }
-        const data = hasPresetOverride
-            ? options.preset
-            : getPresetSnapshot(presetName, { apiId: aid });
-        if (!data || typeof data !== 'object') {
-            logger.debug(`[Seed] no data for "${presetName}", skip single-seed`);
-            return { seeded: false };
-        }
-        const snap = await addSnapshot(presetName, aid, data, TRIGGER.MANUAL);
-        if (snap) {
-            logger.info(`[Seed] initial snapshot created for "${presetName}"`);
-            return { seeded: true };
-        }
-        return { seeded: false };
-    } catch (e) {
-        logger.debug(`[Seed] seedSnapshotForPreset error for "${presetName}":`, e);
-        return { seeded: false };
-    } finally {
-        endSeedActivity();
-    }
-}
-/**
- * 强制重新种子
- */
-export async function forceReseedSnapshots() {
-    return seedSnapshotsIfNeeded({ force: true, silent: false });
 }
 /**
  * 从归档还原所有被数据接管的预设到 ST PresetManager

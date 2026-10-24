@@ -38,6 +38,8 @@ function candidate(name, liveHash, storedHash = null, temperature = 0.7) {
         preset: { temperature },
         liveHash,
         storedHash,
+        canonicalContent: JSON.stringify({ temperature, content: liveHash }),
+        storedCanonicalContent: storedHash ? JSON.stringify({ temperature, content: storedHash }) : null,
     };
 }
 
@@ -172,6 +174,8 @@ test('settled candidates own an immutable payload snapshot', async () => {
             preset: livePreset,
             liveHash: 'hash-b',
             storedHash: 'hash-b',
+            canonicalContent: JSON.stringify(livePreset),
+            storedCanonicalContent: JSON.stringify(livePreset),
         }),
         onSettled: value => { result = value; },
         schedule: fn => scheduler.schedule(fn),
@@ -213,4 +217,48 @@ test('times out once and leaves uncertain content unsettled', async () => {
     assert.equal(timedOut[0].hint.presetName, 'Preset B');
     assert.equal(controller.isActive(), false);
     assert.equal(scheduler.pending(), 0);
+});
+
+test('matching diagnostic hashes cannot verify different live and stored content', async () => {
+    const scheduler = createManualScheduler();
+    const settled = [];
+    const controller = createPresetSwitchConvergence({
+        readCandidate: () => ({
+            ...candidate('Preset B', '19x4r5g', '19x4r5g'),
+            canonicalContent: '{"send_if_empty":"collision-17327"}',
+            storedCanonicalContent: '{"send_if_empty":"collision-28051"}',
+        }),
+        onSettled: value => settled.push(value),
+        schedule: fn => scheduler.schedule(fn),
+        cancel: id => scheduler.cancel(id),
+        requiredStableSamples: 1,
+    });
+    controller.begin();
+    await scheduler.runNext();
+    assert.equal(settled.length, 0);
+    controller.cancel();
+});
+
+test('stable samples compare complete content even when hashes collide', async () => {
+    const scheduler = createManualScheduler();
+    const settled = [];
+    let content = '{"send_if_empty":"collision-17327"}';
+    const controller = createPresetSwitchConvergence({
+        readCandidate: () => ({
+            ...candidate('Preset B', '19x4r5g', '19x4r5g'),
+            canonicalContent: content,
+            storedCanonicalContent: content,
+        }),
+        onSettled: value => settled.push(value),
+        schedule: fn => scheduler.schedule(fn),
+        cancel: id => scheduler.cancel(id),
+        requiredStableSamples: 2,
+    });
+    controller.begin();
+    await scheduler.runNext();
+    content = '{"send_if_empty":"collision-28051"}';
+    await scheduler.runNext();
+    assert.equal(settled.length, 0);
+    await scheduler.runNext();
+    assert.equal(settled.length, 1);
 });

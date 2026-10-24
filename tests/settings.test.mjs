@@ -9,7 +9,7 @@ import {
     updateSetting,
 } from '../modules/settings.js';
 
-test('resetSettings gives mutable settings fresh nested defaults', async () => {
+test('resetSettings gives public settings isolated immutable nested defaults', async () => {
     let saveCalls = 0;
     const extensionSettings = {
         preset_auto_save: {
@@ -32,7 +32,7 @@ test('resetSettings gives mutable settings fresh nested defaults', async () => {
     assert.deepEqual(aliases, {});
     assert.equal(updateSetting('groupingSeriesAliases', {}), false);
     assert.equal(saveCalls, 1, 'an equivalent map should not trigger another write');
-    aliases.story = 'Changed after reset';
+    assert.throws(() => { aliases.story = 'Changed after reset'; }, TypeError);
     assert.deepEqual(DEFAULT_SETTINGS.groupingSeriesAliases, {});
     assert.notEqual(aliases, DEFAULT_SETTINGS.groupingSeriesAliases);
 });

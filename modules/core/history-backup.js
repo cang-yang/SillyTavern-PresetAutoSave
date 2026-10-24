@@ -1,6 +1,7 @@
 import { enrichSnapshotList, HISTORY_SCHEMA_VERSION } from './history-schema.js';
 import { canonicalizePreset } from './preset-schema.js';
 import { stableStringify } from './value-utils.js';
+import { validateImportedSnapshot } from './history-import-validation.js';
 
 export const HISTORY_BACKUP_VERSION = 2;
 const KEY_DELIMITER = '::';
@@ -13,6 +14,7 @@ function isPlainObject(value) {
 
 function parseHistoryKey(key) {
     if (typeof key !== 'string') return null;
+    if (key.startsWith('__history_v2_meta__::')) return null;
     const index = key.indexOf(KEY_DELIMITER);
     if (index <= 0 || index === key.length - KEY_DELIMITER.length) return null;
     return {
@@ -21,7 +23,7 @@ function parseHistoryKey(key) {
     };
 }
 
-function validateSnapshot(snapshot, key, identity, seenIds) {
+function validateSnapshot(snapshot, key, identity, seenIds, { importing = false } = {}) {
     if (!isPlainObject(snapshot)) throw new TypeError(`History backup snapshot in ${key} must be an object`);
     if (typeof snapshot.id !== 'string' || snapshot.id.trim() === '') {
         throw new TypeError(`History backup snapshot in ${key} has an invalid id`);
@@ -41,7 +43,9 @@ function validateSnapshot(snapshot, key, identity, seenIds) {
     }
     seenIds.add(snapshot.id);
     const sanitized = structuredClone(snapshot);
-    const { canonical } = canonicalizePreset(sanitized.preset, { apiId: identity.apiId });
+    const canonical = importing
+        ? validateImportedSnapshot(snapshot, identity.apiId)
+        : canonicalizePreset(sanitized.preset, { apiId: identity.apiId }).canonical;
     sanitized.preset = canonical;
     return {
         ...sanitized,
@@ -93,6 +97,17 @@ function countSnapshots(data) {
     return count;
 }
 
+function indexSnapshotOwners(data) {
+    const owners = new Map();
+    for (const [key, list] of data) {
+        for (const snapshot of list) {
+            if (owners.has(snapshot.id)) throw new TypeError(`Conflicting snapshot id ${snapshot.id}`);
+            owners.set(snapshot.id, { key, snapshot });
+        }
+    }
+    return owners;
+}
+
 function summarizeImportPlan(plan, existingByKey) {
     return {
         available: true,
@@ -129,7 +144,7 @@ export function validateHistoryBackup(payload) {
         const identity = parseHistoryKey(key);
         if (!identity) throw new TypeError(`Invalid history backup key: ${key}`);
         if (!Array.isArray(list)) throw new TypeError(`History backup value for ${key} must be an array`);
-        const validated = list.map(snapshot => validateSnapshot(snapshot, key, identity, seenIds));
+        const validated = list.map(snapshot => validateSnapshot(snapshot, key, identity, seenIds, { importing: true }));
         data.set(key, normalizeList(validated));
     }
 
@@ -141,12 +156,17 @@ function buildHistoryImportPlanFromValidated(validated, existingByKey, { mode, m
         ? new Map()
         : new Map([...existingByKey].map(([key, list]) => [key, structuredClone(list)]));
     let imported = 0;
+    const owners = mode === 'merge' ? indexSnapshotOwners(existingByKey) : new Map();
 
     for (const [key, incoming] of validated.data) {
         const existing = mode === 'merge' && Array.isArray(data.get(key)) ? data.get(key) : [];
         const existingIds = new Set(existing.map(snapshot => snapshot?.id).filter(Boolean));
         const existingById = new Map(existing.map(snapshot => [snapshot?.id, snapshot]));
         for (const snapshot of incoming) {
+            const owner = owners.get(snapshot.id);
+            if (owner && owner.key !== key) {
+                throw new TypeError(`Conflicting snapshot id ${snapshot.id} in ${key}`);
+            }
             const current = existingById.get(snapshot.id);
             if (current && snapshotIdentityContent(current) !== snapshotIdentityContent(snapshot)) {
                 throw new TypeError(`Conflicting snapshot id ${snapshot.id} in ${key}`);
@@ -187,12 +207,18 @@ export function analyzeHistoryImport(payload, existingByKey = new Map(), { max =
     let overlappingPresetCount = 0;
     let duplicateSnapshotCount = 0;
     const conflicts = [];
+    const owners = indexSnapshotOwners(existingByKey);
 
     for (const [key, incoming] of validated.data) {
         const existing = Array.isArray(existingByKey.get(key)) ? existingByKey.get(key) : [];
         if (existingByKey.has(key)) overlappingPresetCount++;
         const existingById = new Map(existing.map(snapshot => [snapshot?.id, snapshot]));
         for (const snapshot of incoming) {
+            const owner = owners.get(snapshot.id);
+            if (owner && owner.key !== key) {
+                conflicts.push({ key, snapshotId: snapshot.id });
+                continue;
+            }
             const current = existingById.get(snapshot.id);
             if (!current) continue;
             if (snapshotIdentityContent(current) === snapshotIdentityContent(snapshot)) {
@@ -247,22 +273,25 @@ export async function captureHistoryImage(repository) {
 
 async function writeHistoryImage(repository, image) {
     const currentKeys = await repository.keys();
+    for (const [key, list] of image) {
+        if (stableStringify(await repository.getItem(key)) !== stableStringify(list)) {
+            await repository.setItem(key, structuredClone(list));
+        }
+    }
     for (const key of currentKeys) {
         if (!image.has(key)) await repository.removeItem(key);
     }
-    for (const [key, list] of image) await repository.setItem(key, structuredClone(list));
 }
 
 export async function applyHistoryImportPlan(repository, plan, backup = null) {
     if (!(plan?.data instanceof Map)) throw new TypeError('Invalid history import plan');
+    if (typeof repository.applyImportPlan === 'function') return repository.applyImportPlan(plan);
     const original = backup instanceof Map ? structuredClone(backup) : await captureHistoryImage(repository);
     try {
         await writeHistoryImage(repository, plan.data);
         return plan.imported;
     } catch (importError) {
         try {
-            const partialKeys = await repository.keys();
-            for (const key of partialKeys) await repository.removeItem(key);
             await writeHistoryImage(repository, original);
         } catch (rollbackError) {
             throw new AggregateError(

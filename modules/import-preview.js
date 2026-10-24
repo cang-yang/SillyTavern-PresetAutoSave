@@ -4,6 +4,10 @@ import {
     escapeHtml,
     t,
 } from './compatibility.js';
+import { createMountedResources } from './core/mounted-resources.js';
+
+let previewSequence = 0;
+const previewBindings = new WeakMap();
 
 function translated(options, key, vars = {}) {
     return options.escapeHtml(options.t(key, vars));
@@ -23,9 +27,12 @@ export function renderHistoryImportPreview(preview, options = {}) {
         <li><code>${renderOptions.escapeHtml(conflict.key)}</code> · ${renderOptions.escapeHtml(conflict.snapshotId)}</li>`).join('');
     const remainingConflicts = Math.max(0, conflicts.length - 3);
     const schemaVersion = preview?.schemaVersion ?? renderOptions.t('Import Preview Unknown Version');
+    const instance = options.instance;
+    const radioName = instance === undefined ? 'pas-import-mode' : `pas-import-mode-${instance}`;
+    const instanceAttribute = instance === undefined ? '' : ` data-pas-import-instance="${renderOptions.escapeHtml(instance)}"`;
 
     return `
-<div class="pas-import-preview" data-conflict-count="${Number(preview?.conflictCount) || 0}">
+<div class="pas-import-preview"${instanceAttribute} data-conflict-count="${Number(preview?.conflictCount) || 0}">
     <div class="pas-import-preview-heading">
         <span class="pas-import-preview-icon" aria-hidden="true"><i class="fa-solid fa-file-shield"></i></span>
         <div>
@@ -58,7 +65,7 @@ export function renderHistoryImportPreview(preview, options = {}) {
     <fieldset class="pas-import-preview-modes">
         <legend>${text('Import Preview Choose Mode')}</legend>
         <label class="pas-import-mode-card${mergeAvailable ? ' is-selected' : ' is-disabled'}">
-            <input type="radio" name="pas-import-mode" value="merge"${mergeAvailable ? ' checked' : ' disabled'}>
+            <input type="radio" name="${renderOptions.escapeHtml(radioName)}" value="merge"${mergeAvailable ? ' checked' : ' disabled'}>
             <span class="pas-import-mode-copy">
                 <strong>${text('Import Preview Merge')}</strong>
                 <span>${text(mergeAvailable ? 'Import Preview Merge Detail' : 'Import Preview Merge Blocked', {
@@ -72,7 +79,7 @@ export function renderHistoryImportPreview(preview, options = {}) {
         </label>
 
         <label class="pas-import-mode-card pas-import-mode-danger">
-            <input type="radio" name="pas-import-mode" value="replace">
+            <input type="radio" name="${renderOptions.escapeHtml(radioName)}" value="replace">
             <span class="pas-import-mode-copy">
                 <strong>${text('Import Preview Replace')}</strong>
                 <span>${text('Import Preview Replace Detail')}</span>
@@ -112,37 +119,36 @@ async function chooseFallback(preview) {
     return ok ? 'merge' : null;
 }
 
-function afterPopupMount() {
+function findMountedImportPreview(instance, owner) {
     return new Promise(resolve => {
-        if (typeof requestAnimationFrame !== 'function') {
-            setTimeout(resolve, 0);
-            return;
-        }
-        requestAnimationFrame(() => setTimeout(resolve, 0));
+        const release = owner.own(() => resolve(null));
+        let attempts = 0;
+        const check = () => {
+            const root = document.querySelector(`[data-pas-import-instance="${instance}"]`);
+            if (root || ++attempts >= 8) {
+                release();
+                resolve(root || null);
+            } else {
+                owner.schedule(check, 25);
+            }
+        };
+        owner.schedule(check, 0);
     });
-}
-
-async function findMountedImportPreview(isPopupSettled) {
-    for (let attempt = 0; attempt < 8; attempt++) {
-        await afterPopupMount();
-        const roots = document.querySelectorAll('.pas-import-preview');
-        if (roots.length > 0) return roots[roots.length - 1];
-        if (isPopupSettled()) return null;
-    }
-    return null;
 }
 
 export function bindHistoryImportPreview(root, { onConfirm = () => {}, translate = t } = {}) {
     if (!root || typeof root.querySelector !== 'function') {
         throw new TypeError('Import preview root is required');
     }
+    previewBindings.get(root)?.destroy();
+    const owner = createMountedResources();
     const confirm = root.querySelector('[data-import-confirm]');
     const confirmLabel = confirm?.querySelector('span');
-    const radios = [...root.querySelectorAll('input[name="pas-import-mode"]')];
+    const radios = [...root.querySelectorAll('input[type="radio"]')];
     let selectedMode = null;
 
     const sync = () => {
-        selectedMode = root.querySelector('input[name="pas-import-mode"]:checked')?.value || null;
+        selectedMode = root.querySelector('input[type="radio"]:checked')?.value || null;
         for (const card of root.querySelectorAll('.pas-import-mode-card')) {
             card.classList.toggle('is-selected', card.querySelector('input')?.checked === true);
         }
@@ -162,52 +168,66 @@ export function bindHistoryImportPreview(root, { onConfirm = () => {}, translate
         if (mode) onConfirm(mode);
     };
 
-    for (const radio of radios) radio.addEventListener('change', sync);
-    confirm?.addEventListener('click', handleConfirm);
+    for (const radio of radios) owner.listen(radio, 'change', sync);
+    owner.listen(confirm, 'click', handleConfirm);
     sync();
 
-    return {
+    const controller = {
         getSelectedMode: () => selectedMode,
         destroy() {
-            for (const radio of radios) radio.removeEventListener('change', sync);
-            confirm?.removeEventListener('click', handleConfirm);
+            owner.destroy();
+            if (previewBindings.get(root) === controller) previewBindings.delete(root);
         },
     };
+    previewBindings.set(root, controller);
+    return controller;
 }
 
-export async function chooseHistoryImportMode(preview) {
-    const html = renderHistoryImportPreview(preview);
+export async function chooseHistoryImportMode(preview, { signal } = {}) {
+    if (signal?.aborted) return null;
+    const fallback = async () => {
+        const mode = await chooseFallback(preview);
+        return signal?.aborted ? null : mode;
+    };
+    const instance = ++previewSequence;
+    const html = renderHistoryImportPreview(preview, { instance });
     const popup = createPopupSafe(html, 'DISPLAY', {
         wide: true,
         allowVerticalScrolling: true,
         okButton: false,
         cancelButton: t('Cancel'),
     });
-    if (!popup) return chooseFallback(preview);
+    if (!popup) return fallback();
 
+    const owner = createMountedResources();
+    const closed = new Promise(resolve => owner.own(resolve));
+    owner.own(() => {
+        try { popup.completeCancelled?.(); } catch (_) {}
+    });
+    owner.listen(signal, 'abort', () => owner.destroy());
     let showPromise;
-    let popupSettled = false;
     try {
         showPromise = Promise.resolve(popup.show());
         showPromise.then(
-            () => { popupSettled = true; },
-            () => { popupSettled = true; },
+            () => owner.destroy(),
+            () => owner.destroy(),
         );
     } catch (_) {
-        return chooseFallback(preview);
+        owner.destroy();
+        return signal?.aborted ? null : fallback();
     }
 
-    const root = await findMountedImportPreview(() => popupSettled);
+    const root = await findMountedImportPreview(instance, owner);
     if (!root) {
-        if (popupSettled) return null;
-        try { popup.completeCancelled?.(); } catch (_) {}
-        try { await showPromise; } catch (_) {}
-        return chooseFallback(preview);
+        const wasActive = owner.active;
+        owner.destroy();
+        return wasActive && !signal?.aborted ? fallback() : null;
     }
 
     let confirmed = false;
     let selectedMode = null;
     const controller = bindHistoryImportPreview(root, { onConfirm: mode => {
+        if (!owner.active) return;
         selectedMode = mode;
         confirmed = true;
         try {
@@ -215,8 +235,9 @@ export async function chooseHistoryImportMode(preview) {
             else popup.complete?.(true);
         } catch (_) {}
     } });
+    owner.own(() => controller.destroy());
 
-    try { await showPromise; } catch (_) { return null; }
-    finally { controller.destroy(); }
-    return confirmed ? selectedMode : null;
+    await Promise.race([showPromise.catch(() => {}), closed]);
+    owner.destroy();
+    return confirmed && !signal?.aborted ? selectedMode : null;
 }

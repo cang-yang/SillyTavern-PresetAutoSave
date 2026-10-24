@@ -79,19 +79,19 @@ export function buildPanelHTML({ t, escapeHtml, escapeAttr, saveStatus = 'idle',
                     ${filter('today', 'fa-calendar-day', 'Today', false, text)}
                     ${filter('week', 'fa-calendar-week', 'This Week', false, text)}
                 </div>
+            </div>
                 <div class="pas-diff-bar" id="pas-diff-bar" hidden>
                     <span class="pas-diff-bar-label"><i class="fa-solid fa-code-compare"></i>${text('Diff Bar Label')}</span>
                     ${diffSlot('a', text)}${diffSlot('b', text)}
                     <span class="pas-diff-bar-actions">
-                        <button class="pas-mini-btn pas-mini-btn-primary pas-btn-start-diff" type="button" disabled><i class="fa-solid fa-play"></i><span>${text('Diff Start')}</span></button>
+                        <button class="pas-mini-btn pas-mini-btn-primary pas-btn-start-diff" type="button" disabled aria-label="${attr('Diff Start')}" title="${attr('Diff Start')}"><i class="fa-solid fa-play" aria-hidden="true"></i><span>${text('Diff Start')}</span></button>
                         <button class="pas-mini-btn pas-btn-clear-diff" type="button" disabled aria-label="${attr('Diff Clear')}" title="${attr('Diff Clear')}"><i class="fa-solid fa-xmark"></i></button>
                     </span>
                 </div>
-            </div>
             <div class="pas-snapshot-list" aria-live="polite"></div>
             <div class="pas-batch-toolbar" id="pas-batch-toolbar" hidden>
-                <button class="pas-mini-btn pas-btn-batch-select-all" type="button"><i class="fa-solid fa-check-double"></i><span>${text('Batch Select All')}</span></button>
-                <button class="pas-mini-btn pas-btn-batch-deselect-all" type="button"><i class="fa-solid fa-xmark"></i><span>${text('Batch Deselect All')}</span></button>
+                <button class="pas-mini-btn pas-btn-batch-select-all" type="button" aria-label="${attr('Batch Select All')}" title="${attr('Batch Select All')}"><i class="fa-solid fa-check-double" aria-hidden="true"></i><span>${text('Batch Select All')}</span></button>
+                <button class="pas-mini-btn pas-btn-batch-deselect-all" type="button" aria-label="${attr('Batch Deselect All')}" title="${attr('Batch Deselect All')}"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>${text('Batch Deselect All')}</span></button>
                 <span class="pas-batch-spacer"></span>
                 <button class="pas-batch-delete-btn" id="pas-batch-delete-btn" type="button" disabled><i class="fa-solid fa-trash-can"></i><span>${text('Batch Delete Btn', { count: 0 })}</span></button>
             </div>
@@ -109,9 +109,9 @@ export function buildPanelHTML({ t, escapeHtml, escapeAttr, saveStatus = 'idle',
                 </div>
                 <div class="pas-log-actions">
                     <label class="pas-log-autoscroll" title="${attr('Auto Scroll Desc')}"><input type="checkbox" class="pas-log-autoscroll-input" checked><span>${text('Auto Scroll')}</span></label>
-                    <button class="pas-mini-btn pas-btn-log-clear" type="button"><i class="fa-solid fa-broom"></i><span>${text('Clear Logs')}</span></button>
-                    <button class="pas-mini-btn pas-btn-log-copy" type="button"><i class="fa-solid fa-copy"></i><span>${text('Copy')}</span></button>
-                    <button class="pas-mini-btn pas-btn-log-export" type="button"><i class="fa-solid fa-download"></i><span>${text('Export')}</span></button>
+                    <button class="pas-mini-btn pas-btn-log-clear" type="button" aria-label="${attr('Clear Logs')}" title="${attr('Clear Logs')}"><i class="fa-solid fa-broom" aria-hidden="true"></i><span>${text('Clear Logs')}</span></button>
+                    <button class="pas-mini-btn pas-btn-log-copy" type="button" aria-label="${attr('Copy')}" title="${attr('Copy')}"><i class="fa-solid fa-copy" aria-hidden="true"></i><span>${text('Copy')}</span></button>
+                    <button class="pas-mini-btn pas-btn-log-export" type="button" aria-label="${attr('Export')}" title="${attr('Export')}"><i class="fa-solid fa-download" aria-hidden="true"></i><span>${text('Export')}</span></button>
                 </div>
             </div>
             <div class="pas-log-view" id="pas-log-view" aria-live="polite"></div>

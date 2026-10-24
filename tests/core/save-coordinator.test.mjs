@@ -10,6 +10,45 @@ function deferred() {
     return { promise, resolve, reject };
 }
 
+test('explicit commands are barriers that later automatic work cannot replace or cross', async () => {
+    const gate = deferred();
+    const executed = [];
+    const coordinator = new SaveCoordinator({ worker: async request => {
+        executed.push(request.id);
+        if (request.id === 'active') await gate.promise;
+    } });
+    const request = id => ({ id, apiId: 'openai', presetName: 'A' });
+    const active = coordinator.enqueue(request('active'));
+    const before = coordinator.enqueue(request('before'));
+    const restore = coordinator.enqueue({ ...request('restore'), coalesce: false });
+    const after = coordinator.enqueue(request('after'));
+    gate.resolve();
+    await Promise.all([active, before, restore, after]);
+    assert.deepEqual(executed, ['active', 'before', 'restore', 'after']);
+});
+
+test('discarding pending automatic work preserves active and explicit commands', async () => {
+    const gate = deferred();
+    const executed = [];
+    const coordinator = new SaveCoordinator({ worker: async request => {
+        executed.push(request.id);
+        if (request.id === 'active') await gate.promise;
+    } });
+    const request = id => ({ id, apiId: 'openai', presetName: 'A', trigger: 'auto' });
+    const active = coordinator.enqueue(request('active'));
+    const obsolete = coordinator.enqueue(request('obsolete'));
+    const explicit = coordinator.enqueue({ ...request('restore'), coalesce: false });
+    try {
+        coordinator.cancelPending(item => item.coalesce !== false && item.trigger === 'auto');
+    } finally {
+        gate.resolve();
+    }
+    const result = await obsolete;
+    await Promise.all([active, explicit]);
+    assert.equal(result.status, 'cancelled');
+    assert.deepEqual(executed, ['active', 'restore']);
+});
+
 test('executes save requests one at a time and returns to idle', async () => {
     const gates = [deferred(), deferred()];
     const started = [];

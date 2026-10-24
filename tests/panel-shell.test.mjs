@@ -11,6 +11,22 @@ const html = buildPanelHTML({
     escapeAttr: identity,
 });
 
+test('compact mini commands have meaningful names independent of hidden labels', () => {
+    for (const [hook, label] of [
+        ['pas-btn-start-diff', 'Diff Start'],
+        ['pas-btn-clear-diff', 'Diff Clear'],
+        ['pas-btn-batch-select-all', 'Batch Select All'],
+        ['pas-btn-batch-deselect-all', 'Batch Deselect All'],
+        ['pas-btn-log-clear', 'Clear Logs'],
+        ['pas-btn-log-copy', 'Copy'],
+        ['pas-btn-log-export', 'Export'],
+    ]) {
+        const button = html.match(new RegExp(`<button[^>]*class="[^"]*${hook}[^"]*"[^>]*>`))?.[0] || '';
+        assert.ok(button.includes(`aria-label="${label}"`), hook);
+        assert.ok(button.includes(`title="${label}"`), hook);
+    }
+});
+
 test('history panel uses the pure shell renderer as its single markup path', () => {
     assert.match(historyPanelSource, /buildPanelHTML as buildPanelShellHTML/);
     assert.match(historyPanelSource, /function buildHistoryPanelMarkup\(\)[\s\S]*?return buildPanelShellHTML\(/);

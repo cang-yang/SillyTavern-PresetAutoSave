@@ -26,6 +26,24 @@ import {
 import { saveNowDetailed, getCurrentTracking, resetLastSavedHash } from './auto-save.js';
 import { forceReseedSnapshots, refreshTakeover } from './preset-takeover.js';
 import { chooseHistoryImportMode } from './import-preview.js';
+import { createMountedResources } from './core/mounted-resources.js';
+
+const settingsMounts = new Map();
+const importOwners = new Map();
+
+export function disposeSettingsMount(root) {
+    for (const [container, mount] of settingsMounts) {
+        if (container === root || mount.panelRoot === root || root?.contains?.(container)) {
+            mount.destroy();
+        }
+    }
+    for (const [ownerRoot, owner] of importOwners) {
+        if (ownerRoot === root || root?.contains?.(ownerRoot)) {
+            owner.destroy();
+            importOwners.delete(ownerRoot);
+        }
+    }
+}
 
 // =====================================================
 // 内部工具函数
@@ -153,6 +171,7 @@ export function renderSettingsTab(panelCtx) {
     const root = panelCtx.root();
     const container = root?.querySelector('[data-content="settings"]');
     if (!container) return;
+    settingsMounts.get(container)?.destroy();
     const s = getSettings();
 
     container.innerHTML = `
@@ -168,7 +187,6 @@ export function renderSettingsTab(panelCtx) {
     ${group(t('History Group'), [
         number('maxHistoryPerPreset', t('Max History Per Preset'), t('Max History Per Preset Desc'), s.maxHistoryPerPreset, 5, 500, 5, t('Records')),
         number('mergeWindowSec', t('Merge Window'), t('Merge Window Desc'), s.mergeWindowSec, 0, 600, 5, 's'),
-        number('cleanupSizeMB', t('Cleanup Size'), t('Cleanup Size Desc'), s.cleanupSizeMB, 10, 1000, 10, 'MB'),
     ])}
 
     ${group(t('Protection Group'), [
@@ -297,9 +315,20 @@ function action(actionKey, label, desc, icon = 'fa-bolt') {
 // 设置事件绑定
 // =====================================================
 export function bindSettingsEvents(container, panelCtx) {
+    settingsMounts.get(container)?.destroy();
+    const resources = createMountedResources();
+    const listen = resources.listen;
+    const mount = {
+        panelRoot: panelCtx.root?.(),
+        destroy() {
+            resources.destroy();
+            if (settingsMounts.get(container) === mount) settingsMounts.delete(container);
+        },
+    };
+    settingsMounts.set(container, mount);
     // 复选框
     container.querySelectorAll('input[type="checkbox"][data-setting]').forEach(input => {
-        input.addEventListener('change', () => {
+        listen(input, 'change', () => {
             const key = input.getAttribute('data-setting');
             updateSetting(key, input.checked);
             // takeoverEnabled 变更后刷新面板，使 UI 即时反映接管状态变化
@@ -312,17 +341,17 @@ export function bindSettingsEvents(container, panelCtx) {
     // 数字输入
     container.querySelectorAll('input[type="number"][data-setting]').forEach(input => {
         let timer = null;
-        input.addEventListener('input', () => {
-            clearTimeout(timer);
-            timer = setTimeout(() => {
+        listen(input, 'input', () => {
+            resources.cancel(timer);
+            timer = resources.schedule(() => {
                 const key = input.getAttribute('data-setting');
                 const val = parseInt(input.value, 10);
                 if (Number.isFinite(val)) updateSetting(key, val);
             }, 500);
         });
         // 失焦时回填校验后的实际值（避免用户以为超出范围的值已生效）
-        input.addEventListener('blur', () => {
-            clearTimeout(timer);
+        listen(input, 'blur', () => {
+            resources.cancel(timer);
             const key = input.getAttribute('data-setting');
             const val = parseInt(input.value, 10);
             if (Number.isFinite(val)) {
@@ -334,7 +363,7 @@ export function bindSettingsEvents(container, panelCtx) {
 
     // 下拉
     container.querySelectorAll('select[data-setting]').forEach(sel => {
-        sel.addEventListener('change', async () => {
+        listen(sel, 'change', async () => {
             const key = sel.getAttribute('data-setting');
             const newValue = sel.value;
 
@@ -343,16 +372,17 @@ export function bindSettingsEvents(container, panelCtx) {
     });
 
     // 重置按钮
-    container.querySelector('.pas-btn-reset')?.addEventListener('click', async () => {
+    listen(container.querySelector('.pas-btn-reset'), 'click', async () => {
         const ok = await confirmSafe(escapeHtml(t('Reset Settings Confirm')), escapeTranslationHtml(t('Reset Settings Hint')));
-        if (!ok) return;
+        if (!ok || !resources.active) return;
+        mount.destroy();
         resetSettings();
         toast.success(t('Reset Settings Done'));
         renderSettingsTab(panelCtx);
     });
 
     // ⭐ 立即扫描全部预设建立快照（接管模式下用户随时能让"未修改的预设"出现在面板里）
-    container.querySelector('.pas-setting-action-btn[data-action="reseed"]')?.addEventListener('click', async (e) => {
+    listen(container.querySelector('.pas-setting-action-btn[data-action="reseed"]'), 'click', async (e) => {
         const btn = e.currentTarget;
         if (btn.disabled) return;
         btn.disabled = true;
@@ -367,40 +397,40 @@ export function bindSettingsEvents(container, panelCtx) {
                     toast.info(t('Reseed All Already Done', { total: result.total || 0 }));
                 }
                 // 立即刷新面板（保持当前 tab 是 list）
-                if (panelCtx.state().tab === 'list') await panelCtx.refreshData();
+                if (resources.active && panelCtx.state().tab === 'list') await panelCtx.refreshData();
             } else {
                 toast.warning(t('Reseed Skipped'));
             }
         } catch (e2) {
             toast.error(t('Reseed Failed', { message: e2?.message || String(e2) }));
         } finally {
-            btn.disabled = false;
-            btn.innerHTML = oldHtml;
+            if (resources.active) {
+                btn.disabled = false;
+                btn.innerHTML = oldHtml;
+            }
         }
     });
 
     // 清空所有
-    container.querySelector('.pas-btn-clear-all')?.addEventListener('click', async () => {
+    listen(container.querySelector('.pas-btn-clear-all'), 'click', async () => {
         const stats = await getStats();
         const ok = await confirmSafe(
             escapeHtml(t('Clear All Confirm')),
             `<div>${escapeTranslationHtml(t('Clear All Hint', { count: stats.snapshotCount }))}</div>
              <div style="margin-top: 8px; color: var(--white50a, #999);">${escapeHtml(t('Clear All Warning'))}</div>`
         );
-        if (!ok) return;
+        if (!ok || !resources.active) return;
         await clearAll();
         // Q-1 fix: 清空所有快照后，重置 seedSnapshotsDone
         // 让下次 rescan / 初始化时能重新建立初始快照
-        // AJ-1: 同时重置分组手动覆盖，真正做到"从零开始"
         batchUpdate({
             seedSnapshotsDone: false,
-            groupingManualOverrides: {},
-            groupingSeriesAliases: {},
         });
         refreshTakeover({ force: true });
         toast.success(t('Cleared All'));
-        await panelCtx.refreshData();
+        if (resources.active) await panelCtx.refreshData();
     });
+    return mount;
 }
 
 // =====================================================
@@ -442,20 +472,33 @@ export async function onExport() {
 }
 
 export async function onImport(panelCtx) {
+    const root = panelCtx.root?.();
+    importOwners.get(root)?.destroy();
+    const owner = createMountedResources();
+    const abort = new AbortController();
+    owner.own(() => abort.abort());
+    importOwners.set(root, owner);
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/json,.json';
     input.style.display = 'none';
 
-    input.addEventListener('change', async (e) => {
+    owner.own(() => input.remove());
+    const finish = () => {
+        owner.destroy();
+        if (importOwners.get(root) === owner) importOwners.delete(root);
+    };
+    owner.listen(input, 'cancel', finish);
+    owner.listen(input, 'change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) {
-            input.remove();
+            finish();
             return;
         }
 
         try {
             const text = await file.text();
+            if (!owner.active) return;
             let data;
             try {
                 data = JSON.parse(text);
@@ -465,17 +508,18 @@ export async function onImport(panelCtx) {
             }
 
             const preview = await previewImportAll(data);
-            const mode = await chooseHistoryImportMode(preview);
-            if (!mode) return;
+            if (!owner.active) return;
+            const mode = await chooseHistoryImportMode(preview, { signal: abort.signal });
+            if (!mode || !owner.active) return;
 
             const count = await importAll(data, mode);
             toast.success(t('Import Done', { count }));
-            await panelCtx.refreshData();
+            if (owner.active) await panelCtx.refreshData();
         } catch (e) {
             logger.error('Import failed:', e);
             toast.error(t('Import Failed', { message: e?.message || String(e) }));
         } finally {
-            input.remove();
+            finish();
         }
     });
 
@@ -484,8 +528,7 @@ export async function onImport(panelCtx) {
 }
 
 /**
- * 清理所有损坏的快照（preset 为空对象或字段过少）
- * 这是修复 v0.x 版本"openai 永远返回空对象" bug 留下的脏数据的工具
+ * Inspect invalid history entries without deleting their recovery data.
  */
 export async function onPurgeCorrupt(panelCtx) {
     const ok = await confirmSafe(
@@ -498,10 +541,10 @@ export async function onPurgeCorrupt(panelCtx) {
     try {
         const result = await cleanCorruptSnapshots();
         toast.success(t('Purge Corrupt Done', {
-            cleaned: result.cleaned,
+            quarantined: result.quarantined,
             scanned: result.scanned,
         }));
-        logger.info(`[Purge] cleaned ${result.cleaned} of ${result.scanned} snapshots`);
+        logger.info(`[History inspection] quarantined ${result.quarantined} of ${result.scanned} snapshots`);
         await panelCtx.refreshData();
     } catch (e) {
         logger.error('Purge corrupt failed:', e);

@@ -35,3 +35,20 @@ test('the lifecycle entry delegates diagnostics and contains no clear-then-resee
     assert.doesNotMatch(source, /fullReset/);
     assert.doesNotMatch(source, /一键清空\+重新种子/);
 });
+
+test('diagnostic mutations reject while runtime is inactive without calling host services', async () => {
+    let calls = 0;
+    const api = createDebugInterface({
+        phaseState: () => ({ phase1: true }),
+        isActive: () => false,
+        restoreArchives: () => { calls++; },
+        reseed: () => { calls++; },
+        refreshTakeover: () => { calls++; },
+        listArchived: () => ['retained'],
+    });
+    await assert.rejects(async () => api.debug.restoreArchives(), /inactive/);
+    await assert.rejects(async () => api.debug.reseed(), /inactive/);
+    await assert.rejects(async () => api.refreshTakeover(), /inactive/);
+    assert.equal(calls, 0);
+    assert.deepEqual(api.debug.listArchived(), ['retained']);
+});

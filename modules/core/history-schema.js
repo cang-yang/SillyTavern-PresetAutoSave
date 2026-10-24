@@ -1,5 +1,6 @@
 import { createChangeSet } from './change-set.js';
 import { stableStringify } from './value-utils.js';
+import { canonicalizePreset } from './preset-schema.js';
 
 export const HISTORY_SCHEMA_VERSION = 2;
 const DERIVED_V2_FIELDS = new Set([
@@ -12,7 +13,7 @@ const DERIVED_V2_FIELDS = new Set([
     'saveStatus',
 ]);
 
-function compactChangeSet(parentPreset, preset) {
+function compactChangeSet(parentPreset, preset, apiId) {
     if (!parentPreset) {
         return {
             meaningful: false,
@@ -20,7 +21,16 @@ function compactChangeSet(parentPreset, preset) {
             counts: { added: 0, removed: 0, modified: 0 },
         };
     }
-    const changeSet = createChangeSet(parentPreset, preset);
+    let changeSet;
+    try {
+        changeSet = createChangeSet(
+            canonicalizePreset(parentPreset, { apiId }).canonical,
+            canonicalizePreset(preset, { apiId }).canonical,
+        );
+    } catch (_) {
+        // Preserve readable legacy data; invalid payloads remain diagnosable.
+        changeSet = createChangeSet(parentPreset, preset);
+    }
     return {
         meaningful: changeSet.meaningful,
         changedPaths: changeSet.changed.map(item => item.path),
@@ -38,7 +48,7 @@ export function enrichSnapshotList(list) {
             ...structuredClone(snapshot),
             schemaVersion: HISTORY_SCHEMA_VERSION,
             canonicalHash: snapshot?.hash ?? snapshot?.canonicalHash ?? '',
-            changeSet: compactChangeSet(parent?.preset, snapshot?.preset),
+            changeSet: compactChangeSet(parent?.preset, snapshot?.preset, snapshot?.apiId),
             cause: { ...(snapshot?.cause ?? {}), trigger: snapshot?.trigger ?? snapshot?.cause?.trigger ?? 'unknown' },
             transactionId: `tx:${id}:${snapshot?.timestamp ?? 0}`,
             parentSnapshotId: parent?.id ?? null,

@@ -2,6 +2,47 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateLayoutAudit } from './harness/layout-audit.mjs';
 
+test('prompt diff cells require visible side/status text and accessible group names', () => {
+    const good = { selector: '.pas-diff-cline-a', side: 'A', status: 'removed', visible: true, labelVisible: true, label: 'A - Removed', name: 'A, line 1, Removed in comparison A to B', role: 'group' };
+    assert.equal(evaluateLayoutAudit(cleanMetrics({ diffContentCells: [good] })).passed, true);
+    for (const invalid of [
+        { labelVisible: false }, { label: '' }, { label: 'A + Added' }, { name: '' }, { role: '' }, { side: '' }, { status: '' },
+    ]) {
+        const result = evaluateLayoutAudit(cleanMetrics({ diffContentCells: [{ ...good, ...invalid }] }));
+        assert.ok(result.findings.some(item => item.code === 'diff-side-label-missing'));
+    }
+});
+
+test('visible comparison commands fail audit when another element intercepts pointer input', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        controls: [{ selector: '.pas-diff-btn-swap', important: true, visible: true, pointerBlocked: true, width: 44, height: 44 }],
+    }));
+    assert.ok(result.findings.some(item => item.code === 'control-pointer-blocked'));
+});
+
+test('audit rejects undersized and faint visible history metadata in either theme', () => {
+    for (const theme of ['dark', 'light']) {
+        const result = evaluateLayoutAudit(cleanMetrics({
+            metadataText: [
+                { selector: '.pas-series-size', theme, fontSize: 9.88, contrast: 2.52 },
+                { selector: '.pas-version-latest', theme, fontSize: 12, contrast: 4.49 },
+            ],
+        }));
+        assert.deepEqual(result.findings.map(item => item.code), [
+            'metadata-text-size', 'metadata-text-contrast', 'metadata-text-contrast',
+        ]);
+    }
+});
+
+test('audit accepts readable metadata and rejects unmeasurable compositing', () => {
+    assert.equal(evaluateLayoutAudit(cleanMetrics({
+        metadataText: [{ selector: '.pas-version-count', fontSize: 12, contrast: 4.5 }],
+    })).passed, true);
+    assert.equal(evaluateLayoutAudit(cleanMetrics({
+        metadataText: [{ selector: '.pas-series-size', fontSize: 12, contrast: Number.NaN }],
+    })).passed, false);
+});
+
 function cleanMetrics(overrides = {}) {
     return {
         scenario: 'ordinary',
@@ -27,6 +68,18 @@ function cleanMetrics(overrides = {}) {
         ...overrides,
     };
 }
+
+test('visible icon commands require meaningful names beyond glyph-only text', () => {
+    const result = evaluateLayoutAudit(cleanMetrics({
+        commandNames: [
+            { selector: '.pas-btn-start-diff', visible: true, name: '\u25b6' },
+            { selector: '.pas-btn-log-copy', visible: true, name: '' },
+            { selector: '.pas-hidden', visible: false, name: '' },
+            { selector: '.pas-btn-clear-diff', visible: true, name: 'Clear comparison' },
+        ],
+    }));
+    assert.deepEqual(result.findings.map(item => item.code), ['command-name-missing', 'command-name-missing']);
+});
 
 test('clean desktop metrics pass without findings', () => {
     const result = evaluateLayoutAudit(cleanMetrics());

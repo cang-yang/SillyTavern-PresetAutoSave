@@ -1,5 +1,7 @@
 import { enrichSnapshotList, verifyMigratedSnapshotList, HISTORY_SCHEMA_VERSION } from './history-schema.js';
 import { readOptionalHistoryBucket } from './history-bucket-reader.js';
+import { SerialTaskQueue } from './serial-task-queue.js';
+import { createHistoryImportJournal } from './history-import-journal.js';
 import {
     fingerprintSnapshotSummaries,
     projectSnapshotSummaries,
@@ -24,9 +26,61 @@ export class HistoryRepository {
         this.onError = onError;
         this.migrations = new Map();
         this.migrationStats = { attempted: 0, succeeded: 0, failed: 0 };
+        this.operations = new SerialTaskQueue();
+        this.importJournal = createHistoryImportJournal(v2Store);
+        this.recoveryReady = false;
     }
 
-    async peekItem(key) {
+    #run(operation) {
+        return this.operations.run(async () => {
+            if (!this.recoveryReady) {
+                await this.importJournal.recover();
+                this.recoveryReady = true;
+            }
+            return operation();
+        });
+    }
+
+    peekItem(key) { return this.#run(() => this.#peekItem(key)); }
+    getItem(key) { return this.#run(() => this.#getItem(key)); }
+    getCatalogBucket(key) { return this.#run(() => this.#getCatalogBucket(key)); }
+    migrateItem(key) { return this.#run(() => this.#migrateItem(key)); }
+    keys() { return this.#run(() => this.#keys()); }
+    getCatalogManifest() { return this.#run(() => this.#getCatalogManifest()); }
+    removeItem(key) { return this.#run(() => this.#removeItem(key)); }
+    clear() {
+        return this.#run(async () => {
+            for (const key of await this.#keys()) await this.#removeItem(key);
+        });
+    }
+
+    applyImportPlan(plan) {
+        if (!(plan?.data instanceof Map)) return Promise.reject(new TypeError('Invalid history import plan'));
+        const captured = structuredClone(plan);
+        for (const [key, list] of captured.data) {
+            if (!isDataKey(key) || !Array.isArray(list)) {
+                return Promise.reject(new TypeError('Invalid history import bucket'));
+            }
+        }
+        return this.#run(async () => {
+            const currentKeys = await this.#keys();
+            const touched = new Set([...currentKeys, ...captured.data.keys()]);
+            const rawKeys = [...touched].flatMap(key => [key, migrationMarkerKey(key)]);
+            try {
+                return await this.importJournal.apply(rawKeys, async () => {
+                    for (const [key, list] of captured.data) await this.#writeVerified(key, list, 'active');
+                    for (const key of currentKeys) {
+                        if (!captured.data.has(key)) await this.#removeItem(key);
+                    }
+                    return captured.imported;
+                });
+            } finally {
+                this.recoveryReady = false;
+            }
+        });
+    }
+
+    async #peekItem(key) {
         const marker = await this.v2Store.getItem(migrationMarkerKey(key));
         if (marker?.status === 'deleted') return null;
 
@@ -36,7 +90,7 @@ export class HistoryRepository {
         return readOptionalHistoryBucket(this.legacyStore, key);
     }
 
-    async getItem(key) {
+    async #getItem(key) {
         const marker = await this.v2Store.getItem(migrationMarkerKey(key));
         if (marker?.status === 'deleted') return null;
 
@@ -48,7 +102,7 @@ export class HistoryRepository {
         return this.#migrate(key, legacy);
     }
 
-    async getCatalogBucket(key) {
+    async #getCatalogBucket(key) {
         const marker = await this.v2Store.getItem(migrationMarkerKey(key));
         if (marker?.status === 'deleted') return null;
         if (Array.isArray(marker?.catalogSummaries)) {
@@ -58,10 +112,10 @@ export class HistoryRepository {
                 // A derived seed may be rebuilt from authoritative history.
             }
         }
-        return this.peekItem(key);
+        return this.#peekItem(key);
     }
 
-    async migrateItem(key) {
+    async #migrateItem(key) {
         const markerKey = migrationMarkerKey(key);
         const marker = await this.v2Store.getItem(markerKey);
         if (marker?.status === 'deleted') return { status: 'deleted', snapshots: null };
@@ -157,10 +211,11 @@ export class HistoryRepository {
 
     async setItem(key, value) {
         if (!Array.isArray(value)) throw new TypeError('HistoryRepository values must be snapshot arrays');
-        return this.#writeVerified(key, value, 'active');
+        const snapshot = structuredClone(value);
+        return this.#run(() => this.#writeVerified(key, snapshot, 'active'));
     }
 
-    async removeItem(key) {
+    async #removeItem(key) {
         const markerKey = migrationMarkerKey(key);
         const tombstone = {
             status: 'deleted',
@@ -177,7 +232,7 @@ export class HistoryRepository {
         await this.v2Store.removeItem(key);
     }
 
-    async keys() {
+    async #keys() {
         const [legacyKeys, v2Keys] = await Promise.all([
             this.legacyStore.keys(),
             this.v2Store.keys(),
@@ -194,7 +249,7 @@ export class HistoryRepository {
         return result;
     }
 
-    async getCatalogManifest() {
+    async #getCatalogManifest() {
         const [legacyKeys, v2Keys] = await Promise.all([
             this.legacyStore.keys(),
             this.v2Store.keys(),
@@ -227,11 +282,6 @@ export class HistoryRepository {
         });
         manifest.sort((left, right) => left.key.localeCompare(right.key, 'en'));
         return manifest;
-    }
-
-    async clear() {
-        const keys = await this.keys();
-        for (const key of keys) await this.removeItem(key);
     }
 
     async getDiagnostics() {

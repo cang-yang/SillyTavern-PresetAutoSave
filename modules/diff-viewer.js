@@ -12,11 +12,23 @@
  */
 
 import { logger } from './logger.js';
-import { t, toast, escapeHtml as esc, formatTime, createPopupSafe, normalizePresetFields, sanitizePresetForExport, filterExtensionPrompts, DISPLAY_IGNORED_FIELDS } from './compatibility.js';
+import { t, toast, escapeHtml as esc, formatTime, createPopupSafe, sanitizePresetForExport } from './compatibility.js';
 import { stableStringify, formatBytes } from './history-store.js';
-import { formatEnumValue } from './panel-summary.js';
+import { formatEnumValue, fieldLabel, promptFieldLabel } from './panel-summary.js';
+import { comparePresetStates, indexPromptOrder } from './core/preset-comparison.js';
+import { createMountedResources } from './core/mounted-resources.js';
 
 let _popup = null;
+let _popupResources = null;
+let _popupSequence = 0;
+
+export function cleanupDiffPopup() {
+    _popupResources?.destroy();
+    _popupResources = null;
+    const popup = _popup;
+    _popup = null;
+    try { popup?.completeCancelled?.(); } catch (_) {}
+}
 
 /**
  * Keep the user's explicit A/B selection stable. Timestamp order is useful for
@@ -37,17 +49,15 @@ export function resolveDiffSides(snapA, snapB) {
  * @param {object} snapB
  */
 export async function showDiffPopup(snapA, snapB) {
-    if (_popup) {
-        try { _popup.completeCancelled?.(); } catch (_) { /* noop */ }
-        _popup = null;
-    }
+    cleanupDiffPopup();
     if (!snapA || !snapB) { toast.error(t('Diff Need Two')); return; }
     if (snapA.id === snapB.id) { toast.warning(t('Diff Same Snapshot')); return; }
 
     const { a, b } = resolveDiffSides(snapA, snapB);
 
     try {
-        const html = buildDiffPopupHTML(a, b);
+        const instance = ++_popupSequence;
+        const html = buildDiffPopupHTML(a, b, { instance });
         _popup = createPopupSafe(html, 'DISPLAY', {
             wide: true, large: true, allowVerticalScrolling: true,
             okButton: false, cancelButton: t('Close'),
@@ -56,9 +66,24 @@ export async function showDiffPopup(snapA, snapB) {
             toast.error(t('Diff Failed', { message: 'Popup API not available' }));
             return;
         }
-        const p = _popup.show();
-        setTimeout(() => bindDiffEvents(a, b), 50);
-        p.finally(() => { _popup = null; });
+        const popup = _popup;
+        const owner = createMountedResources();
+        _popupResources = owner;
+        const settled = () => {
+            owner.destroy();
+            if (_popup === popup) {
+                _popup = null;
+                _popupResources = null;
+            }
+        };
+        Promise.resolve(popup.show()).then(settled, settled);
+        let attempts = 0;
+        const bind = () => {
+            const root = document.querySelector(`[data-pas-diff-instance="${instance}"]`);
+            if (root) bindDiffEvents(root, a, b, owner);
+            else if (++attempts < 10) owner.schedule(bind, 50);
+        };
+        owner.schedule(bind, 0);
     } catch (e) {
         logger.error('Failed to show diff popup:', e);
         toast.error(t('Diff Failed', { message: e?.message || String(e) }));
@@ -189,20 +214,14 @@ const IMPORTANT = new Set([
     'openai_max_tokens', 'openai_max_context', 'openai_model',
     'reasoning_effort', 'seed',
 ]);
-// 使用 DISPLAY_IGNORED_FIELDS（从 compatibility.js 导入），与导出排除字段保持同步
-const SKIP = DISPLAY_IGNORED_FIELDS;
-
-// normalizePresetFields 和 FIELD_SYNONYMS 从 history-store.js 导入
-const PFIELDS = ['name', 'role', 'content', 'system_prompt', 'marker',
-    'injection_position', 'injection_depth', 'forbid_overrides'];
-
 function computeDiff(a, b) {
-    const A = a?.preset || {}, B = b?.preset || {};
+    const comparison = comparePresetStates(a?.preset, b?.preset, { apiId: a?.apiId || b?.apiId || 'openai' });
+    const A = comparison.before, B = comparison.after;
     const settings = diffSettings(A, B);
     const prompts  = diffPrompts(A, B);
     const order    = diffOrder(A, B, prompts);
     return {
-        settings, prompts, order,
+        settings, prompts, order, changeSet: comparison.changeSet,
         counts: {
             settingsChanged: settings.filter(s => s.status !== 'same').length,
             promptsModified: prompts.filter(p => p.status === 'modified').length,
@@ -215,9 +234,9 @@ function computeDiff(a, b) {
 
 function diffSettings(A, B) {
     // 规范化字段名后再比较，避免同义字段产生虚假 diff
-    const nA = normalizePresetFields(A);
-    const nB = normalizePresetFields(B);
-    const keys = [...new Set([...Object.keys(nA), ...Object.keys(nB)].filter(k => !SKIP.has(k)))].sort();
+    const nA = A, nB = B;
+    const keys = [...new Set([...Object.keys(nA), ...Object.keys(nB)]
+        .filter(k => k !== 'prompts' && k !== 'prompt_order'))].sort();
     return keys.map(k => {
         const av = nA[k], bv = nB[k];
         const aH = Object.hasOwn(nA, k), bH = Object.hasOwn(nB, k);
@@ -231,8 +250,8 @@ function diffSettings(A, B) {
 
 function diffPrompts(A, B) {
     // 过滤扩展注入的 prompt，确保对比视图不显示非用户 prompt
-    const aArr = filterExtensionPrompts(Array.isArray(A.prompts) ? A.prompts : [], A.prompt_order);
-    const bArr = filterExtensionPrompts(Array.isArray(B.prompts) ? B.prompts : [], B.prompt_order);
+    const aArr = Array.isArray(A.prompts) ? A.prompts : [];
+    const bArr = Array.isArray(B.prompts) ? B.prompts : [];
     const aM = new Map(aArr.filter(p => p?.identifier).map(p => [p.identifier, p]));
     const bM = new Map(bArr.filter(p => p?.identifier).map(p => [p.identifier, p]));
     const seen = new Set(), ids = [];
@@ -245,7 +264,7 @@ function diffPrompts(A, B) {
         if (!ap && bp) return { id, name: pLabel(bp), status: 'added', aP: null, bP: bp, fields: [] };
         let changed = false;
         const fields = [];
-        for (const f of PFIELDS) {
+        for (const f of new Set([...Object.keys(ap), ...Object.keys(bp)])) {
             const av = ap[f], bv = bp[f];
             if (av === undefined && bv === undefined) continue;
             const same = jsonEq(av, bv);
@@ -261,36 +280,31 @@ function diffPrompts(A, B) {
 }
 
 function diffOrder(A, B, promptsDiff) {
-    const aO = extractOrd(A.prompt_order), bO = extractOrd(B.prompt_order);
+    const aO = indexPromptOrder(A.prompt_order), bO = indexPromptOrder(B.prompt_order);
     const nm = new Map(promptsDiff.map(p => [p.id, p.name]));
     const seen = new Set(), ids = [];
     for (const [id] of bO) { if (!seen.has(id)) { seen.add(id); ids.push(id); } }
     for (const [id] of aO) { if (!seen.has(id)) { seen.add(id); ids.push(id); } }
     return ids.map(id => {
-        const ae = aO.get(id), be = bO.get(id), name = nm.get(id) || id;
-        if (ae && !be) return { id, name, aIdx: ae.idx, bIdx: null, aEn: ae.en, bEn: null, status: 'only-a' };
-        if (!ae && be) return { id, name, aIdx: null, bIdx: be.idx, aEn: null, bEn: be.en, status: 'only-b' };
-        const pc = ae.idx !== be.idx, ec = !!ae.en !== !!be.en;
-        return { id, name, aIdx: ae.idx, bIdx: be.idx, aEn: ae.en, bEn: be.en, pc, ec, status: pc || ec ? 'changed' : 'same' };
+        const ae = aO.get(id), be = bO.get(id);
+        const entry = be || ae;
+        const name = `${nm.get(entry.identifier) || t('Unnamed Prompt')} (${t('Prompt Order Group', { number: entry.groupIndex + 1 })})`;
+        if (ae && !be) return { id, name, aIdx: ae.index, bIdx: null, aEn: ae.enabled, bEn: null, status: 'only-a' };
+        if (!ae && be) return { id, name, aIdx: null, bIdx: be.index, aEn: null, bEn: be.enabled, status: 'only-b' };
+        const pc = ae.index !== be.index, ec = !!ae.enabled !== !!be.enabled;
+        return { id, name, aIdx: ae.index, bIdx: be.index, aEn: ae.enabled, bEn: be.enabled, pc, ec, status: pc || ec ? 'changed' : 'same' };
     });
-}
-
-function extractOrd(po) {
-    const m = new Map();
-    if (!Array.isArray(po) || !po[0] || !Array.isArray(po[0].order)) return m;
-    po[0].order.forEach((o, i) => { if (o?.identifier) m.set(o.identifier, { idx: i, en: !!o.enabled }); });
-    return m;
 }
 
 // =====================================================
 // HTML 构建
 // =====================================================
 
-export function buildDiffPopupHTML(a, b) {
+export function buildDiffPopupHTML(a, b, { instance = '' } = {}) {
     const diff = computeDiff(a, b);
     const c = diff.counts;
     return `
-<div class="pas-diff-popup">
+<div class="pas-diff-popup" data-pas-diff-instance="${esc(instance)}">
     <div class="pas-diff-header">
         <h4><i class="fa-solid fa-code-compare"></i> ${esc(t('Diff Title'))}</h4>
     </div>
@@ -356,13 +370,21 @@ function bodyHTML(diff, showAll) {
     const hs = diff.settings.some(s => s.status !== 'same');
     const hp = diff.prompts.some(p => p.status !== 'unchanged');
     const ho = diff.order.some(o => o.status !== 'same');
-    if (!hs && !hp && !ho && !showAll) {
+    if (!diff.changeSet.meaningful && !showAll) {
         return `<div class="pas-diff-no-changes"><i class="fa-solid fa-equals"></i><span>${esc(t('Diff No Changes'))}</span></div>`;
     }
     let h = '';
     if (hp || showAll) h += promptsSectionHTML(diff.prompts, showAll);
     if (hs || showAll) h += settingsSectionHTML(diff.settings, showAll);
     if (ho || showAll) h += orderSectionHTML(diff.order, showAll);
+    if (diff.changeSet.meaningful) {
+        const entries = diff.changeSet.changed.map(change => `<div class="pas-diff-param-row">
+            <code class="pas-diff-param-label">${esc(change.path)}</code>
+            <span class="pas-diff-param-values"><code>${esc(fmtV(change.rawBefore ?? change.before))}</code>
+            <span class="pas-diff-arrow">→</span><code>${esc(fmtV(change.rawAfter ?? change.after))}</code></span></div>`).join('');
+        h += `<details class="pas-diff-technical"${!hs && !hp && !ho ? ' open' : ''}>
+            <summary>${esc(t('Technical Details'))} (${diff.changeSet.changed.length})</summary>${entries}</details>`;
+    }
     return h;
 }
 
@@ -372,11 +394,11 @@ function promptsSectionHTML(prompts, showAll) {
     const vis = showAll ? prompts : prompts.filter(p => p.status !== 'unchanged');
     if (!vis.length) return '';
     return `<div class="pas-diff-section" data-section="prompts">
-        <div class="pas-diff-section-head pas-diff-section-toggle">
+        <button type="button" class="pas-diff-section-head pas-diff-section-toggle" aria-expanded="true">
             <i class="fa-solid fa-list-ul"></i><span>${esc(t('Diff Section Prompts'))}</span>
             <span class="pas-diff-section-count">${vis.length}</span>
             <i class="fa-solid fa-chevron-down pas-diff-section-chevron"></i>
-        </div>
+        </button>
         <div class="pas-diff-section-body">${vis.map(promptCardHTML).join('')}</div>
     </div>`;
 }
@@ -393,7 +415,7 @@ function promptCardHTML(p) {
         <div class="pas-diff-prompt-header">
             <span class="pas-diff-prompt-name">${esc(p.name)}</span>
             ${role ? `<span class="pas-diff-prompt-role">${esc(role)}</span>` : ''}
-            <span class="pas-diff-prompt-id">${esc(p.id)}</span>
+            <details class="pas-diff-prompt-identity"><summary>${esc(t('Technical Details'))}</summary><code>${esc(p.id)}</code></details>
             <span class="pas-diff-prompt-badge pas-diff-badge-${esc(p.status)}">${esc(labels[p.status] || p.status)}</span>
         </div>
         ${body ? `<div class="pas-diff-prompt-body">${body}</div>` : ''}
@@ -403,16 +425,15 @@ function promptCardHTML(p) {
 function singleContentHTML(prompt, type) {
     if (!prompt) return '';
     const content = typeof prompt.content === 'string' ? prompt.content : '';
-    if (!content) return `<div class="pas-diff-no-content">${esc(t('Diff No Content'))}</div>`;
     const lines = content.split('\n');
     const cls = type === 'add' ? 'pas-diff-cline-add' : 'pas-diff-cline-del';
     let rows = '';
     for (let i = 0; i < lines.length; i++) {
         const ln = i + 1;
         if (type === 'del') {
-            rows += `<div class="pas-diff-cline ${cls}"><div class="pas-diff-cline-a"><span class="pas-diff-ln">${ln}</span><span class="pas-diff-ct">${esc(lines[i]) || '&nbsp;'}</span></div><div class="pas-diff-cline-b"></div></div>`;
+            rows += `<div class="pas-diff-cline ${cls}">${contentSideHTML('A', ln, 'removed', esc(lines[i]))}${contentSideHTML('B')}</div>`;
         } else {
-            rows += `<div class="pas-diff-cline ${cls}"><div class="pas-diff-cline-a"></div><div class="pas-diff-cline-b"><span class="pas-diff-ln">${ln}</span><span class="pas-diff-ct">${esc(lines[i]) || '&nbsp;'}</span></div></div>`;
+            rows += `<div class="pas-diff-cline ${cls}">${contentSideHTML('A')}${contentSideHTML('B', ln, 'added', esc(lines[i]))}</div>`;
         }
     }
     return `<div class="pas-diff-content-table">${rows}</div>`;
@@ -424,7 +445,7 @@ function modifiedBodyHTML(p) {
     if (fc.length) {
         h += '<div class="pas-diff-prompt-fields">';
         for (const fd of fc) {
-            const label = t(`Prompt Field ${fd.field}`) || fd.field;
+            const label = promptFieldLabel(fd.field);
             h += `<div class="pas-diff-prompt-field-row"><span class="pas-diff-prompt-field-label">${esc(label)}:</span> <code class="pas-diff-val-old">${esc(fmtV(fd.aVal))}</code> <span class="pas-diff-arrow">→</span> <code class="pas-diff-val-new">${esc(fmtV(fd.bVal))}</code></div>`;
         }
         h += '</div>';
@@ -443,20 +464,36 @@ function contentTableHTML(diffs) {
     for (const d of diffs) {
         if (d.type === 'same') {
             aLn++; bLn++;
-            rows += `<div class="pas-diff-cline pas-diff-cline-same"><div class="pas-diff-cline-a"><span class="pas-diff-ln">${aLn}</span><span class="pas-diff-ct">${esc(d.textA) || '&nbsp;'}</span></div><div class="pas-diff-cline-b"><span class="pas-diff-ln">${bLn}</span><span class="pas-diff-ct">${esc(d.textB) || '&nbsp;'}</span></div></div>`;
+            rows += `<div class="pas-diff-cline pas-diff-cline-same">${contentSideHTML('A', aLn, 'unchanged', esc(d.textA))}${contentSideHTML('B', bLn, 'unchanged', esc(d.textB))}</div>`;
         } else if (d.type === 'mod') {
             aLn++; bLn++;
             const ch = charDiff(d.textA, d.textB);
-            rows += `<div class="pas-diff-cline pas-diff-cline-mod"><div class="pas-diff-cline-a pas-diff-cline-moddel"><span class="pas-diff-ln">${aLn}</span><span class="pas-diff-ct">${charSideHTML(ch, 'del')}</span></div><div class="pas-diff-cline-b pas-diff-cline-modadd"><span class="pas-diff-ln">${bLn}</span><span class="pas-diff-ct">${charSideHTML(ch, 'add')}</span></div></div>`;
+            rows += `<div class="pas-diff-cline pas-diff-cline-mod">${contentSideHTML('A', aLn, 'removed', charSideHTML(ch, 'del'), 'pas-diff-cline-moddel')}${contentSideHTML('B', bLn, 'added', charSideHTML(ch, 'add'), 'pas-diff-cline-modadd')}</div>`;
         } else if (d.type === 'del') {
             aLn++;
-            rows += `<div class="pas-diff-cline pas-diff-cline-del"><div class="pas-diff-cline-a"><span class="pas-diff-ln">${aLn}</span><span class="pas-diff-ct">${esc(d.textA) || '&nbsp;'}</span></div><div class="pas-diff-cline-b"></div></div>`;
+            rows += `<div class="pas-diff-cline pas-diff-cline-del">${contentSideHTML('A', aLn, 'removed', esc(d.textA))}${contentSideHTML('B')}</div>`;
         } else {
             bLn++;
-            rows += `<div class="pas-diff-cline pas-diff-cline-add"><div class="pas-diff-cline-a"></div><div class="pas-diff-cline-b"><span class="pas-diff-ln">${bLn}</span><span class="pas-diff-ct">${esc(d.textB) || '&nbsp;'}</span></div></div>`;
+            rows += `<div class="pas-diff-cline pas-diff-cline-add">${contentSideHTML('A')}${contentSideHTML('B', bLn, 'added', esc(d.textB))}</div>`;
         }
     }
     return `<div class="pas-diff-content-table">${rows}</div>`;
+}
+
+// Content is already escaped or produced by charSideHTML; labels never infer
+// chronology. Added/removed always describe the selected A-to-B comparison.
+function contentSideHTML(side, line, status, content = '', extraClass = '') {
+    const cls = `pas-diff-cline-${side.toLowerCase()}`;
+    if (!line) return `<div class="${cls}" aria-hidden="true"></div>`;
+    const states = {
+        removed: ['-', 'Diff Line Removed'],
+        added: ['+', 'Diff Line Added'],
+        unchanged: ['=', 'Diff Line Unchanged'],
+    };
+    const [symbol, key] = states[status];
+    const label = t(key);
+    const accessibleName = t('Diff Line Accessible', { side, line, status: label });
+    return `<div class="${cls}${extraClass ? ` ${extraClass}` : ''}" data-diff-side="${side}" data-diff-status="${status}" role="group" aria-label="${esc(accessibleName)}"><span class="pas-diff-line-label">${side} ${symbol} ${esc(label)}</span><span class="pas-diff-ln" aria-hidden="true">${line}</span><span class="pas-diff-ct">${content || esc(t('Diff No Content'))}</span></div>`;
 }
 
 /** 渲染字符级 diff 的一侧：del 侧显示 same+del，add 侧显示 same+add */
@@ -468,7 +505,7 @@ function charSideHTML(ops, side) {
             h += `<span class="pas-diff-c${side}">${esc(op.text)}</span>`;
         }
     }
-    return h || '&nbsp;';
+    return h;
 }
 
 // ---------- Settings section ----------
@@ -482,11 +519,11 @@ function settingsSectionHTML(settings, showAll) {
         return (o[a.status] ?? 9) - (o[b.status] ?? 9) || a.key.localeCompare(b.key);
     });
     return `<div class="pas-diff-section" data-section="settings">
-        <div class="pas-diff-section-head pas-diff-section-toggle">
+        <button type="button" class="pas-diff-section-head pas-diff-section-toggle" aria-expanded="true">
             <i class="fa-solid fa-sliders"></i><span>${esc(t('Diff Section Settings'))}</span>
             <span class="pas-diff-section-count">${vis.length}</span>
             <i class="fa-solid fa-chevron-down pas-diff-section-chevron"></i>
-        </div>
+        </button>
         <div class="pas-diff-section-body"><div class="pas-diff-params-list">${sorted.map(paramRowHTML).join('')}</div></div>
     </div>`;
 }
@@ -514,7 +551,7 @@ function paramRowHTML(s) {
         : s.status === 'only-b' ? '<i class="fa-solid fa-circle-plus pas-diff-param-status-icon"></i>'
         : '';
     return `<div class="pas-diff-param-row pas-diff-param-${esc(s.status)}${s.important ? ' pas-diff-param-important' : ''}">
-        <span class="pas-diff-param-label">${statusIcon}${hasFN ? `<span class="pas-diff-param-fname">${esc(friendly)}</span> ` : ''}<span class="pas-diff-param-key">${esc(s.key)}</span>${s.important ? ' <i class="fa-solid fa-star pas-diff-param-star"></i>' : ''}</span>
+        <span class="pas-diff-param-label" title="${esc(s.key)}">${statusIcon}<span class="pas-diff-param-fname">${esc(hasFN ? friendly : fieldLabel(s.key))}</span>${s.important ? ' <i class="fa-solid fa-star pas-diff-param-star"></i>' : ''}</span>
         <span class="pas-diff-param-values">${vH}</span>
     </div>`;
 }
@@ -525,11 +562,11 @@ function orderSectionHTML(order, showAll) {
     const vis = showAll ? order : order.filter(o => o.status !== 'same');
     if (!vis.length) return '';
     return `<div class="pas-diff-section" data-section="order">
-        <div class="pas-diff-section-head pas-diff-section-toggle">
+        <button type="button" class="pas-diff-section-head pas-diff-section-toggle" aria-expanded="true">
             <i class="fa-solid fa-arrows-up-down"></i><span>${esc(t('Diff Section Order'))}</span>
             <span class="pas-diff-section-count">${vis.length}</span>
             <i class="fa-solid fa-chevron-down pas-diff-section-chevron"></i>
-        </div>
+        </button>
         <div class="pas-diff-section-body"><div class="pas-diff-order-list">${vis.map(orderRowHTML).join('')}</div></div>
     </div>`;
 }
@@ -566,9 +603,7 @@ function orderRowHTML(o) {
 // 事件绑定
 // =====================================================
 
-function bindDiffEvents(a, b) {
-    const root = document.querySelector('.pas-diff-popup');
-    if (!root) return;
+function bindDiffEvents(root, a, b, owner) {
 
     // ⚡ C3 修复已移除：stopPropagation 会阻止滚动等正常交互。
     //   ST Popup 使用原生 <dialog>.showModal()，关闭是通过 cancel 事件触发的，
@@ -585,11 +620,16 @@ function bindDiffEvents(a, b) {
 
     // T8 fix: 使用事件委托处理 section toggle，而非直接绑定到元素上。
     // 这样即使 refresh() 重建 innerHTML，事件也不会丢失。
-    root.addEventListener('click', (e) => {
+    owner.listen(root, 'click', (e) => {
         const toggle = e.target.closest('.pas-diff-section-toggle');
         if (!toggle) return;
         const sec = toggle.closest('.pas-diff-section');
-        if (sec) sec.classList.toggle('pas-diff-section-collapsed');
+        if (sec) {
+            const collapsed = sec.classList.toggle('pas-diff-section-collapsed');
+            toggle.setAttribute('aria-expanded', String(!collapsed));
+            const content = sec.querySelector('.pas-diff-section-body');
+            if (content) content.hidden = collapsed;
+        }
     });
 
     const refresh = () => {
@@ -597,9 +637,9 @@ function bindDiffEvents(a, b) {
         // T8 fix: 不再需要 bindToggles()，事件委托已在 root 上处理
     };
 
-    showAllCb?.addEventListener('change', refresh);
+    owner.listen(showAllCb, 'change', refresh);
 
-    swapBtn?.addEventListener('click', () => {
+    owner.listen(swapBtn, 'click', () => {
         [curA, curB] = [curB, curA];
         curDiff = computeDiff(curA, curB);
         const ma = root.querySelector('.pas-diff-side-meta-a');
@@ -611,7 +651,7 @@ function bindDiffEvents(a, b) {
         refresh();
     });
 
-    exportBtn?.addEventListener('click', () => {
+    owner.listen(exportBtn, 'click', () => {
         try {
             const payload = { version: 2, exportedAt: Date.now(), a: snapExp(curA), b: snapExp(curB), counts: curDiff.counts };
             const json = JSON.stringify(payload, null, 2);
@@ -631,11 +671,11 @@ function bindDiffEvents(a, b) {
         }
     });
 
-    exportABtn?.addEventListener('click', () => {
+    owner.listen(exportABtn, 'click', () => {
         downloadSnapshotAsPreset(curA);
     });
 
-    exportBBtn?.addEventListener('click', () => {
+    owner.listen(exportBBtn, 'click', () => {
         downloadSnapshotAsPreset(curB);
     });
 }
@@ -683,8 +723,7 @@ function snapExp(s) {
 function pLabel(p) {
     if (!p) return '?';
     if (typeof p.name === 'string' && p.name.trim()) return p.name.trim();
-    if (typeof p.identifier === 'string') return p.identifier.length > 24 ? p.identifier.slice(0, 20) + '…' : p.identifier;
-    return '?';
+    return t('Unnamed Prompt');
 }
 
 function jsonEq(a, b) {
@@ -701,7 +740,10 @@ function fmtV(v) {
     if (typeof v === 'boolean') return v ? 'true' : 'false';
     if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '∞';
     if (typeof v === 'string') return v.length === 0 ? '""' : v.length > 200 ? v.slice(0, 200) + '…(+' + (v.length - 200) + ')' : v;
-    if (Array.isArray(v)) return '[' + v.length + ']';
+    if (Array.isArray(v)) {
+        const text = JSON.stringify(v);
+        return text.length > 200 ? `${text.slice(0, 200)}...` : text;
+    }
     if (typeof v === 'object') { const s = stableStringify(v); return s.length > 200 ? s.slice(0, 200) + '…' : s; }
     return String(v);
 }

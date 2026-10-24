@@ -11,14 +11,13 @@
 import { logger } from './logger.js';
 import { getSettings, onSettingChange } from './settings.js';
 import { on, getEventType, t } from './compatibility.js';
-import { registerStatusSetter } from './auto-save.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 import {
     applyStatusIndicatorPresentation,
     applyStatusIndicatorState,
     STATUS_INDICATOR_STATES,
 } from './core/status-indicator.js';
-import { getSaveStatus, saveStatusLabelKey, setSaveStatus } from './core/save-status.js';
+import { getSaveStatus, saveStatusLabelKey, setSaveStatus, onSaveStatusChange } from './core/save-status.js';
 
 // =====================================================
 // 常量
@@ -38,7 +37,7 @@ function statusLabel(state) {
 let _onHistoryClick = null;
 let _observer = null;
 let _injectScheduled = false;
-let _statusResetTimer = null;
+let _statusUnsubscribe = null;
 let _intervalId = null;
 let _initialized = false;
 let _settingUnsubscribe = null;
@@ -58,7 +57,8 @@ export async function initUIInjector(onHistoryClick) {
     _onHistoryClick = typeof onHistoryClick === 'function' ? onHistoryClick : null;
 
     // 注册状态设置器到 auto-save
-    registerStatusSetter(setStatusDot);
+    _statusUnsubscribe = onSaveStatusChange(syncStatusIndicators);
+    syncStatusIndicators(getSaveStatus());
 
     // 监听设置变化
     _settingUnsubscribe = onSettingChange(({ key }) => {
@@ -277,17 +277,7 @@ function updateStatusDotVisibility() {
 // 状态切换（供 auto-save 调用）
 // =====================================================
 export function setStatusDot(state) {
-    if (!STATUS_INDICATOR_STATES.includes(state) || !setSaveStatus(state)) return;
-
-    syncStatusIndicators(state);
-
-    // saved/error 状态自动恢复 idle
-    if (_statusResetTimer) _runtimeTimers.cancel(_statusResetTimer);
-    if (state === 'saved') {
-        _statusResetTimer = _runtimeTimers.schedule(() => setStatusDot('idle'), 2000);
-    } else if (state === 'error') {
-        _statusResetTimer = _runtimeTimers.schedule(() => setStatusDot('idle'), 4000);
-    }
+    if (STATUS_INDICATOR_STATES.includes(state)) setSaveStatus(state);
 }
 
 function syncStatusIndicators(state) {
@@ -392,7 +382,8 @@ function setupObserver() {
 // =====================================================
 export function teardown() {
     _runtimeTimers.clearAll();
-    registerStatusSetter(() => {});
+    _statusUnsubscribe?.();
+    _statusUnsubscribe = null;
     _injectScheduled = false;
     if (_observer) {
         _observer.disconnect();
@@ -400,9 +391,6 @@ export function teardown() {
     }
     if (_intervalId) {
         _intervalId = null;
-    }
-    if (_statusResetTimer) {
-        _statusResetTimer = null;
     }
 
     if (_settingUnsubscribe) {

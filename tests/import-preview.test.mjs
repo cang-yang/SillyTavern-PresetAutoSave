@@ -71,7 +71,7 @@ test('requires an explicit destructive choice when merge conflicts exist', () =>
 test('settings import flow previews before applying the selected mode', async () => {
     const source = await readFile(new URL('../modules/panel-settings-log.js', import.meta.url), 'utf8');
     const previewAt = source.indexOf('previewImportAll(data)');
-    const chooseAt = source.indexOf('chooseHistoryImportMode(preview)');
+    const chooseAt = source.indexOf('chooseHistoryImportMode(preview,');
     const importAt = source.indexOf('importAll(data, mode)');
 
     assert.ok(previewAt >= 0);

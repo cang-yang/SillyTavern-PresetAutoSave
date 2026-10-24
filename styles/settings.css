@@ -1,0 +1,47 @@
+/* Settings controls retain compact visual faces inside reliable hit areas. */
+.pas-settings .pas-setting-item:has(.pas-switch) {
+    flex-direction: row;
+    align-items: center;
+}
+
+.pas-settings .pas-switch {
+    width: 44px;
+    height: 44px;
+    margin: 0;
+}
+
+.pas-settings .pas-switch input {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.pas-settings .pas-switch-slider {
+    inset: 12px 3px;
+    pointer-events: none;
+}
+
+.pas-settings .pas-switch input:focus-visible + .pas-switch-slider {
+    outline: 2px solid var(--pas-v4-accent-readable, #a78bfa);
+    outline-offset: 3px;
+}
+
+.pas-settings .pas-number-input,
+.pas-settings .pas-select-input,
+.pas-settings button {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.pas-settings .pas-number-input:focus-visible,
+.pas-settings .pas-select-input:focus-visible,
+.pas-settings button:focus-visible {
+    outline: 2px solid var(--pas-v4-accent-readable, #a78bfa);
+    outline-offset: 2px;
+}
+
+.pas-settings .pas-settings-actions { flex-wrap: wrap; }

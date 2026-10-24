@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const panelSource = await readFile(new URL('../modules/history-panel.js', import.meta.url), 'utf8');
 const actionSource = await readFile(new URL('../modules/panel-actions.js', import.meta.url), 'utf8');
+const viewerSource = await readFile(new URL('../modules/snapshot-viewer.js', import.meta.url), 'utf8');
 
 test('history panel opens from summary catalog instead of complete snapshot payloads', () => {
     assert.match(panelSource, /getSnapshotSummaries/);
@@ -20,7 +21,9 @@ test('panel open no longer owns a full-payload TTL cache or background warmup', 
 });
 
 test('payload-dependent card actions retain authoritative lazy lookup', () => {
-    for (const action of ['onView', '_onRestoreImpl', 'onExportPreset', 'onStartDiff']) {
+    assert.match(actionSource, /showSnapshotViewer as onView/);
+    assert.match(viewerSource, /async function showSnapshotViewer\(snapshotId\)[\s\S]*?await getSnapshotById\(snapshotId\)/);
+    for (const action of ['_onRestoreImpl', 'onExportPreset', 'onStartDiff']) {
         const start = actionSource.indexOf(`function ${action}`);
         assert.notEqual(start, -1, `missing ${action}`);
         assert.match(actionSource.slice(start, start + 3500), /getSnapshotById\(/);

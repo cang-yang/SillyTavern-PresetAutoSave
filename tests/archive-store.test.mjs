@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 const storages = new Map();
 const readTrace = [];
+const failedReadKeys = new Set();
 const localforage = {
     createInstance({ storeName }) {
         if (!storages.has(storeName)) storages.set(storeName, new Map());
@@ -10,6 +11,7 @@ const localforage = {
         return {
             async getItem(key) {
                 readTrace.push({ storeName, key });
+                if (failedReadKeys.has(key)) throw new Error('archive read failed');
                 return structuredClone(storage.get(key) ?? null);
             },
             async setItem(key, value) {
@@ -136,4 +138,27 @@ test('obsolete persisted archive catalogs cannot override authoritative summarie
 
     assert.equal(summaries.find(item => item.presetName === 'Story V4').seriesKey, 'Story New');
     assert.equal(summaries.some(item => item.presetName === 'Story V5'), true);
+});
+
+test('strict archive enumeration rejects individual read failures without deleting recovery data', async () => {
+    const key = 'openai::Unreadable';
+    await archive.archivePreset('openai', 'Unreadable', { temperature: 1 }, 'Unreadable');
+    failedReadKeys.add(key);
+    try {
+        await assert.rejects(archive.listArchivedPresets({ strict: true }), /archive read failed/i);
+        assert.equal(storages.get('archived_presets').has(key), true);
+    } finally {
+        failedReadKeys.delete(key);
+    }
+});
+
+test('strict archive enumeration rejects malformed and mismatched authoritative entries', async () => {
+    const storage = storages.get('archived_presets');
+    const key = 'openai::Malformed';
+    for (const entry of [null, {}, { apiId: 'openai', presetName: 'Other', data: {} }]) {
+        storage.set(key, entry);
+        await assert.rejects(archive.listArchivedPresets({ strict: true }), /invalid archive/i);
+        assert.equal(storage.has(key), true);
+    }
+    storage.delete(key);
 });

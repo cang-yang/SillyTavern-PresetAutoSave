@@ -1,0 +1,12 @@
+.pas-dd-trigger,
+.pas-dd-group-header,
+.pas-dd-item {
+    min-height: 44px;
+    box-sizing: border-box;
+}
+
+.pas-dd-item:focus-visible,
+.pas-dd-item--focused {
+    outline: 2px solid var(--pas-c-accent, #8870ce);
+    outline-offset: -2px;
+}

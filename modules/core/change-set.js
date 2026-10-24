@@ -26,6 +26,8 @@ function pushChange(changed, path, kind, before, after) {
         kind,
         before: describeValue(before),
         after: describeValue(after),
+        rawBefore: before,
+        rawAfter: after,
     });
 }
 
@@ -44,11 +46,34 @@ function diffPromptArray(before, after, path, changed) {
             diffValue(beforeMap.get(identifier), afterMap.get(identifier), itemPath, changed);
         }
     }
+    const previousOrder = before.map(item => item.identifier);
+    const nextOrder = after.map(item => item.identifier);
+    if (before.length === after.length && beforeMap.size === afterMap.size
+        && identifiers.every(id => beforeMap.has(id) && afterMap.has(id))
+        && stableStringify(previousOrder) !== stableStringify(nextOrder)) {
+        pushChange(changed, path, 'modified', previousOrder, nextOrder);
+    }
 }
 
 function diffArray(before, after, path, changed) {
-    if (path === 'prompts' && [...before, ...after].every(item => !item || item.identifier)) {
+    const uniquePrompts = list => list.every(item => typeof item?.identifier === 'string' && item.identifier)
+        && new Set(list.map(item => item.identifier)).size === list.length;
+    if (path === 'prompts' && uniquePrompts(before) && uniquePrompts(after)) {
         diffPromptArray(before, after, path, changed);
+        return;
+    }
+    const uniqueGroups = list => list.every(item => item?.character_id !== undefined)
+        && new Set(list.map(item => JSON.stringify(item.character_id))).size === list.length;
+    if (path === 'prompt_order' && uniqueGroups(before) && uniqueGroups(after)) {
+        const left = new Map(before.map(group => [JSON.stringify(group.character_id), group]));
+        const right = new Map(after.map(group => [JSON.stringify(group.character_id), group]));
+        for (const key of new Set([...left.keys(), ...right.keys()])) {
+            diffValue(left.get(key), right.get(key), `${path}[character:${key}]`, changed);
+        }
+        if (left.size === right.size && [...left.keys()].every(key => right.has(key))
+            && stableStringify([...left.keys()]) !== stableStringify([...right.keys()])) {
+            pushChange(changed, path, 'modified', [...left.keys()], [...right.keys()]);
+        }
         return;
     }
 

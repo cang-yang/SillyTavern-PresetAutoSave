@@ -135,6 +135,41 @@ body.pas-light {
     box-shadow: 0 20px 60px rgba(0, 0, 0, .32);
 }
 
+dialog.pas-harness-dialog {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: min(1100px, calc(100vw - 32px));
+    max-width: none;
+    height: fit-content;
+    max-height: calc(100svh - 32px);
+    margin: auto;
+    border: 1px solid var(--SmartThemeBorderColor);
+    box-sizing: border-box;
+    color: var(--SmartThemeBodyColor);
+    background: var(--SmartThemeBlurTintColor);
+}
+
+.pas-harness-popup-close {
+    flex-shrink: 0;
+    min-height: 44px;
+    margin-top: 12px;
+    color: inherit;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    cursor: pointer;
+}
+
+@media (max-width: 640px) {
+    dialog.pas-harness-dialog {
+        width: 100vw;
+        height: 100svh;
+        max-height: none;
+        margin: 0;
+        border: 0;
+    }
+}
+
 .pas-harness-group-dialog > .pas-gm-popup {
     padding: 18px;
     border: 1px solid var(--SmartThemeBorderColor);

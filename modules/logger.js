@@ -51,6 +51,8 @@ const MAX_BUFFER = 1000;             // 内存中最多保留 1000 条
 const PERSIST_KEY = 'pas-log-buffer';
 const PERSIST_LIMIT = 200;           // localStorage 最多保留 200 条
 const PERSIST_DEBOUNCE_MS = 500;     // 持久化防抖
+const MAX_ARG_LENGTH = 4096;
+const MAX_MESSAGE_LENGTH = 8192;
 
 // =====================================================
 // 状态
@@ -73,11 +75,17 @@ try {
             console.log('%c' + PREFIX, STYLES.primary, 'Debug mode enabled via localStorage');
         }
         const raw = localStorage.getItem(PERSIST_KEY);
-        if (raw) {
+        if (raw && raw.length <= PERSIST_LIMIT * (MAX_MESSAGE_LENGTH + 256)) {
             const arr = JSON.parse(raw);
             if (Array.isArray(arr)) {
-                for (const e of arr) {
-                    if (e && typeof e === 'object') _buffer.push(e);
+                for (const e of arr.slice(-PERSIST_LIMIT)) {
+                    if (e && LEVEL_ORDER.includes(e.level) && Number.isFinite(e.ts)
+                        && Number.isSafeInteger(e.seq) && e.seq >= 0 && typeof e.message === 'string') {
+                        _buffer.push(Object.freeze({
+                            seq: e.seq, ts: e.ts, level: e.level,
+                            message: e.message.slice(0, MAX_MESSAGE_LENGTH),
+                        }));
+                    }
                 }
                 _seq = _buffer.length > 0 ? (_buffer[_buffer.length - 1].seq || _buffer.length) : 0;
             }
@@ -98,8 +106,6 @@ function levelStyle(level) {
  * 单条日志最大长度（防止意外 log 巨型对象拖垮内存）
  * 1000 条 × 4KB ≈ 4MB（合理上限）
  */
-const MAX_ARG_LENGTH = 4096;
-const MAX_MESSAGE_LENGTH = 8192;
 
 /**
  * 把任意参数序列化为可读字符串（用于面板展示与导出）
@@ -165,12 +171,12 @@ function shouldBuffer(level) {
 
 function pushEntry(level, args) {
     if (!shouldBuffer(level)) return null;
-    const entry = {
+    const entry = Object.freeze({
         seq: ++_seq,
         ts: Date.now(),
         level,
         message: formatArgs(args),
-    };
+    });
     _buffer.push(entry);
     if (_buffer.length > MAX_BUFFER) {
         _buffer.splice(0, _buffer.length - MAX_BUFFER);
@@ -254,6 +260,10 @@ export function initLogger(target = typeof window !== 'undefined' ? window : nul
 
 /** Detach exactly the handlers installed by initLogger. */
 export function teardownLogger() {
+    if (_persistTimer !== null) {
+        clearTimeout(_persistTimer);
+        _persistTimer = null;
+    }
     const target = _globalHandlerTarget;
     if (!target) return false;
     _globalHandlerTarget = null;

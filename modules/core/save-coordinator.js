@@ -24,7 +24,16 @@ export class SaveCoordinator {
         const snapshot = structuredClone(request);
         const promise = new Promise((resolve, reject) => {
             const entry = { request: snapshot, resolve, reject, targetKey: this.targetKey(snapshot) };
-            const pendingIndex = this.queue.findIndex(item => item.targetKey === entry.targetKey);
+            let pendingIndex = -1;
+            if (snapshot.coalesce !== false) {
+                for (let index = this.queue.length - 1; index >= 0; index--) {
+                    if (this.queue[index].request.coalesce === false) break;
+                    if (this.queue[index].targetKey === entry.targetKey) {
+                        pendingIndex = index;
+                        break;
+                    }
+                }
+            }
             if (pendingIndex >= 0) {
                 const superseded = this.queue[pendingIndex];
                 this.queue[pendingIndex] = entry;
@@ -56,6 +65,15 @@ export class SaveCoordinator {
     whenIdle() {
         if (!this.running && this.queue.length === 0) return Promise.resolve();
         return new Promise(resolve => this.idleWaiters.push(resolve));
+    }
+
+    cancelPending(predicate) {
+        const retained = [];
+        for (const entry of this.queue) {
+            if (predicate(entry.request)) entry.resolve({ status: 'cancelled', request: entry.request });
+            else retained.push(entry);
+        }
+        this.queue = retained;
     }
 
     notifyStateChange() {

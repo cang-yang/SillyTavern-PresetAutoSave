@@ -19,24 +19,22 @@ import {
     getSnapshotById, deleteSnapshot,
     clearPresetHistory, deleteOldSnapshotsForPreset,
     renameSnapshot, togglePinSnapshot,
-    addSnapshot, TRIGGER, TRIGGER_LABEL_KEYS, formatBytes,
-    hashPreset,
+    TRIGGER,
     getSnapshots,
 } from './history-store.js';
 import {
     sanitizePresetForExport,
     confirmSafe, toast, t,
-    savePresetSafe, selectPresetSafe,
+    selectPresetSafe,
     getAllPresetNames,
-    deletePresetSafe,
     createPopupSafe,
     getCurrentApiId,
     getSelectedPresetName,
     getContextSafe,
     escapeTranslationHtml,
 } from './compatibility.js';
-import { saveNow, resetLastSavedHash, beginAtomicRestore, endAtomicRestore } from './auto-save.js';
-import { showDiffPopup } from './diff-viewer.js';
+import { saveNow, restoreSnapshotDetailed, deleteHostPresetDetailed } from './auto-save.js';
+import { showDiffPopup, cleanupDiffPopup } from './diff-viewer.js';
 import { refreshTakeover } from './preset-takeover.js';
 import { removeArchivedPreset } from './archive-store.js';
 import {
@@ -47,13 +45,12 @@ import {
 } from './preset-grouping.js';
 import {
     escapeHtml, escapeAttr, formatTime,
-    renderSummary,
 } from './panel-summary.js';
 import { parsePresetKey } from './panel-list-model.js';
-import { getSnapshotDiagnostics, getSnapshotSummary } from './core/snapshot-diagnostics.js';
-import { prepareRestoreBaseline } from './core/restore-baseline.js';
+import { showSnapshotViewer as onView, cleanupSnapshotViewer } from './snapshot-viewer.js';
 import { setDisclosureExpanded } from './panel-disclosure.js';
 import { increaseSnapshotRenderLimit } from './core/bounded-snapshot-list.js';
+import { createPresetDeletionCommand } from './core/preset-deletion.js';
 
 // --- 从子模块导入分组管理函数（软拆分：panel-group-manager.js） ---
 import {
@@ -67,7 +64,6 @@ import {
 // =====================================================
 // 弹窗状态（模块级）
 // =====================================================
-let _viewPopup = null;
 let _firstScanWizardPopup = null;
 
 // =====================================================
@@ -75,8 +71,6 @@ let _firstScanWizardPopup = null;
 // =====================================================
 /** 接管刷新等待（防抖 220ms + 接管重建 + 浏览器渲染余量） */
 const TAKEOVER_REFRESH_WAIT_MS = 380;
-/** Popup 内复制按钮绑定重试间隔 */
-const POPUP_BIND_RETRY_MS = 50;
 
 // =====================================================
 // 清理弹窗（供 teardown / panel-close 调用）
@@ -88,10 +82,8 @@ const POPUP_BIND_RETRY_MS = 50;
  * @param {boolean} [options.includeWizard] - 是否也关闭首次扫描向导（teardown 时 true）
  */
 export function cleanupActionPopups({ includeWizard = false } = {}) {
-    if (_viewPopup) {
-        try { _viewPopup.completeCancelled?.(); } catch (_) {}
-        _viewPopup = null;
-    }
+    cleanupDiffPopup();
+    cleanupSnapshotViewer();
     const gmPopup = getGroupingManagerPopup();
     if (gmPopup) {
         try { gmPopup.completeCancelled?.(); } catch (_) {}
@@ -368,7 +360,7 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
 
     // 防御：拒绝恢复明显损坏的快照（避免清空预设）
     const preset = snapshot.preset;
-    if (!preset || typeof preset !== 'object' || Object.keys(preset).length < 5) {
+    if (!preset || typeof preset !== 'object' || Array.isArray(preset) || Object.keys(preset).length === 0) {
         const fieldCount = preset && typeof preset === 'object' ? Object.keys(preset).length : 0;
         logger.error(
             `Refusing to restore corrupt snapshot id=${snapshotId} fields=${fieldCount}`
@@ -402,155 +394,31 @@ async function _onRestoreImpl(snapshotId, panelCtx) {
     );
     if (!ok) return;
 
-    const restore = prepareRestoreBaseline({
-        apiId: currentApi,
-        presetName: currentPreset,
-        preset: snapshot.preset,
-    }, { hashPreset });
-
-    // AL-1: 原子恢复 — 在整个操作期间抑制所有自动保存事件副作用
-    // （savePresetSafe 会触发 SETTINGS_UPDATED 等事件，若不抑制会导致
-    //  updateTrackingAfterSwitch → seedSnapshot → resetHash
-    //  与 onRestore 自身的 addSnapshot / resetHash 互相干扰，hash 震荡）
-    beginAtomicRestore();
+    if (currentApi !== getCurrentApiId() || currentPreset !== getSelectedPresetName()) {
+        toast.warning(t('Restore Cross Preset Warning', {
+            snapshotPreset: snapshot.presetName,
+            currentPreset: getSelectedPresetName() || '(unknown)',
+        }));
+        return;
+    }
     try {
-        // 1. 写入预设到磁盘（skipUpdate:false 让 ST 重新加载 UI）
-        //    AM-0 P1a: 使用当前预设名/API（已通过 P0 验证与快照一致），
-        //    不再调用 selectPresetSafe()，因为当前预设就是目标预设
-        await savePresetSafe(restore.presetName, restore.preset, {
-            skipUpdate: false, apiId: restore.apiId,
+        const result = await restoreSnapshotDetailed({
+            apiId: currentApi, presetName: currentPreset, preset: snapshot.preset,
         });
-
-        // 2. 创建恢复快照并计算正确的 hash
-        //    AN-1 修复：直接使用快照中的预设数据，而不是从 getPresetSnapshot()
-        //    读取可能尚未更新的 live 数据（oai_settings）。
-        //    savePresetSafe(skipUpdate:false) 触发 ST 重新加载 UI 是异步的，
-        //    oai_settings 在 savePresetSafe 返回后可能仍是恢复前的旧值，
-        //    导致 hashPreset() 算出旧 hash → endAtomicRestore 设置错误的基线。
-        try {
-            await addSnapshot(restore.presetName, restore.apiId, restore.preset, TRIGGER.RESTORE);
-        } catch (snapErr) {
-            logger.warn('Post-restore snapshot failed (non-fatal):', snapErr);
+        if (result.status === 'committed' || result.status === 'unchanged') {
+            toast.success(t('Restored To Time', { time }));
+        } else if (result.status === 'partial') {
+            toast.error(t('Restore Partial'));
+        } else {
+            toast.error(t('Restore Failed', {
+                message: result.error?.message || t('Restore Not Completed'),
+            }));
         }
-
-        // 3. 结束原子恢复：将 tracking hash 设为恢复后的真实指纹
-        //    （而非 null，避免"下次必定认为有变化"的错误行为）
-        //    endAtomicRestore 内部会设置 2 秒抑制窗口（AM-0 P1b）
-        endAtomicRestore(restore.restoreHash, {
-            apiId: restore.apiId,
-            presetName: restore.presetName,
-        });
-
-        toast.success(t('Restored To Time', { time }));
-        await panelCtx.refreshData();
+        await panelCtx.refreshData({ allowCache: false });
     } catch (e) {
-        // 异常时也必须结束原子恢复，防止卡住
-        endAtomicRestore(null);
         logger.error('Restore failed:', e);
         toast.error(t('Restore Failed', { message: e?.message || String(e) }));
     }
-}
-
-function renderSnapshotDiagnostics(snapshot) {
-    const diagnostics = getSnapshotDiagnostics(snapshot);
-    const statusKey = `Diagnostic Status ${diagnostics.saveStatus}`;
-    const translatedStatus = t(statusKey);
-    const status = translatedStatus === statusKey ? diagnostics.saveStatus : translatedStatus;
-    const none = t('Diagnostic None');
-    const paths = diagnostics.changedPaths.length > 0
-        ? diagnostics.changedPaths.map(path => `<code>${escapeHtml(path)}</code>`).join('')
-        : `<span>${escapeHtml(none)}</span>`;
-    const row = (label, value) => `<div class="pas-diagnostic-row">
-        <dt>${escapeHtml(t(label))}</dt><dd>${escapeHtml(value || none)}</dd>
-    </div>`;
-
-    return `<details class="pas-view-diagnostics" open>
-        <summary><i class="fa-solid fa-shield-halved"></i> ${escapeHtml(t('Diagnostic Details'))}</summary>
-        <dl class="pas-diagnostic-grid">
-            ${row('Diagnostic Schema Version', `v${diagnostics.schemaVersion}`)}
-            ${row('Diagnostic Save Status', status)}
-            ${row('Diagnostic Transaction ID', diagnostics.transactionId)}
-            ${row('Diagnostic Parent Snapshot', diagnostics.parentSnapshotId)}
-            ${row('Diagnostic Canonical Hash', diagnostics.canonicalHash)}
-            <div class="pas-diagnostic-row pas-diagnostic-paths">
-                <dt>${escapeHtml(t('Diagnostic Changed Paths'))}</dt><dd>${paths}</dd>
-            </div>
-        </dl>
-    </details>`;
-}
-
-async function onView(snapshotId) {
-    const snapshot = await getSnapshotById(snapshotId);
-    if (!snapshot) return toast.error(t('Snapshot Not Found'));
-
-    // 显示前过滤敏感字段，避免 API key 等泄露到 UI
-    const safePreset = sanitizePresetForExport(snapshot.preset, { apiId: snapshot.apiId });
-    const json = JSON.stringify(safePreset, null, 2);
-    const time = formatTime(snapshot.timestamp);
-    const triggerLabel = t(TRIGGER_LABEL_KEYS[snapshot.trigger] || 'Trigger Auto');
-    const summaryHtml = renderSummary(getSnapshotSummary(snapshot), { compact: false });
-    const diagnosticsHtml = renderSnapshotDiagnostics(snapshot);
-
-    const html = `
-<div class="pas-view-popup">
-    <div class="pas-view-header">
-        <div class="pas-view-title">
-            <i class="fa-solid fa-eye"></i>
-            <h4>${escapeHtml(snapshot.presetName)}</h4>
-        </div>
-        <div class="pas-view-meta">
-            <span><i class="fa-regular fa-clock"></i> ${escapeHtml(time)}</span>
-            <span class="pas-view-meta-divider">·</span>
-            <span class="pas-tag pas-tag-${escapeAttr(snapshot.trigger)}">${escapeHtml(triggerLabel)}</span>
-            <span class="pas-view-meta-divider">·</span>
-            <span><i class="fa-solid fa-database"></i> ${formatBytes(snapshot.size || 0)}</span>
-        </div>
-    </div>
-    <div class="pas-view-summary">${summaryHtml}</div>
-    ${diagnosticsHtml}
-    <pre class="pas-view-json"><code>${escapeHtml(json)}</code></pre>
-    <div class="pas-view-actions">
-        <button class="menu_button pas-view-copy-btn" type="button">
-            <i class="fa-solid fa-copy"></i> ${escapeHtml(t('Copy JSON'))}
-        </button>
-    </div>
-</div>`;
-
-    _viewPopup = createPopupSafe(html, 'DISPLAY', {
-        wide: true, large: true,
-        allowVerticalScrolling: true,
-        okButton: false, cancelButton: t('Close'),
-    });
-
-    if (!_viewPopup) {
-        logger.error('[onView] createPopupSafe returned null');
-        toast.error(t('Snapshot Not Found'));
-        return;
-    }
-
-    const showPromise = _viewPopup.show();
-
-    // 使用 requestAnimationFrame 比 setTimeout(100) 更稳定的时序——
-    // Popup 一进 DOM 就能命中
-    const tryBindCopy = () => {
-        const btn = document.querySelector('.pas-view-popup .pas-view-copy-btn');
-        if (btn && !btn.dataset.pasBound) {
-            btn.dataset.pasBound = '1';
-            btn.addEventListener('click', () => {
-                navigator.clipboard.writeText(json)
-                    .then(() => toast.success(t('Copied')))
-                    .catch(() => toast.error(t('Copy Failed')));
-            });
-            return true;
-        }
-        return false;
-    };
-    // 双保险：rAF + 短延迟
-    requestAnimationFrame(() => {
-        if (!tryBindCopy()) setTimeout(tryBindCopy, POPUP_BIND_RETRY_MS);
-    });
-
-    showPromise.finally(() => { _viewPopup = null; });
 }
 
 // =====================================================
@@ -654,10 +522,44 @@ async function onClearPreset(key, panelCtx) {
  * @param {string} apiId
  * @returns {Promise<boolean>}
  */
+const isCurrentPresetTarget = ({ apiId, presetName }) =>
+    apiId === getCurrentApiId() && presetName === getSelectedPresetName();
+
+const deletePresetCommand = createPresetDeletionCommand({
+    runHostDeletion: (target, afterDelete) => deleteHostPresetDetailed(target, { afterDelete }),
+    clearHistory: target => clearPresetHistory(target.apiId, target.presetName),
+    removeArchive: target => removeArchivedPreset(target.apiId, target.presetName),
+    isCurrentTarget: isCurrentPresetTarget,
+    notifyHost: async ({ apiId, presetName }) => {
+        const ctx = getContextSafe();
+        if (ctx?.eventSource?.emit && ctx?.event_types?.PRESET_DELETED) {
+            await ctx.eventSource.emit(ctx.event_types.PRESET_DELETED, { apiId, name: presetName });
+        }
+        ctx?.saveSettingsDebounced?.();
+    },
+});
+
+function observeDeletionResult(result) {
+    try {
+        if (result.status === 'committed') {
+            refreshTakeover({ force: true });
+            toast.success(t('Delete Preset Success', { name: result.target.presetName }));
+        } else if (result.status === 'protected') {
+            toast.warning(t('Delete Preset Current Warning'));
+        } else {
+            logger.error(`Preset deletion ${result.status} at ${result.stage}`, result.error);
+            toast.error(t(result.status === 'partial' ? 'Delete Preset Partial' : 'Delete Preset Failed',
+                { name: result.target.presetName }));
+        }
+    } catch (error) {
+        logger.warn('Deletion presentation failed:', error);
+    }
+}
+
 export async function onDeletePreset(presetName, apiId) {
     // L1: 当前预设保护
-    const currentPreset = getSelectedPresetName();
-    if (presetName === currentPreset) {
+    const target = Object.freeze({ apiId, presetName });
+    if (isCurrentPresetTarget(target)) {
         toast.warning(t('Delete Preset Current Warning'));
         return false;
     }
@@ -670,57 +572,15 @@ export async function onDeletePreset(presetName, apiId) {
     if (!confirmed) return false;
 
     // L1-bis: 竞态防护 — 用户在确认弹窗期间可能已切换预设
-    const currentAfterConfirm = getSelectedPresetName();
-    if (presetName === currentAfterConfirm) {
+    if (isCurrentPresetTarget(target)) {
         toast.warning(t('Delete Preset Current Warning'));
         return false;
     }
 
-    try {
-        // L5: 执行删除（调用 ST PresetManager.deletePreset）
-        await deletePresetSafe(presetName, apiId);
-
-        // L5-b: 补全 ST 原生 onDeletePresetClick 的后续动作
-        //   ST 的 PresetManager.deletePreset() 只处理 DOM/数组/API 调用，
-        //   不 emit PRESET_DELETED、不调用 saveSettingsDebounced()。
-        //   这两步在 ST openai.js onDeletePresetClick() 中单独完成。
-        try {
-            const ctx = getContextSafe();
-            if (ctx?.eventSource?.emit && ctx?.event_types?.PRESET_DELETED) {
-                await ctx.eventSource.emit(ctx.event_types.PRESET_DELETED, { apiId, name: presetName });
-            }
-            if (typeof ctx?.saveSettingsDebounced === 'function') {
-                ctx.saveSettingsDebounced();
-            }
-        } catch (postErr) {
-            logger.warn('[DeletePreset] post-delete ST sync failed (non-fatal):', postErr);
-        }
-
-        // L5-c: 全量清理
-        // - 删除对应的快照数据
-        await clearPresetHistory(apiId, presetName);
-        // - 删除对应的归档数据（如果有）
-        await removeArchivedPreset(apiId, presetName);
-        // - 清理分组覆盖
-        const overrides = { ...(getSettings().groupingManualOverrides || {}) };
-        if (overrides[presetName]) {
-            delete overrides[presetName];
-            batchUpdate({ groupingManualOverrides: overrides });
-        }
-
-        // L6: 操作日志
-        logger.warn(`[DeletePreset] deleted "${presetName}" (apiId=${apiId})`);
-
-        // 刷新 UI
-        refreshTakeover({ force: true });
-        toast.success(t('Delete Preset Success', { name: escapeHtml(presetName) }));
-
-        return true;
-    } catch (e) {
-        logger.error(`[DeletePreset] failed:`, e);
-        toast.error(t('Delete Preset Failed', { name: escapeHtml(presetName) }));
-        return false;
-    }
+    const result = await deletePresetCommand(target);
+    // Organization is global across APIs and is not owned by this preset deletion.
+    observeDeletionResult(result);
+    return result.status === 'committed';
 }
 
 /**
@@ -732,7 +592,7 @@ export async function onDeletePreset(presetName, apiId) {
  *   L5: 逐个删除 + 全量清理
  *   L6: 操作日志
  *
- * @param {string[]} presetNames
+ * @param {Array<string|{apiId:string,presetName:string}>} presetNames
  * @param {string} apiId
  * @returns {Promise<number>} 成功删除的数量
  */
@@ -740,8 +600,13 @@ export async function onBatchDeletePresets(presetNames, apiId) {
     if (!presetNames || !presetNames.length) return 0;
 
     // L1: 过滤掉当前预设
-    const currentPreset = getSelectedPresetName();
-    const toDelete = presetNames.filter(n => n !== currentPreset);
+    const targets = presetNames.map(item => typeof item === 'string'
+        ? { apiId, presetName: item }
+        : { apiId: item.apiId, presetName: item.presetName });
+    const toDelete = [...new Map(targets.map(target => [
+        JSON.stringify([target.apiId, target.presetName]), Object.freeze(target),
+    ])).values()]
+        .filter(target => !isCurrentPresetTarget(target));
     if (toDelete.length === 0) {
         toast.warning(t('Delete Preset Current Warning'));
         return 0;
@@ -768,59 +633,28 @@ export async function onBatchDeletePresets(presetNames, apiId) {
     }
 
     // L1-bis: 竞态防护 — 弹窗期间可能已切换预设，重新过滤
-    const currentAfterConfirm = getSelectedPresetName();
-    const safeToDelete = toDelete.filter(n => n !== currentAfterConfirm);
+    const safeToDelete = toDelete.filter(target => !isCurrentPresetTarget(target));
     if (safeToDelete.length === 0) {
         toast.warning(t('Delete Preset Current Warning'));
         return 0;
     }
 
     // 逐个删除
-    let successCount = 0;
-    const deletedNames = [];
-    for (const name of safeToDelete) {
-        try {
-            await deletePresetSafe(name, apiId);
-            await clearPresetHistory(apiId, name);
-            await removeArchivedPreset(apiId, name);
-            logger.warn(`[BatchDelete] deleted "${name}"`);
-            deletedNames.push(name);
-            successCount++;
-        } catch (e) {
-            logger.error(`[BatchDelete] failed for "${name}":`, e);
+    const results = [];
+    for (const target of safeToDelete) results.push(await deletePresetCommand(target));
+    const successCount = results.filter(result => result.status === 'committed').length;
+    try {
+        refreshTakeover({ force: true });
+        if (successCount === safeToDelete.length) {
+            toast.success(t('Batch Delete Success', { count: successCount }));
+        } else {
+            toast.warning(t('Batch Delete Incomplete', {
+                count: successCount, total: safeToDelete.length,
+            }));
         }
+    } catch (error) {
+        logger.warn('Batch deletion presentation failed:', error);
     }
-
-    // 补全 ST 原生后续动作：emit PRESET_DELETED + saveSettingsDebounced
-    if (deletedNames.length > 0) {
-        try {
-            const ctx = getContextSafe();
-            if (ctx?.eventSource?.emit && ctx?.event_types?.PRESET_DELETED) {
-                for (const name of deletedNames) {
-                    await ctx.eventSource.emit(ctx.event_types.PRESET_DELETED, { apiId, name });
-                }
-            }
-            if (typeof ctx?.saveSettingsDebounced === 'function') {
-                ctx.saveSettingsDebounced();
-            }
-        } catch (postErr) {
-            logger.warn('[BatchDelete] post-delete ST sync failed (non-fatal):', postErr);
-        }
-    }
-
-    // 清理分组覆盖（批量）
-    const overrides = { ...(getSettings().groupingManualOverrides || {}) };
-    let changed = false;
-    for (const name of deletedNames) {
-        if (overrides[name]) {
-            delete overrides[name];
-            changed = true;
-        }
-    }
-    if (changed) batchUpdate({ groupingManualOverrides: overrides });
-
-    refreshTakeover({ force: true });
-    toast.success(t('Batch Delete Success', { count: successCount }));
     return successCount;
 }
 
@@ -930,7 +764,7 @@ export function updateDiffBar(panelCtx) {
         const text = slotEl.querySelector('.pas-diff-bar-slot-text');
         if (!id) {
             slotEl.classList.remove('pas-diff-slot-set');
-            if (text) text.textContent = t('Diff Slot Empty');
+            if (text) text.title = text.textContent = t('Diff Slot Empty');
             return;
         }
         const snap = state.snapshots.find(s => s.id === id);
@@ -938,13 +772,17 @@ export function updateDiffBar(panelCtx) {
             ? (snap.name?.trim() || formatTime(snap.timestamp))
             : t('Diff Slot Empty');
         slotEl.classList.add('pas-diff-slot-set');
-        if (text) text.textContent = label;
+        if (text) text.title = text.textContent = label;
     };
     formatSlot('a', slotA);
     formatSlot('b', slotB);
 
     const hasAny = !!state.diffSel.a || !!state.diffSel.b;
-    if (bar) bar.hidden = !hasAny;
+    if (bar) {
+        const restoreSearchFocus = !hasAny && bar.contains(bar.ownerDocument.activeElement);
+        bar.hidden = !hasAny;
+        if (restoreSearchFocus) root.querySelector('.pas-search')?.focus();
+    }
     const ready = !!state.diffSel.a && !!state.diffSel.b;
     if (startBtn) {
         if (ready) startBtn.removeAttribute('disabled');

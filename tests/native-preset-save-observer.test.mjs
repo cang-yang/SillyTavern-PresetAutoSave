@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { observeNativePresetSaves } from '../modules/core/native-preset-save-observer.js';
+import { observeNativePresetSaves } from '../modules/host/native-preset-save-observer.js';
 
 function createHarness({ responseOk = true } = {}) {
     const listeners = new Map();
@@ -102,4 +102,71 @@ test('does not consume a user intent while internal saving is active', async () 
     await flushMicrotasks();
 
     assert.deepEqual(saved, [payload]);
+});
+
+test('capture observer failures cannot reject a successful native fetch', async () => {
+    const harness = createHarness();
+    const errors = [];
+    const teardown = observeNativePresetSaves({
+        windowObject: harness.windowObject, documentObject: harness.documentObject,
+        shouldCapture: () => { throw new Error('observer unavailable'); },
+        onError: error => errors.push(error),
+    });
+    harness.listeners.get('click')({ target: { closest: () => updateButton() } });
+    try {
+        const response = await harness.windowObject.fetch('/api/presets/save', {
+            method: 'POST', body: JSON.stringify({ apiId: 'openai', name: 'Test', preset: { temperature: 1 } }),
+        });
+        assert.equal(response.ok, true);
+        assert.equal(errors.length, 1);
+    } finally { teardown(); }
+});
+
+test('observer captures request context before await and disposal suppresses late completion', async () => {
+    const harness = createHarness();
+    let release;
+    let epoch = 1;
+    const saved = [];
+    harness.windowObject.fetch = () => new Promise(resolve => { release = resolve; });
+    const teardown = observeNativePresetSaves({
+        windowObject: harness.windowObject, documentObject: harness.documentObject,
+        captureContext: () => epoch,
+        onSaved: (payload, captured) => saved.push(captured),
+    });
+    const request = () => {
+        harness.listeners.get('click')({ target: { closest: () => updateButton() } });
+        return harness.windowObject.fetch('/api/presets/save', { method: 'POST',
+            body: JSON.stringify({ apiId: 'openai', name: 'Test', preset: { temperature: 1 } }) });
+    };
+    const first = request();
+    epoch = 2;
+    release({ ok: true });
+    await first;
+    await flushMicrotasks();
+    assert.deepEqual(saved, [1]);
+    const second = request();
+    teardown();
+    release({ ok: true });
+    await second;
+    await flushMicrotasks();
+    assert.deepEqual(saved, [1]);
+});
+
+test('a click during an older in-flight request cannot claim that older request', async () => {
+    const harness = createHarness();
+    let release;
+    const saved = [];
+    harness.windowObject.fetch = () => new Promise(resolve => { release = resolve; });
+    const teardown = observeNativePresetSaves({
+        windowObject: harness.windowObject, documentObject: harness.documentObject,
+        onSaved: payload => saved.push(payload),
+    });
+    const older = harness.windowObject.fetch('/api/presets/save', { method: 'POST',
+        body: JSON.stringify({ apiId: 'openai', name: 'Older', preset: { temperature: 1 } }) });
+    harness.listeners.get('click')({ target: { closest: () => updateButton() } });
+    release({ ok: true });
+    await older;
+    await flushMicrotasks();
+    teardown();
+    assert.deepEqual(saved, []);
 });

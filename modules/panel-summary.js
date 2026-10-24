@@ -155,6 +155,10 @@ export const FIELD_LABEL_KEYS = Object.freeze({
     bypass_status_check: 'Field bypass_status_check',
     verbosity: 'Field verbosity',
     tool_reasoning_mode: 'Field tool_reasoning_mode',
+    tool_call_recurse_limit: 'Field tool_call_recurse_limit',
+    extensions: 'Summary Extension Setting',
+    prompts: 'Diff Section Prompts',
+    prompt_order: 'Diff Section Order',
 });
 
 /**
@@ -169,40 +173,36 @@ export const PROMPT_FIELD_LABEL_KEYS = Object.freeze({
     injection_position: 'Prompt Field injection_position',
     injection_depth: 'Prompt Field injection_depth',
     forbid_overrides: 'Prompt Field forbid_overrides',
+    injection_trigger: 'Prompt Field injection_trigger',
+    injection_order: 'Prompt Field injection_order',
 });
 
 /**
  * 字段标签翻译缓存（模块级，跨多次 renderSummary 复用）
  * 渲染 100 张卡片时可减少 500+ 次 t() 调用
  */
-const _fieldLabelCache = new Map();
-const _promptFieldLabelCache = new Map();
-
 /**
  * 把字段 key 翻成显示名（i18n 优先，回落到原 key）
  */
 export function fieldLabel(key) {
-    if (_fieldLabelCache.has(key)) return _fieldLabelCache.get(key);
     const i18nKey = FIELD_LABEL_KEYS[key];
-    let label = key;
     if (i18nKey) {
         const tr = t(i18nKey);
-        if (tr && tr !== i18nKey) label = tr;
+        if (tr && tr !== i18nKey) return tr;
     }
-    _fieldLabelCache.set(key, label);
-    return label;
+    if (String(key).startsWith('extensions')) return t('Summary Extension Setting');
+    if (String(key).startsWith('prompt_order')) return t('Diff Section Order');
+    if (String(key).startsWith('prompts')) return t('Diff Section Prompts');
+    return t('Summary Other Setting');
 }
 
 export function promptFieldLabel(key) {
-    if (_promptFieldLabelCache.has(key)) return _promptFieldLabelCache.get(key);
     const i18nKey = PROMPT_FIELD_LABEL_KEYS[key];
-    let label = key;
     if (i18nKey) {
         const tr = t(i18nKey);
-        if (tr && tr !== i18nKey) label = tr;
+        if (tr && tr !== i18nKey) return tr;
     }
-    _promptFieldLabelCache.set(key, label);
-    return label;
+    return t('Summary Other Prompt Setting');
 }
 
 // =====================================================
@@ -280,13 +280,18 @@ function renderRawChangedPaths(paths, compact) {
     const visible = unique.slice(0, limit);
     const rows = visible.map(path => `<div class="pas-summary-line pas-summary-line-field">
         <i class="fa-solid fa-code-branch pas-summary-line-icon"></i>
-        <span class="pas-summary-line-text"><span class="pas-summary-field-name">${escapeHtml(path)}</span></span>
+        <span class="pas-summary-line-text"><span class="pas-summary-field-name">${escapeHtml(fieldLabel(path))}</span>
+        ${technicalPathHTML(path)}</span>
     </div>`).join('');
     const hidden = unique.length - visible.length;
     const more = hidden > 0
         ? `<div class="pas-summary-more-line">${escapeHtml(t('Summary More', { count: hidden }))}</div>`
         : '';
     return `<div class="pas-card-summary">${rows}${more}</div>`;
+}
+
+function technicalPathHTML(path) {
+    return `<details class="pas-summary-technical"><summary>${escapeHtml(t('Technical Details'))}</summary><code>${escapeHtml(path)}</code></details>`;
 }
 
 /**
@@ -399,7 +404,7 @@ export function describePromptFieldDiffs(fields) {
                 to: f.toLen,
             });
         }
-        return `<span class="pas-summary-fkey">${escapeHtml(label)}</span>: <code>${escapeHtml(formatSummaryValue(f.from))}</code> → <code>${escapeHtml(formatSummaryValue(f.to))}</code>`;
+        return `<span class="pas-summary-fkey" title="${escapeAttr(f.key)}">${escapeHtml(label)}</span>: <code>${escapeHtml(formatSummaryValue(f.from))}</code> → <code>${escapeHtml(formatSummaryValue(f.to))}</code>`;
     });
     if (fields.length > 3) {
         parts.push(`<span class="pas-summary-fmore">+${fields.length - 3}</span>`);
@@ -430,7 +435,8 @@ export function describeFieldChange(item) {
     // scalar — 优先使用枚举映射，回落到通用格式化
     const fromStr = formatEnumValue(item.key, item.from) ?? formatSummaryValue(item.from);
     const toStr = formatEnumValue(item.key, item.to) ?? formatSummaryValue(item.to);
-    return `<span class="pas-summary-fkey">${escapeHtml(label)}</span>: <code class="pas-summary-from">${escapeHtml(fromStr)}</code> <span class="pas-summary-arrow">→</span> <code class="pas-summary-to">${escapeHtml(toStr)}</code>`;
+    const technical = Object.hasOwn(FIELD_LABEL_KEYS, item.key) ? '' : technicalPathHTML(item.key);
+    return `<span class="pas-summary-fkey">${escapeHtml(label)}</span>: <code class="pas-summary-from">${escapeHtml(fromStr)}</code> <span class="pas-summary-arrow">→</span> <code class="pas-summary-to">${escapeHtml(toStr)}</code>${technical}`;
 }
 
 /**
@@ -476,7 +482,11 @@ export function formatSummaryValue(v) {
         if (v === '') return '∅';
         return v.length > 24 ? v.slice(0, 22) + '…' : v;
     }
-    if (Array.isArray(v)) return `列表（${v.length} 项）`;
-    if (typeof v === 'object') return `对象（${Object.keys(v).length} 项）`;
+    if (v && typeof v === 'object' && typeof v.preview === 'string'
+        && Number.isFinite(v.length) && Object.keys(v).every(key => ['preview', 'length'].includes(key))) {
+        return formatSummaryValue(v.preview);
+    }
+    if (Array.isArray(v)) return t('Summary List Value', { count: v.length });
+    if (typeof v === 'object') return t('Summary Object Value', { count: Object.keys(v).length });
     return String(v);
 }

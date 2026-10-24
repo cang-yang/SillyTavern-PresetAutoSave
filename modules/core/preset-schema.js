@@ -1,4 +1,72 @@
-import { normalizeBooleanString, normalizeNumberString, normalizeValue } from './value-utils.js';
+import { normalizeBooleanString, normalizeNumberString, normalizeValue, stableStringify } from './value-utils.js';
+
+export const PRESET_CONTRACT_VERSION = 1;
+const CREDENTIAL_KEYS = new Set([
+    'apikey', 'accesstoken', 'refreshtoken', 'authtoken', 'bearertoken',
+    'clientsecret', 'secretkey', 'authorization', 'proxypassword',
+    'proxyauthorization', 'xapikey',
+]);
+const CREDENTIAL_PROVIDERS = new Set([
+    'openai', 'claude', 'anthropic', 'google', 'gemini', 'openrouter',
+    'azure', 'azureopenai', 'mistral', 'mistralai', 'cohere', 'groq',
+    'deepseek', 'xai', 'ai21', 'perplexity', 'novel', 'novelai',
+]);
+
+function normalizeConnectionKey(key) {
+    return key.replace(/[_-]/g, '').toLowerCase();
+}
+
+function isCredentialKey(normalized, value) {
+    const provider = normalized.startsWith('apikey') ? normalized.slice(6)
+        : normalized.endsWith('apikey') ? normalized.slice(0, -6) : '';
+    return CREDENTIAL_KEYS.has(normalized)
+        || CREDENTIAL_PROVIDERS.has(provider)
+        || (typeof value === 'string' && ['token', 'password'].includes(normalized));
+}
+
+function connectionExclusionReason(key, value) {
+    const normalized = normalizeConnectionKey(key);
+    if (NORMALIZED_CONNECTION_FIELDS.has(normalized)) return 'connection-setting';
+    return isCredentialKey(normalized, value) ? 'connection-credential' : '';
+}
+
+function removeExtensionCredentials(value, path, ignored) {
+    if (!value || typeof value !== 'object') return value;
+    if (Array.isArray(value)) {
+        return value.map((item, index) => removeExtensionCredentials(item, `${path}[${index}]`, ignored));
+    }
+    const output = {};
+    for (const [key, item] of Object.entries(value)) {
+        const itemPath = `${path}.${key}`;
+        const reason = connectionExclusionReason(key, item);
+        if (reason) {
+            ignored.push({ path: itemPath, reason });
+            continue;
+        }
+        Object.defineProperty(output, key, {
+            value: removeExtensionCredentials(item, itemPath, ignored),
+            enumerable: true, writable: true, configurable: true,
+        });
+    }
+    return output;
+}
+export const FIELD_SYNONYMS = new Map([
+    ['temp_openai', 'temperature'], ['freq_pen_openai', 'frequency_penalty'],
+    ['pres_pen_openai', 'presence_penalty'], ['top_p_openai', 'top_p'],
+    ['top_k_openai', 'top_k'], ['top_a_openai', 'top_a'],
+    ['min_p_openai', 'min_p'], ['repetition_penalty_openai', 'repetition_penalty'],
+    ['streaming', 'stream_openai'],
+]);
+
+export function normalizePresetFields(preset) {
+    const result = { ...preset };
+    for (const [alias, canonical] of FIELD_SYNONYMS) {
+        if (!Object.hasOwn(result, alias)) continue;
+        if (!Object.hasOwn(result, canonical)) result[canonical] = result[alias];
+        delete result[alias];
+    }
+    return result;
+}
 
 export const CONNECTION_FIELDS = new Set([
     'api_key_openai',
@@ -73,6 +141,7 @@ export const CONNECTION_FIELDS = new Set([
     'bind_preset_to_connection',
     'preset_settings_openai',
 ]);
+const NORMALIZED_CONNECTION_FIELDS = new Set([...CONNECTION_FIELDS].map(normalizeConnectionKey));
 
 // SillyTavern's native Chat Completion preset contract. This mirrors the
 // entries in openai.js/settingsToUpdate whose is_connection flag is false.
@@ -99,7 +168,58 @@ export const OPENAI_PRESET_FIELDS = new Set([
 // rather than the completion preset payload observed by every save path.
 export const OPENAI_HISTORY_EXCLUDED_FIELDS = new Set([
     'bias_preset_selected',
+    'bias_presets',
 ]);
+
+export const EXPORT_EXCLUDED_FIELDS = new Set([...CONNECTION_FIELDS, ...OPENAI_HISTORY_EXCLUDED_FIELDS]);
+export const DISPLAY_IGNORED_FIELDS = new Set([
+    ...EXPORT_EXCLUDED_FIELDS, 'prompts', 'prompt_order', 'extensions', 'name',
+]);
+
+export function extractCanonicalForDiff(preset) {
+    const canonical = canonicalizePreset(preset).canonical;
+    return Object.fromEntries(Object.entries(canonical).filter(([key]) => !DISPLAY_IGNORED_FIELDS.has(key)));
+}
+
+export function filterExtensionPrompts(prompts) {
+    // Identifier shape is not proof that a persisted user definition is transient.
+    return Array.isArray(prompts) ? structuredClone(prompts) : prompts;
+}
+
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+}
+
+function validateJson(value, ancestors = new Set()) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+    if (typeof value === 'number' && Number.isFinite(value)) return;
+    if (!Array.isArray(value) && !isPlainObject(value)) throw new TypeError('Preset contains a non-JSON value');
+    if (ancestors.has(value)) throw new TypeError('Preset contains a circular value');
+    ancestors.add(value);
+    for (const item of Object.values(value)) validateJson(item, ancestors);
+    ancestors.delete(value);
+}
+
+export function requireCanonicalPreset(preset, options = {}) {
+    const canonical = canonicalizePreset(preset, options).canonical;
+    if (Object.keys(canonical).length === 0) throw new TypeError('Preset contains no canonical fields');
+    return canonical;
+}
+
+export function hashCanonicalPreset(preset, options = {}) {
+    const serialized = stableStringify(canonicalizePreset(preset, options).canonical);
+    return hashPresetSerialization(serialized);
+}
+
+export function hashPresetSerialization(serialized) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < serialized.length; index++) {
+        hash ^= serialized.charCodeAt(index);
+        hash = (hash * 0x01000193) >>> 0;
+    }
+    return hash.toString(36);
+}
 
 function pathRoot(path) {
     const match = String(path ?? '').match(/^[^.[\]]+/);
@@ -109,7 +229,7 @@ function pathRoot(path) {
 export function isHistoryOwnedPath(path, { apiId = 'openai' } = {}) {
     const root = pathRoot(path);
     if (!root) return false;
-    if (apiId !== 'openai') return !CONNECTION_FIELDS.has(root);
+    if (apiId !== 'openai') return !EXPORT_EXCLUDED_FIELDS.has(root);
     return OPENAI_PRESET_FIELDS.has(root) && !OPENAI_HISTORY_EXCLUDED_FIELDS.has(root);
 }
 
@@ -138,22 +258,29 @@ function normalizePresetField(key, value) {
 }
 
 export function canonicalizePreset(preset, { apiId = 'openai' } = {}) {
-    if (!preset || typeof preset !== 'object' || Array.isArray(preset)) {
+    if (!isPlainObject(preset)) {
         throw new TypeError('Preset root must be a plain object');
     }
 
+    const normalized = normalizePresetFields(preset);
     const canonical = {};
     const ignored = [];
-    for (const key of Object.keys(preset).sort()) {
-        if (CONNECTION_FIELDS.has(key)) {
-            ignored.push({ path: key, reason: 'connection-setting' });
+    for (const key of Object.keys(normalized).sort()) {
+        const connectionReason = connectionExclusionReason(key, normalized[key]);
+        if (EXPORT_EXCLUDED_FIELDS.has(key) || connectionReason) {
+            ignored.push({ path: key, reason: connectionReason || 'separate-global-state' });
             continue;
         }
         if (apiId === 'openai' && !OPENAI_PRESET_FIELDS.has(key)) {
             ignored.push({ path: key, reason: 'runtime-or-unknown-setting' });
             continue;
         }
-        canonical[key] = normalizePresetField(key, preset[key]);
+        validateJson(normalized[key]);
+        const value = key === 'extensions'
+            ? removeExtensionCredentials(normalized[key], key, ignored) : normalized[key];
+        Object.defineProperty(canonical, key, {
+            value: normalizePresetField(key, value), enumerable: true, writable: true, configurable: true,
+        });
     }
     return { canonical, ignored };
 }

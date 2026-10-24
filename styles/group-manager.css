@@ -1,0 +1,1062 @@
+/* Group manager feature layer. Preserve foundation/theme/workspace cascade order. */
+.pas-gm-popup,
+.pas-gm-context-menu,
+.pas-gm-move-dialog {
+    --pas-accent: #a78bfa;
+    --pas-text: var(--pas-fg, #e2e8f0);
+    --pas-text-muted: var(--pas-fg-muted, #aeb0ba);
+    --pas-fg: var(--SmartThemeBodyColor, #e2e8f0);
+    --pas-fg-muted: #aeb0ba;
+    --pas-border: rgba(255, 255, 255, .16);
+    --pas-surface-2: rgba(255, 255, 255, .085);
+    letter-spacing: 0;
+}
+
+body.pas-light .pas-gm-popup,
+body.pas-light .pas-gm-context-menu,
+body.pas-light .pas-gm-move-dialog {
+    --pas-accent: #7042b8;
+    --pas-fg-muted: #656570;
+    --pas-border: rgba(0, 0, 0, .14);
+    --pas-surface-2: rgba(0, 0, 0, .05);
+}
+
+button.pas-gm-move-option {
+    width: 100%;
+    min-height: 44px;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.pas-gm-menu-btn:focus-visible,
+.pas-gm-series-menu-btn:focus-visible,
+.pas-gm-header-actions button:focus-visible,
+.pas-gm-move-option:focus-visible {
+    outline: 2px solid var(--pas-accent);
+    outline-offset: -2px;
+}
+
+.pas-tag-unavailable {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    padding: 2px 6px;
+    border: 1px solid var(--pas-border);
+    border-radius: 4px;
+    color: var(--pas-fg-muted);
+    font-size: .72rem;
+    overflow-wrap: anywhere;
+}
+/* =========================================================
+ * 分组管理弹窗 — AA-3 重构版 (.pas-gm-*)
+ * 系列卡片为核心视图，拖拽 + 上下文菜单
+ * ========================================================= */
+.pas-gm-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px 0;
+    color: var(--pas-fg);
+}
+
+/* --- 头部 --- */
+.pas-gm-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.pas-gm-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pas-gm-header-left i {
+    color: var(--pas-accent);
+    font-size: 1.1em;
+}
+.pas-gm-header h3 {
+    margin: 0;
+    font-weight: 600;
+    font-size: 1.15em;
+    color: var(--pas-fg);
+}
+.pas-gm-reset-all-btn {
+    font-size: 0.82em !important;
+    padding: 4px 10px !important;
+    opacity: 0.75;
+    transition: opacity var(--pas-dur) var(--pas-ease-fast);
+    /* AE-3: 防止按钮文字被 flex 压缩成竖排 */
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.pas-gm-reset-all-btn:hover { opacity: 1; }
+
+/* --- 滚动区域 --- */
+.pas-gm-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    /* AW-1: 改用 flex:1 + min-height:0 让滚动区自适应，
+       auto-zone 已移到 body 外部固定在弹窗底部 */
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: 55vh;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+.pas-gm-body::-webkit-scrollbar { width: 6px; }
+.pas-gm-body::-webkit-scrollbar-track { background: transparent; }
+.pas-gm-body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
+.pas-gm-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* --- 系列卡片 --- */
+.pas-gm-series {
+    background: var(--pas-surface-1);
+    border-radius: 8px;
+    border: 1px solid var(--pas-border);
+    border-left: 3px solid var(--pas-accent);
+    transition: border-color var(--pas-dur) var(--pas-ease-fast);
+    /* overflow:hidden removed — it clips series-body content when layout reflows */
+}
+.pas-gm-series:hover {
+    border-color: var(--pas-border-strong);
+    border-left-color: var(--pas-accent);
+}
+
+/* --- 系列头部 --- */
+.pas-gm-series-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    cursor: default;
+    user-select: none;
+    transition: background var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-gm-series-header:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-series-icon {
+    color: var(--pas-accent);
+    font-size: 0.95em;
+    flex-shrink: 0;
+}
+.pas-gm-series-name {
+    font-weight: 600;
+    font-size: 0.95em;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pas-gm-series-count {
+    font-size: 0.78em;
+    color: var(--pas-fg-muted);
+    flex-shrink: 0;
+}
+.pas-gm-chevron {
+    font-size: 0.75em;
+    color: var(--pas-fg-3);
+    transition: transform var(--pas-dur) var(--pas-ease);
+    flex-shrink: 0;
+}
+.pas-gm-series.collapsed .pas-gm-chevron {
+    transform: rotate(-90deg);
+}
+
+/* --- 系列内容区 --- */
+.pas-gm-series-body {
+    padding: 4px 8px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: background var(--pas-dur) var(--pas-ease-fast),
+                border-color var(--pas-dur) var(--pas-ease-fast);
+}
+.pas-gm-series.collapsed .pas-gm-series-body { display: none !important; }
+
+/* 空提示 */
+.pas-gm-empty {
+    padding: 12px 16px;
+    font-size: 0.83em;
+    color: var(--pas-fg-faint);
+    text-align: center;
+    font-style: italic;
+}
+
+/* --- 预设条目 --- */
+.pas-gm-preset {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 16px;
+    border-radius: 4px;
+    cursor: grab;
+    transition: background 0.15s, opacity 0.15s;
+    user-select: none;
+    min-height: 32px;
+}
+.pas-gm-preset:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-preset.dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+}
+.pas-gm-preset-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9em;
+}
+
+/* --- 菜单按钮（预设级 + 系列级） --- */
+.pas-gm-menu-btn,
+.pas-gm-series-menu-btn {
+    opacity: 0.6;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 1em;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0;
+    transition: opacity var(--pas-dur) var(--pas-ease-fast),
+                background var(--pas-dur) var(--pas-ease-fast);
+    flex-shrink: 0;
+    user-select: none;
+}
+.pas-gm-preset:hover .pas-gm-menu-btn,
+.pas-gm-series-header:hover .pas-gm-series-menu-btn { opacity: 1; }
+.pas-gm-menu-btn:hover,
+.pas-gm-series-menu-btn:hover {
+    background: var(--pas-surface-3);
+    opacity: 1;
+}
+
+/* --- 拖拽提示 --- */
+.pas-gm-series-body.pas-gm-drop-zone {
+    border: 1px dashed transparent;
+    border-radius: 4px;
+}
+.pas-gm-series-body.drag-over {
+    background: rgba(167, 139, 250, 0.08) !important;
+    border-color: var(--pas-accent) !important;
+}
+
+/* --- 自动分组目标区域（AI-0 新增 / AW-1 固定底部） --- */
+.pas-gm-auto-zone {
+    margin: 0;
+    padding: 16px;
+    border: 2px dashed rgba(147, 51, 234, 0.35);
+    border-radius: 0 0 10px 10px;
+    background: rgba(147, 51, 234, 0.04);
+    text-align: center;
+    transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+    flex-shrink: 0;
+    border-top: 1px solid var(--pas-border);
+}
+.pas-gm-auto-zone.pas-gm-drop-zone {
+    border-color: rgba(147, 51, 234, 0.55);
+    background: rgba(147, 51, 234, 0.08);
+}
+.pas-gm-auto-zone.drag-over {
+    border-color: rgba(147, 51, 234, 0.85) !important;
+    background: rgba(147, 51, 234, 0.15) !important;
+    box-shadow: 0 0 16px rgba(147, 51, 234, 0.25);
+}
+
+/* --- AQ-1: 上下文菜单分隔线 --- */
+.pas-gm-ctx-separator {
+    height: 1px;
+    background: var(--pas-border);
+    margin: 3px 8px;
+}
+/* --- AQ-1: 危险操作（删除分组）红色样式 --- */
+.pas-gm-ctx-item-danger {
+    color: var(--pas-c-del, #f87171) !important;
+}
+.pas-gm-ctx-item-danger i {
+    color: var(--pas-c-del, #f87171) !important;
+}
+
+/* --- 上下文菜单 --- */
+.pas-gm-context-menu {
+    background: var(--SmartThemeBlurTintColor, rgba(30, 30, 45, 0.97));
+    border: 1px solid var(--pas-border-strong);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    z-index: 99999;
+    min-width: 160px;
+    padding: 4px 0;
+    animation: pas-gm-menu-in 0.12s var(--pas-ease);
+}
+@keyframes pas-gm-menu-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.pas-gm-ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    font-size: 0.88em;
+    cursor: pointer;
+    transition: background 0.1s;
+    color: var(--pas-fg);
+}
+.pas-gm-ctx-item:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-ctx-item i {
+    color: var(--pas-fg-muted);
+    font-size: 0.9em;
+    width: 16px;
+    text-align: center;
+}
+
+/* --- 移动对话框 --- */
+.pas-gm-move-dialog {
+    color: var(--pas-fg);
+}
+.pas-gm-move-dialog h4 {
+    margin: 0 0 4px 0;
+    font-weight: 600;
+    font-size: 1.05em;
+}
+.pas-gm-move-desc {
+    font-size: 0.85em;
+    color: var(--pas-fg-muted);
+    margin: 0 0 12px 0;
+}
+.pas-gm-move-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 45vh;
+    overflow-y: auto;
+}
+.pas-gm-move-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--pas-radius-sm);
+    cursor: pointer;
+    transition: background 0.12s;
+    font-size: 0.9em;
+}
+.pas-gm-move-option:hover {
+    background: var(--pas-surface-2);
+}
+.pas-gm-move-option i {
+    color: var(--pas-accent);
+    font-size: 0.9em;
+}
+.pas-gm-move-count {
+    margin-left: auto;
+    font-size: 0.78em;
+    color: var(--pas-fg-faint);
+}
+.pas-gm-move-new {
+    border-top: 1px solid var(--pas-border);
+    margin-top: 4px;
+    padding-top: 8px;
+    color: var(--pas-accent);
+    font-weight: 500;
+}
+.pas-gm-move-new i { color: var(--pas-accent); }
+
+/* --- AQ-1: + 新建分组按钮 --- */
+.pas-gm-new-group-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px dashed var(--pas-accent, #7c6dd8);
+    background: transparent;
+    color: var(--pas-accent, #7c6dd8);
+    cursor: pointer;
+    font-size: 0.85em;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s;
+}
+.pas-gm-new-group-btn:hover {
+    background: var(--pas-accent, #7c6dd8);
+    color: #fff;
+}
+
+/* --- AQ-1: header 右侧按钮组 --- */
+.pas-gm-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+
+/* --- 19. 分组管理弹窗 AA-3（亮色主题） --- */
+body.pas-light .pas-gm-series {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.10);
+    border-left-color: rgba(147, 51, 234, 0.50);
+}
+body.pas-light .pas-gm-series:hover {
+    border-color: rgba(0, 0, 0, 0.18);
+    border-left-color: rgba(147, 51, 234, 0.70);
+}
+body.pas-light .pas-gm-series-header:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+body.pas-light .pas-gm-series-icon {
+    color: rgba(147, 51, 234, 0.80);
+}
+body.pas-light .pas-gm-preset:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.pas-light .pas-gm-menu-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+}
+body.pas-light .pas-gm-auto-zone {
+    border-color: rgba(147, 51, 234, 0.25);
+    background: rgba(147, 51, 234, 0.03);
+}
+body.pas-light .pas-gm-auto-zone.drag-over {
+    border-color: rgba(147, 51, 234, 0.70) !important;
+    background: rgba(147, 51, 234, 0.10) !important;
+    box-shadow: 0 0 12px rgba(147, 51, 234, 0.15);
+}
+body.pas-light .pas-gm-series-body.drag-over {
+    background: rgba(147, 51, 234, 0.06) !important;
+    border-color: rgba(147, 51, 234, 0.50) !important;
+}
+body.pas-light .pas-gm-context-menu {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.97));
+    border-color: rgba(0, 0, 0, 0.12);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+body.pas-light .pas-gm-ctx-item:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.pas-light .pas-gm-ctx-item i {
+    color: rgba(0, 0, 0, 0.45);
+}
+body.pas-light .pas-gm-move-option:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+body.pas-light .pas-gm-move-new {
+    border-top-color: rgba(0, 0, 0, 0.10);
+}
+body.pas-light .pas-gm-body::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.18);
+}
+body.pas-light .pas-gm-body::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.30);
+}
+
+/* --- AQ-1: 亮色主题 — 新建分组按钮 --- */
+body.pas-light .pas-gm-new-group-btn {
+    border-color: var(--pas-accent, #6a5acd);
+    color: var(--pas-accent, #6a5acd);
+}
+body.pas-light .pas-gm-new-group-btn:hover {
+    background: var(--pas-accent, #6a5acd);
+    color: #fff;
+}
+/* --- AQ-1: 亮色主题 — 系列级菜单按钮 --- */
+body.pas-light .pas-gm-series-menu-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+}
+/* --- AQ-1: 亮色主题 — 危险操作 --- */
+body.pas-light .pas-gm-ctx-item-danger {
+    color: var(--pas-c-del, #dc2626) !important;
+}
+body.pas-light .pas-gm-ctx-item-danger i {
+    color: var(--pas-c-del, #dc2626) !important;
+}
+/* --- AQ-1: 亮色主题 — 上下文菜单分隔线 --- */
+body.pas-light .pas-gm-ctx-separator {
+    background: rgba(0, 0, 0, 0.10);
+}
+
+/* Group manager workspace — compact, searchable and touch-safe. */
+.pas-gm-popup {
+    gap: 12px;
+    width: min(880px, 100%);
+    min-height: min(640px, 78vh);
+    padding: 2px;
+}
+.pas-gm-header {
+    align-items: flex-start;
+    padding: 2px 2px 0;
+}
+.pas-gm-header-left {
+    align-items: center;
+    min-width: 0;
+    gap: 12px;
+}
+.pas-gm-title-icon {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    border: 1px solid color-mix(in srgb, var(--pas-accent) 38%, transparent);
+    border-radius: 11px;
+    color: var(--pas-accent);
+    background: color-mix(in srgb, var(--pas-accent) 12%, transparent);
+}
+.pas-gm-header-left p {
+    max-width: 560px;
+    margin: 3px 0 0;
+    color: var(--pas-fg-muted);
+    font-size: .8rem;
+    line-height: 1.35;
+}
+.pas-gm-header-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--pas-border);
+    border-radius: 9px;
+    color: var(--pas-fg);
+    background: var(--pas-surface-1);
+    font: inherit;
+    font-size: .82rem;
+    cursor: pointer;
+}
+.pas-gm-series-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.pas-gm-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pas-gm-header-actions button:disabled {
+    cursor: not-allowed;
+    opacity: .38;
+}
+.pas-gm-header-actions button:disabled:hover {
+    border-color: var(--pas-border);
+    background: var(--pas-surface-1);
+}
+.pas-gm-undo-btn:not(:disabled),
+.pas-gm-redo-btn:not(:disabled) {
+    color: var(--pas-accent);
+}
+.pas-gm-header-actions .pas-gm-label-short { display: none; }
+.pas-gm-header-actions .pas-gm-new-group-btn {
+    border-style: solid;
+    border-color: color-mix(in srgb, var(--pas-accent) 52%, transparent);
+    color: var(--pas-accent);
+    background: color-mix(in srgb, var(--pas-accent) 10%, transparent);
+}
+.pas-gm-header-actions button:hover {
+    border-color: var(--pas-border-strong);
+    background: var(--pas-surface-2);
+}
+.pas-gm-history-status {
+    min-height: 30px;
+    padding: 6px 10px;
+    border: 1px solid color-mix(in srgb, var(--pas-accent) 24%, transparent);
+    border-radius: 9px;
+    color: var(--pas-fg-muted);
+    background: color-mix(in srgb, var(--pas-accent) 7%, transparent);
+    font-size: .76rem;
+    line-height: 1.4;
+}
+.pas-gm-history-status[hidden] { display: none; }
+.pas-gm-toolbar {
+    display: flex;
+    align-items: center;
+}
+.pas-gm-search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--pas-border);
+    border-radius: 10px;
+    color: var(--pas-fg-muted);
+    background: var(--pas-surface-1);
+}
+.pas-gm-search:focus-within {
+    border-color: color-mix(in srgb, var(--pas-accent) 65%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pas-accent) 13%, transparent);
+}
+.pas-gm-search input {
+    width: 100%;
+    min-width: 0;
+    padding: 0 !important;
+    border: 0 !important;
+    outline: 0 !important;
+    color: var(--pas-fg) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    font: inherit;
+}
+.pas-gm-body {
+    max-height: none;
+    gap: 10px;
+    padding: 0 2px 2px;
+}
+.pas-gm-summary {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.pas-gm-summary span {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    padding: 5px 9px;
+    border: 1px solid var(--pas-border);
+    border-radius: 999px;
+    color: var(--pas-fg-muted);
+    background: var(--pas-surface-1);
+    font-size: .74rem;
+}
+.pas-gm-summary strong { color: var(--pas-fg); font-size: .86rem; }
+.pas-gm-list {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    min-width: 0;
+}
+.pas-gm-series {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--pas-border);
+    border-left: 1px solid var(--pas-border);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--pas-surface-1) 92%, transparent);
+    box-shadow: none;
+}
+.pas-gm-series:hover { border-color: var(--pas-border-strong); }
+.pas-gm-series-header {
+    min-height: 44px;
+    gap: 9px;
+    padding: 7px 10px;
+    border-radius: 9px;
+}
+.pas-gm-series-toggle:focus-visible {
+    outline: 2px solid var(--pas-accent);
+    outline-offset: 2px;
+}
+.pas-gm-series-icon {
+    display: grid;
+    place-items: center;
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
+    color: var(--pas-accent);
+    background: color-mix(in srgb, var(--pas-accent) 10%, transparent);
+}
+.pas-gm-series-name { font-size: .9rem; }
+.pas-gm-rename-btn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    color: var(--pas-text-muted);
+    background: transparent;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 160ms var(--pas-ease-fast), background 160ms var(--pas-ease-fast), color 160ms var(--pas-ease-fast);
+}
+.pas-gm-series-header:hover .pas-gm-rename-btn,
+.pas-gm-series-header:focus-within .pas-gm-rename-btn,
+.pas-gm-rename-btn:focus-visible {
+    opacity: 1;
+}
+.pas-gm-rename-btn:hover {
+    color: var(--pas-text);
+    background: var(--pas-surface-3);
+}
+.pas-gm-rename-btn.is-confirm {
+    color: var(--pas-accent);
+    background: color-mix(in srgb, var(--pas-accent) 16%, transparent);
+    opacity: 1;
+}
+.pas-gm-rename-btn.is-confirm:hover {
+    color: var(--pas-accent);
+    background: color-mix(in srgb, var(--pas-accent) 24%, transparent);
+}
+.pas-gm-rename-btn:focus-visible,
+.pas-gm-name-input:focus-visible {
+    outline: 2px solid var(--pas-accent);
+    outline-offset: 2px;
+}
+.pas-gm-name-editor {
+    position: relative;
+    display: flex;
+    flex: 1 1 180px;
+    min-width: 100px;
+    max-width: min(420px, 60vw);
+}
+.pas-gm-name-input {
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    padding: 4px 9px;
+    border: 1px solid var(--pas-accent);
+    border-radius: 7px;
+    color: var(--pas-text);
+    background: var(--pas-surface-1);
+    font: inherit;
+    font-weight: 600;
+    user-select: text;
+}
+.pas-gm-name-input[aria-invalid="true"] {
+    border-color: var(--pas-danger, #ef4444);
+}
+.pas-gm-name-error {
+    position: absolute;
+    z-index: 2;
+    top: calc(100% + 5px);
+    left: 0;
+    max-width: min(360px, 72vw);
+    padding: 5px 8px;
+    border-radius: 6px;
+    color: #fff;
+    background: var(--pas-danger, #b42318);
+    box-shadow: var(--pas-shadow-md);
+    font-size: .78rem;
+    line-height: 1.35;
+    white-space: normal;
+}
+.pas-gm-name-error:empty { display: none; }
+@media (hover: none), (pointer: coarse) {
+    .pas-gm-rename-btn {
+        min-width: 44px;
+        min-height: 44px;
+        opacity: 1;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .pas-gm-rename-btn { transition: none; }
+}
+.pas-gm-series-count {
+    display: grid;
+    place-items: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 999px;
+    color: var(--pas-fg-muted);
+    background: var(--pas-surface-2);
+    font-variant-numeric: tabular-nums;
+}
+.pas-gm-series-body { gap: 2px; padding: 2px 7px 7px; }
+.pas-gm-mobile-actions {
+    display: none;
+}
+.pas-gm-mobile-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 7px 10px;
+    border: 1px solid var(--pas-border);
+    border-radius: 8px;
+    color: var(--pas-fg-muted);
+    background: var(--pas-surface-1);
+    font: inherit;
+    font-size: .76rem;
+    line-height: 1.25;
+    cursor: pointer;
+}
+.pas-gm-mobile-actions button:focus-visible {
+    outline: 2px solid var(--pas-accent);
+    outline-offset: 2px;
+}
+.pas-gm-mobile-actions .pas-gm-mobile-delete {
+    color: var(--pas-c-del, #f87171);
+}
+.pas-gm-series.collapsed .pas-gm-mobile-actions {
+    display: none !important;
+}
+.pas-gm-preset {
+    min-height: 38px;
+    padding: 5px 7px 5px 38px;
+    border-radius: 7px;
+}
+.pas-gm-origin {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--pas-accent);
+    font-size: .72rem;
+}
+.pas-gm-origin-manual {
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pas-accent) 11%, transparent);
+}
+.pas-gm-menu-btn,
+.pas-gm-series-menu-btn {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    color: var(--pas-fg-muted);
+    background: transparent;
+}
+.pas-gm-auto-zone {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    min-height: 48px;
+    padding: 8px 12px;
+    border: 1px dashed color-mix(in srgb, var(--pas-accent) 38%, transparent);
+    border-radius: 10px;
+    text-align: left;
+    background: color-mix(in srgb, var(--pas-accent) 5%, transparent);
+}
+.pas-gm-auto-zone > i { color: var(--pas-accent); }
+.pas-gm-auto-zone > div { display: grid; gap: 1px; }
+.pas-gm-auto-zone strong { color: var(--pas-fg); font-size: .8rem; }
+.pas-gm-auto-zone span { color: var(--pas-fg-muted); font-size: .7rem; }
+.pas-gm-no-results {
+    display: grid;
+    place-items: center;
+    gap: 10px;
+    min-height: 180px;
+    color: var(--pas-fg-muted);
+    font-size: .85rem;
+}
+.pas-gm-list > .pas-gm-series {
+    position: relative;
+    width: calc(100% - (var(--pas-gm-depth, 0) * 24px));
+    margin-left: calc(var(--pas-gm-depth, 0) * 24px);
+}
+.pas-gm-list > .pas-gm-nested {
+    border-left: 2px solid color-mix(in srgb, var(--pas-accent) 58%, var(--pas-border));
+    background: color-mix(in srgb, var(--pas-accent) 4%, var(--pas-surface-1));
+}
+.pas-gm-list > .pas-gm-nested::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    right: 100%;
+    width: 24px;
+    height: 30px;
+    border-left: 2px solid color-mix(in srgb, var(--pas-accent) 38%, transparent);
+    border-bottom: 2px solid color-mix(in srgb, var(--pas-accent) 38%, transparent);
+    border-bottom-left-radius: 8px;
+    pointer-events: none;
+}
+.pas-gm-tree-relation {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 92px;
+    padding: 3px 6px;
+    border-radius: 999px;
+    color: color-mix(in srgb, var(--pas-accent) 78%, var(--pas-fg));
+    background: color-mix(in srgb, var(--pas-accent) 12%, transparent);
+    font-size: .66rem;
+}
+.pas-gm-tree-relation i { transform: rotate(90deg); font-size: .6rem; }
+.pas-gm-tree-relation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pas-gm-drag-active .pas-gm-series.pas-gm-drop-zone {
+    transition: border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.pas-gm-series.pas-gm-drop-target {
+    border-color: color-mix(in srgb, var(--pas-accent) 82%, white) !important;
+    background: color-mix(in srgb, var(--pas-accent) 13%, var(--pas-surface-1)) !important;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pas-accent) 17%, transparent) !important;
+    transform: translateX(2px);
+}
+.pas-gm-series.pas-gm-drop-target::after {
+    content: attr(data-drop-label);
+    position: absolute;
+    z-index: 3;
+    right: 42px;
+    top: 10px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    color: white;
+    background: var(--pas-accent);
+    font-size: .68rem;
+    font-weight: 650;
+    pointer-events: none;
+}
+
+@media (max-width: 640px) {
+    .pas-gm-popup { min-height: 72vh; }
+    .pas-gm-header { flex-wrap: wrap; gap: 8px; }
+    .pas-gm-title-icon { width: 34px; height: 34px; flex-basis: 34px; }
+    .pas-gm-header-left p { display: none; }
+    .pas-gm-header-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; }
+    .pas-gm-header-actions button { width: auto; min-width: 44px; min-height: 44px; padding: 0; }
+    .pas-gm-header-actions button { gap: 4px; font-size: .74rem; }
+    .pas-gm-header-actions .pas-gm-label-long { display: none; }
+    .pas-gm-header-actions .pas-gm-label-short { display: inline; }
+    .pas-gm-summary { flex-wrap: nowrap; }
+    .pas-gm-summary span { flex: 1; justify-content: center; padding-inline: 5px; }
+    .pas-gm-series-header { gap: 6px; padding-inline: 7px; }
+    .pas-gm-series-toggle { min-height: 44px; gap: 6px; }
+    .pas-gm-series-name {
+        display: -webkit-box;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        line-height: 1.3;
+        white-space: normal;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+    }
+    .pas-gm-rename-btn { width: 44px; height: 44px; min-width: 44px; min-height: 44px; opacity: 1; }
+    .pas-gm-drag-handle { width: 18px; margin-right: 0; }
+    .pas-gm-preset { padding-left: 12px; }
+    .pas-gm-origin-manual span { display: none; }
+    .pas-gm-menu-btn { width: 44px; height: 44px; opacity: 1; }
+    .pas-gm-series-menu-btn { display: none; }
+    .pas-gm-mobile-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 0 7px 7px;
+        padding-top: 7px;
+        border-top: 1px solid var(--pas-border);
+    }
+    .pas-gm-mobile-actions button { flex: 1 1 auto; }
+    .pas-gm-list > .pas-gm-series {
+        width: calc(100% - (var(--pas-gm-depth, 0) * 16px));
+        margin-left: calc(var(--pas-gm-depth, 0) * 16px);
+    }
+    .pas-gm-list > .pas-gm-nested::before { width: 16px; }
+    .pas-gm-tree-relation span { display: none; }
+    .pas-gm-tree-relation { padding-inline: 5px; }
+    .pas-gm-series.pas-gm-drop-target::after { right: 38px; }
+}
+
+/* 嵌套分组卡片缩进 */
+.pas-gm-nested {
+    margin-left: 8px;
+    border-left: 2px solid var(--SmartThemeBorderColor, #444);
+    padding-left: 12px;
+}
+
+/* 嵌套子分组指示线 */
+.pas-gm-nested .pas-gm-series-name::before {
+    content: '└ ';
+    color: var(--SmartThemeEmColor, #888);
+    font-size: 14px;
+}
+
+/* 拖拽手柄 */
+.pas-gm-drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    cursor: grab;
+    opacity: 0.5;
+    margin-right: 6px;
+    font-size: 14px;
+    user-select: none;
+    flex-shrink: 0;
+}
+.pas-gm-drag-handle:hover {
+    opacity: 0.9;
+}
+.pas-gm-drag-handle:active {
+    cursor: grabbing;
+}
+
+/* 拖拽目标高亮 */
+.pas-gm-drop-target {
+    outline: 2px dashed var(--SmartThemeActiveColor, #4a9eff) !important;
+    outline-offset: -2px;
+    background-color: rgba(74, 158, 255, 0.05) !important;
+}
+
+/* 禁用的操作按钮 */
+.pas-gm-action-disabled {
+    opacity: 0.35;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+
+/* 系列菜单按钮 */
+.pas-gm-series-menu-btn {
+    cursor: pointer;
+    opacity: 0.6;
+    padding: 2px 6px;
+    font-size: 16px;
+}
+.pas-gm-series-menu-btn:hover {
+    opacity: 1;
+}
+
+/* Native group-menu buttons preserve the established menu hook and appearance. */
+button.pas-gm-ctx-item {
+    width: 100%;
+    min-height: 40px;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    appearance: none;
+    background: transparent;
+    color: var(--pas-fg);
+    font: inherit;
+    text-align: left;
+}
+
+button.pas-gm-ctx-item:focus-visible {
+    outline: 2px solid var(--pas-accent);
+    outline-offset: -3px;
+    background: var(--pas-surface-2);
+}
+
+button.pas-gm-ctx-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+@media (max-width: 640px) {
+    button.pas-gm-ctx-item { min-height: 44px; }
+}

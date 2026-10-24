@@ -43,7 +43,7 @@ test('writeback selects the latest valid snapshot for each stable preset target'
     ]);
 });
 
-test('ghost filtering is isolated by API and does not detach another API history target', async () => {
+test('legacy ghost-filter option preserves legitimate base-name presets in every API', async () => {
     const writes = [];
     const missingManager = {
         getPresetList: () => ({ preset_names: [] }),
@@ -61,9 +61,9 @@ test('ghost filtering is isolated by API and does not detach another API history
 
     assert.deepEqual(
         await writeBack({ skipExisting: true, filterGhosts: true }),
-        { written: 2, skipped: 1, failed: 0 },
+        { written: 3, skipped: 0, failed: 0 },
     );
-    assert.deepEqual(writes, ['openai:Fox v2', 'claude:Fox']);
+    assert.deepEqual(writes, ['openai:Fox', 'openai:Fox v2', 'claude:Fox']);
 });
 
 test('skip-existing recovery fails closed when host existence cannot be verified', async () => {
