@@ -4,6 +4,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const BASE = __dirname;
 const MODULES_DIR = path.join(BASE, 'modules');
@@ -14,7 +15,7 @@ function collectJavaScriptFiles(directory) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
       files.push(...collectJavaScriptFiles(fullPath));
-    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+    } else if (entry.isFile() && /\.(?:js|mjs)$/.test(entry.name)) {
       files.push(path.relative(BASE, fullPath).replace(/\\/g, '/'));
     }
   }
@@ -31,6 +32,14 @@ if (process.argv.includes('--list-files')) {
 
 let issues = [];
 let warnings = [];
+
+const nativeLink = spawnSync(process.execPath, [
+  '--experimental-vm-modules', '--no-warnings', path.join(BASE, '_module-check.mjs'),
+], { encoding: 'utf8' });
+process.stdout.write(nativeLink.stdout || '');
+if (nativeLink.status !== 0) {
+  issues.push(`[MODULE LINK] ${nativeLink.error?.message || nativeLink.stderr?.trim() || 'Native module validation failed'}`);
+}
 
 // ============================================================
 // 1. Parse imports and exports from each file
@@ -175,7 +184,7 @@ for (const f of ALL_FILES) {
 
 // Print results
 if (issues.length === 0) {
-  console.log('✅ All imports verified - every imported symbol is exported by its source.\n');
+  console.log('✅ Named-import sanity checks passed; native module linking covers complete static imports.\n');
 } else {
   console.log('❌ Import/Export issues found:\n');
   issues.forEach(i => console.log('  ' + i));
