@@ -108,8 +108,15 @@ not pass every dimension; no contrary claim is made.
 
 The final functional gate passes 498 tests, 86 production-module contracts and
 577 matching bilingual keys. Planned findings are mapped above to regression
-evidence, with the settings correction verified separately. Commit/push and
-remote-SHA verification are the remaining delivery step.
+evidence, with the settings correction verified separately. Production syntax
+and whitespace checks pass too. Local commits are `3f56216` (module checker)
+and `015dac0` (product changes). The post-commit full suite again passes498/498.
+
+Push and remote-SHA verification remain pending: the configured localhost7890
+proxy is not listening, and direct GitHub fetch/ls-remote attempts fail with
+timeout, reset or connection failure. No successful remote push is claimed.
+Resume with a remote-divergence check and non-forced dev push when connectivity
+returns; no further full-product review is needed for this delivery.
 
 ## Evidence Limits
 
