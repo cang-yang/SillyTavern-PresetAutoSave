@@ -24,7 +24,7 @@ function isCredentialKey(normalized, value) {
         || (typeof value === 'string' && ['token', 'password'].includes(normalized));
 }
 
-function connectionExclusionReason(key, value) {
+export function connectionExclusionReason(key, value) {
     const normalized = normalizeConnectionKey(key);
     if (NORMALIZED_CONNECTION_FIELDS.has(normalized)) return 'connection-setting';
     return isCredentialKey(normalized, value) ? 'connection-credential' : '';
@@ -176,6 +176,28 @@ export const DISPLAY_IGNORED_FIELDS = new Set([
     ...EXPORT_EXCLUDED_FIELDS, 'prompts', 'prompt_order', 'extensions', 'name',
 ]);
 
+export function presetFieldExclusionReason(key, value, { apiId = 'openai' } = {}) {
+    const connectionReason = connectionExclusionReason(key, value);
+    if (EXPORT_EXCLUDED_FIELDS.has(key) || connectionReason) {
+        return connectionReason || 'separate-global-state';
+    }
+    return apiId === 'openai' && !OPENAI_PRESET_FIELDS.has(key) ? 'runtime-or-unknown-setting' : '';
+}
+
+export function appendPresetPath(parent, key) {
+    const segment = String(key);
+    return /^[A-Za-z_$][\w$]*$/.test(segment)
+        ? `${parent ? `${parent}.` : ''}${segment}`
+        : `${parent}[${JSON.stringify(segment)}]`;
+}
+
+export function presetValueError(path, valueType, code = 'PRESET_NON_JSON') {
+    const safePath = path.length > 240 ? `${path.slice(0, 237)}...` : path;
+    const error = new TypeError(`Preset contains a ${code === 'PRESET_CIRCULAR' ? 'circular' : 'non-JSON'} value at ${safePath} (${valueType})`);
+    Object.assign(error, { code, path: safePath, valueType });
+    return error;
+}
+
 export function extractCanonicalForDiff(preset) {
     const canonical = canonicalizePreset(preset).canonical;
     return Object.fromEntries(Object.entries(canonical).filter(([key]) => !DISPLAY_IGNORED_FIELDS.has(key)));
@@ -191,13 +213,22 @@ function isPlainObject(value) {
         && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
-function validateJson(value, ancestors = new Set()) {
+function validateJson(value, path, ancestors = new Set()) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
     if (typeof value === 'number' && Number.isFinite(value)) return;
-    if (!Array.isArray(value) && !isPlainObject(value)) throw new TypeError('Preset contains a non-JSON value');
-    if (ancestors.has(value)) throw new TypeError('Preset contains a circular value');
+    if (!Array.isArray(value) && !isPlainObject(value)) {
+        const type = typeof value === 'number' ? 'non-finite-number'
+            : typeof value === 'object' ? 'non-plain-object' : typeof value;
+        throw presetValueError(path, type);
+    }
+    if (ancestors.has(value)) throw presetValueError(path, 'object', 'PRESET_CIRCULAR');
     ancestors.add(value);
-    for (const item of Object.values(value)) validateJson(item, ancestors);
+    for (const key of Object.keys(value)) {
+        const itemPath = Array.isArray(value) ? `${path}[${key}]` : appendPresetPath(path, key);
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!Object.hasOwn(descriptor, 'value')) throw presetValueError(itemPath, 'accessor');
+        validateJson(descriptor.value, itemPath, ancestors);
+    }
     ancestors.delete(value);
 }
 
@@ -266,16 +297,12 @@ export function canonicalizePreset(preset, { apiId = 'openai' } = {}) {
     const canonical = {};
     const ignored = [];
     for (const key of Object.keys(normalized).sort()) {
-        const connectionReason = connectionExclusionReason(key, normalized[key]);
-        if (EXPORT_EXCLUDED_FIELDS.has(key) || connectionReason) {
-            ignored.push({ path: key, reason: connectionReason || 'separate-global-state' });
+        const reason = presetFieldExclusionReason(key, normalized[key], { apiId });
+        if (reason) {
+            ignored.push({ path: key, reason });
             continue;
         }
-        if (apiId === 'openai' && !OPENAI_PRESET_FIELDS.has(key)) {
-            ignored.push({ path: key, reason: 'runtime-or-unknown-setting' });
-            continue;
-        }
-        validateJson(normalized[key]);
+        validateJson(normalized[key], appendPresetPath('', key));
         const value = key === 'extensions'
             ? removeExtensionCredentials(normalized[key], key, ignored) : normalized[key];
         Object.defineProperty(canonical, key, {

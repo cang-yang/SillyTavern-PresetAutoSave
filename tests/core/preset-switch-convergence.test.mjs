@@ -262,3 +262,25 @@ test('stable samples compare complete content even when hashes collide', async (
     await scheduler.runNext();
     assert.equal(settled.length, 1);
 });
+
+test('host-confirmed stable target may settle unverified after bounded mismatch without authorizing seeding', async () => {
+    const scheduler = createManualScheduler();
+    let now = 0;
+    const settled = [];
+    const controller = createPresetSwitchConvergence({
+        readCandidate: () => candidate('Preset B', 'runtime-extension', 'stored-extension'),
+        onSettled: value => settled.push(value),
+        schedule: fn => scheduler.schedule(fn), cancel: id => scheduler.cancel(id),
+        now: () => now, allowUnverifiedFallback: true, allowStableMismatch: true,
+        unverifiedDelayMs: 750, requiredFallbackSamples: 2,
+    });
+    controller.begin({ apiId: 'openai', presetName: 'Preset B' });
+    await scheduler.runNext();
+    await scheduler.runNext();
+    assert.equal(settled.length, 0, 'do not adopt source live values immediately after selection');
+    now = 751;
+    await scheduler.runNext();
+    assert.equal(settled.length, 1);
+    assert.equal(settled[0].verified, false);
+    assert.equal(controller.isActive(), false);
+});

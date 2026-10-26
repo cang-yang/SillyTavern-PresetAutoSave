@@ -43,7 +43,7 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(app, /showGroupManager/);
     assert.match(app, /exerciseCoreOperations/);
     assert.match(app, /exercisePresetSwitchConvergence/);
-    assert.match(app, /exerciseDirtyPresetSwitchGuard/);
+    assert.doesNotMatch(app, /exerciseDirtyPresetSwitchGuard/);
     assert.match(app, /countIncreased/);
     assert.match(app, /newIdCreated/);
     assert.match(app, /previousSnapshotPreserved/);
@@ -71,6 +71,32 @@ test('browser harness loads production styles and runs the production panel cont
     assert.match(harnessCss, /\.fa-ellipsis::before/);
     assert.match(harnessCss, /\.fa-camera::before\s*\{[^}]*border:\s*2px solid currentColor/s);
     assert.doesNotMatch(harnessCss, /\.fa-camera::before\s*\{\s*content:\s*"●"/);
+});
+
+test('edit-intent harness exposes real controls and isolated persistence acceptance hooks', async () => {
+    const html = await readFile(new URL('./harness/edit-intent.html', import.meta.url), 'utf8');
+    const app = await readFile(new URL('./harness/edit-intent.mjs', import.meta.url), 'utf8');
+
+    assert.match(html, /src="\.\/edit-intent\.mjs"/);
+    assert.match(html, /<select data-preset-manager-for="openai">/);
+    assert.match(html, /<input id="temp_openai" type="range"/);
+    assert.match(html, /<input id="openai_max_tokens" type="number"/);
+    assert.match(html, /<textarea id="main_prompt_quick_edit_textarea"/);
+    assert.match(html, /<button id="completion_prompt_manager_popup_entry_form_save"/);
+    assert.match(html, /class="drag-handle"/);
+    assert.match(html, /<button id="snapshot"/);
+    assert.match(app, /import\('\.\.\/\.\.\/modules\/auto-save\.js'\)/);
+    assert.match(app, /await auto\.initAutoSave\(\)/);
+    assert.match(app, /select\.addEventListener\('change'/);
+    assert.match(app, /eventSource\.emit\('preset_changed'/);
+    assert.match(app, /window\.__EDIT_INTENT__\s*=/);
+    assert.match(app, /async state\(\)[\s\S]*?snapshotCount:[\s\S]*?tracking:[\s\S]*?errors:/);
+    assert.match(app, /ambient\(\)[\s\S]*?live\.extensions\.fixture\.active[\s\S]*?append\(noise\); noise\.remove\(\)/);
+    assert.match(app, /if \(held\) await new Promise/);
+    assert.match(app, /hold\(\) \{ held = true;/);
+    assert.match(app, /release\(\) \{ held = false; release\?\.\(\); release = null;/);
+    assert.match(app, /async teardown\(\)[\s\S]*?auto\.teardown\(\)[\s\S]*?history\.teardownHistoryStore\(\)/);
+    assert.doesNotMatch(app, /dispatchEvent\(new Event\(['"](?:input|change)['"]/);
 });
 
 test('harness options are allow-listed and fail back to stable defaults', () => {

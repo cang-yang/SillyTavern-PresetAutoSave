@@ -27,7 +27,7 @@ function candidateKey(candidate) {
     ]);
 }
 
-function assessCandidate(candidate, hint) {
+function assessCandidate(candidate, hint, allowStableMismatch) {
     if (!candidate || typeof candidate !== 'object') return { ready: false };
     if (typeof candidate.apiId !== 'string' || !candidate.apiId) return { ready: false };
     if (typeof candidate.presetName !== 'string' || !candidate.presetName) return { ready: false };
@@ -40,7 +40,8 @@ function assessCandidate(candidate, hint) {
     const hasStoredContent = typeof candidate.storedCanonicalContent === 'string'
         && candidate.storedCanonicalContent.length > 0;
     if (hasStoredContent && candidate.canonicalContent !== candidate.storedCanonicalContent) {
-        return { ready: false };
+        return allowStableMismatch && hint.apiId && hint.presetName
+            ? { ready: true, verified: false, key: candidateKey(candidate) } : { ready: false };
     }
 
     return {
@@ -62,6 +63,8 @@ export function createPresetSwitchConvergence({
     requiredStableSamples = 2,
     requiredFallbackSamples = 4,
     allowUnverifiedFallback = false,
+    allowStableMismatch = false,
+    unverifiedDelayMs = 0,
 } = {}) {
     if (typeof readCandidate !== 'function' || typeof onSettled !== 'function') {
         throw new TypeError('Preset switch convergence requires candidate and settled handlers');
@@ -105,7 +108,7 @@ export function createPresetSwitchConvergence({
         if (!active || active.generation !== currentGeneration) return;
 
         active.lastCandidate = candidate;
-        const assessment = assessCandidate(candidate, active.hint);
+        const assessment = assessCandidate(candidate, active.hint, allowStableMismatch);
         if (assessment.ready && (assessment.verified || allowUnverifiedFallback)) {
             if (assessment.key === active.lastReadyKey) active.stableSamples++;
             else {
@@ -116,7 +119,8 @@ export function createPresetSwitchConvergence({
             const requiredSamples = assessment.verified
                 ? requiredStableSamples
                 : requiredFallbackSamples;
-            if (active.stableSamples >= requiredSamples) {
+            if (active.stableSamples >= requiredSamples
+                && (assessment.verified || now() - active.startedAt >= unverifiedDelayMs)) {
                 const settled = deepFreeze({
                     apiId: candidate.apiId,
                     presetName: candidate.presetName,

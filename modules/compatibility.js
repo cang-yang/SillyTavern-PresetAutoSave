@@ -12,6 +12,7 @@
 import { logger } from './logger.js';
 import { StorageReadError } from './core/storage-integrity.js';
 import { describePresetLookup } from './core/preset-lookup-diagnostics.js';
+import { captureHostPreset } from './core/host-preset-capture.js';
 import {
     canonicalizePreset,
     OPENAI_PRESET_FIELDS,
@@ -439,13 +440,13 @@ export function getStoredPresetSnapshot(presetName, options = {}) {
     if (typeof pm.getPresetList === 'function') {
         const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList-stored');
         const stored = findStoredPresetInList(list, presetName);
-        if (stored) return sanitizePresetForExport(cloneDeepSafe(stored), { apiId });
+        if (stored) return captureHostPreset(stored, { apiId });
     }
 
     if (typeof pm.getPresetSettings === 'function') {
         const stored = safeCall(() => pm.getPresetSettings(presetName), null, 'getPresetSettings-stored');
         if (isUsablePresetObject(stored)) {
-            return sanitizePresetForExport(cloneDeepSafe(stored), { apiId });
+            return captureHostPreset(stored, { apiId });
         }
     }
 
@@ -483,57 +484,49 @@ export function getPresetSnapshot(presetName, options = {}) {
                 logger.debug(`[getPresetSnapshot] using getPresetList(${apiId}).settings (live memory data)`);
                 _lastSnapshotPath = `live:${apiId}`;
             }
-            return sanitizePresetForExport(cloneDeepSafe(live), { apiId });
+            return captureHostPreset(live, { apiId });
         }
     }
 
     // ===== 路径 2（后备）：getContext().chatCompletionSettings =====
     // 也是 oai_settings 的引用，在某些 ST 版本中可用
-    if (isCurrentPreset) {
-        try {
-            const ctx = SillyTavern.getContext();
-            if (ctx?.chatCompletionSettings && isUsablePresetObject(ctx.chatCompletionSettings)) {
-                if (_lastSnapshotPath !== 'ctx-ccs') {
-                    logger.debug('[getPresetSnapshot] using ctx.chatCompletionSettings (fallback)');
-                    _lastSnapshotPath = 'ctx-ccs';
-                }
-                return sanitizePresetForExport(cloneDeepSafe(ctx.chatCompletionSettings), { apiId });
+    if (isCurrentPreset && apiId === 'openai') {
+        const live = safeCall(() => SillyTavern.getContext()?.chatCompletionSettings, null, 'context-settings');
+        if (isUsablePresetObject(live)) {
+            if (_lastSnapshotPath !== 'ctx-ccs') {
+                logger.debug('[getPresetSnapshot] using ctx.chatCompletionSettings (fallback)');
+                _lastSnapshotPath = 'ctx-ccs';
             }
-        } catch (_) { /* ignore */ }
+            return captureHostPreset(live, { apiId });
+        }
     }
 
     // ===== 路径 3（后备）：window.oai_settings =====
     // 仅当 openai API 且查询当前预设时可用
     if (isCurrentPreset && apiId === 'openai') {
-        try {
-            const oai = window.oai_settings;
-            if (isUsablePresetObject(oai)) {
-                if (_lastSnapshotPath !== 'oai-global') {
-                    logger.debug('[getPresetSnapshot] using window.oai_settings (fallback)');
-                    _lastSnapshotPath = 'oai-global';
-                }
-                return sanitizePresetForExport(cloneDeepSafe(oai), { apiId });
+        const oai = safeCall(() => window.oai_settings, null, 'global-settings');
+        if (isUsablePresetObject(oai)) {
+            if (_lastSnapshotPath !== 'oai-global') {
+                logger.debug('[getPresetSnapshot] using window.oai_settings (fallback)');
+                _lastSnapshotPath = 'oai-global';
             }
-        } catch (_) { /* ignore */ }
+            return captureHostPreset(oai, { apiId });
+        }
     }
 
     // ===== 路径 4（非当前预设）：从 presets[] 数组读磁盘数据 =====
     // 仅用于读取非当前选中的预设（如历史对比）。
     // 注意：这里读的是 openai_settings 数组中的磁盘副本，不是实时数据。
     if (!isCurrentPreset && typeof pm.getPresetList === 'function') {
-        try {
-            const list = pm.getPresetList(apiId);
-            const { presets, preset_names } = list || {};
-            if (presets && preset_names) {
-                const presetData = findStoredPresetInList(list, name);
-                if (presetData) return sanitizePresetForExport(cloneDeepSafe(presetData), { apiId });
-                logger.debug('[getPresetSnapshot] non-current lookup unusable:', describePresetLookup(list, name, currentName));
-            }
-            if (!presets || !preset_names) {
-                logger.debug('[getPresetSnapshot] non-current lookup missing list parts:', describePresetLookup(list, name, currentName));
-            }
-        } catch (e) {
-            logger.debug('[getPresetSnapshot] path 4 getPresetList error:', e);
+        const list = safeCall(() => pm.getPresetList(apiId), null, 'getPresetList-non-current');
+        const { presets, preset_names } = list || {};
+        if (presets && preset_names) {
+            const presetData = findStoredPresetInList(list, name);
+            if (presetData) return captureHostPreset(presetData, { apiId });
+            logger.debug('[getPresetSnapshot] non-current lookup unusable:', describePresetLookup(list, name, currentName));
+        }
+        if (!presets || !preset_names) {
+            logger.debug('[getPresetSnapshot] non-current lookup missing list parts:', describePresetLookup(list, name, currentName));
         }
     }
 
@@ -542,37 +535,13 @@ export function getPresetSnapshot(presetName, options = {}) {
     if (typeof pm.getPresetSettings === 'function') {
         const raw = safeCall(() => pm.getPresetSettings(name), null, 'getPresetSettings');
         if (isUsablePresetObject(raw)) {
-            return sanitizePresetForExport(cloneDeepSafe(raw), { apiId });
+            return captureHostPreset(raw, { apiId });
         }
     }
 
     // 失败：log 详情
     logger.warn(`[getPresetSnapshot] failed: apiId=${apiId} name="${name}" isCurrent=${isCurrentPreset} pm=${!!pm}`);
     return null;
-}
-
-/**
- * 深拷贝（优先 structuredClone，失败回退 JSON）
- */
-function cloneDeepSafe(obj) {
-    try {
-        if (typeof structuredClone === 'function') {
-            return structuredClone(obj);
-        }
-    } catch (_) { /* 不支持时回退 */ }
-    try {
-        return JSON.parse(JSON.stringify(obj));
-    } catch (_) {
-        // JSON 序列化失败（BigInt、循环引用等），回退到浅拷贝
-        logger.warn('[cloneDeepSafe] JSON fallback failed, using shallow copy');
-        if (Array.isArray(obj)) {
-            return Array.from(obj);
-        }
-        if (obj && typeof obj === 'object') {
-            return { ...obj };
-        }
-        return obj; // 原始类型直接返回
-    }
 }
 
 /**
@@ -629,7 +598,7 @@ export function getLivePresetSnapshot(apiId = null) {
     const list = safeCall(() => pm.getPresetList(id), null, 'getPresetList-live-capture');
     const live = list?.settings;
     if (!live || typeof live !== 'object' || Object.keys(live).length === 0) return null;
-    return sanitizePresetForExport(cloneDeepSafe(live), { apiId: id });
+    return captureHostPreset(live, { apiId: id });
 }
 
 /**

@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { installRuntimeHost } from '../fixtures/runtime-host.mjs';
+import { installEditControls } from '../fixtures/edit-controls.mjs';
 import { hashCanonicalPreset } from '../../modules/core/preset-schema.js';
 
 const host = installRuntimeHost();
+const controls = installEditControls(host);
 const first = 'collision-17327';
 const second = 'collision-28051';
 host.live.send_if_empty = first;
@@ -77,12 +79,12 @@ for (const source of ['switch-event', 'dom-capture', 'polling']) {
         await history.initHistoryStore();
         await auto.initAutoSave();
         try {
-            host.live.send_if_empty = second;
+            controls.change('send_if_empty', second);
+            await new Promise(resolve => setTimeout(resolve, 5));
             if (source === 'polling') {
                 assert.equal(typeof poll, 'function');
                 poll();
             } else {
-                auto.scheduleAutoSave(10000, 'fixture-edit');
                 if (source === 'switch-event') host.emit('oai_preset_changed_before');
                 else {
                     assert.equal(typeof capturedChange, 'function');

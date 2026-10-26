@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Preset Edit Intent Acceptance</title>
+    <link rel="icon" href="data:,">
+    <style>
+        body { font: 16px sans-serif; margin: 16px; max-width: 680px; color: #202124; background: #fafafa; }
+        input, select, button, textarea { box-sizing: border-box; min-height: 44px; max-width: 100%; font: inherit; }
+        label { display: block; margin: 12px 0; }
+        textarea { width: 100%; }
+        section { border-top: 1px solid #ccc; padding: 12px 0; }
+        .completion_prompt_manager_prompt { padding: 12px; border: 1px solid #ccc; margin: 8px 0; }
+        .drag-handle { cursor: grab; display: inline-block; padding: 12px; touch-action: none; }
+        pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    </style>
+</head>
+<body>
+    <h1>Preset Edit Intent Acceptance</h1>
+    <label>Preset <select data-preset-manager-for="openai"><option>A</option><option>B</option></select></label>
+    <section id="openai_settings">
+        <label>Temperature <input id="temp_openai" type="range" min="0" max="2" step="0.01" value="0.5"></label>
+        <label>Tokens <input id="openai_max_tokens" type="number" value="1024"></label>
+        <label>Main prompt <textarea id="main_prompt_quick_edit_textarea">original</textarea></label>
+    </section>
+    <section id="completion_prompt_manager">
+        <div class="completion_prompt_manager_prompt completion_prompt_manager_prompt_draggable" data-pm-identifier="main">
+            <span class="drag-handle">Move main</span>
+            <button class="prompt-manager-toggle-action">Toggle main</button>
+            <button class="prompt-manager-edit-action">Edit main</button>
+        </div>
+        <div class="completion_prompt_manager_prompt completion_prompt_manager_prompt_draggable" data-pm-identifier="other">
+            <span class="drag-handle">Move other</span>
+        </div>
+        <div class="completion_prompt_manager_footer">
+            <select id="completion_prompt_manager_footer_append_prompt" aria-label="Prompt"><option value="main">Main</option><option value="other">Other</option></select>
+            <button class="fa-chain">Append</button>
+            <button class="caution">Delete definition</button>
+        </div>
+    </section>
+    <section id="completion_prompt_manager_popup">
+        <label>Prompt content <textarea id="edit_content">original</textarea></label>
+        <button id="completion_prompt_manager_popup_entry_form_save" data-pm-prompt="main">Save prompt</button>
+    </section>
+    <button id="snapshot">Manual snapshot</button>
+    <pre id="result">Loading</pre>
+    <script type="module" src="./edit-intent.mjs"></script>
+</body>
+</html>

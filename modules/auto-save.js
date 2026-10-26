@@ -2,11 +2,10 @@
  * SillyTavern Preset Auto Save - Auto Save Engine
  * 自动保存引擎（事件驱动 + DOM 兜底 + Prompt Manager 专项监听）
  *
- * 触发来源（按优先级降序）:
- *   1. SETTINGS_UPDATED 事件 - ST 任何内部 state 更新后都会广播，最可靠
- *   2. OAI_PRESET_CHANGED_AFTER 事件 - 切换预设后，跟踪状态更新
- *   3. DOM input/change 事件 - 兜底（适配未发出 SETTINGS_UPDATED 的 ST 版本）
- *   4. Prompt Manager 区域的 click + MutationObserver - 监听 prompt 弹窗保存
+ * 写入来源：
+ *   1. 宿主适配器确认的可信、定范围编辑，冻结后进入串行写入器。
+ *   2. 手动快照、原生保存观察、恢复等显式命令。
+ *   3. 全局状态通知、DOM 重绘和轮询不能独立创建保存请求。
  *
  * 关键保护:
  *   - 切换预设期间忽略输入（_ignoreInput）+ 自动超时重置
@@ -37,16 +36,15 @@ import { seedSnapshotForPreset, cancelPresetSeeding, allowPresetSeeding } from '
 import { canonicalizePreset, requireCanonicalPreset } from './core/preset-schema.js';
 import { stableStringify } from './core/value-utils.js';
 import { SaveCoordinator, sameSaveTarget } from './core/save-coordinator.js';
-import { shouldAcceptUserMutation } from './core/input-gate.js';
+import { createEditIntentOwner } from './core/edit-intent.js';
+import { observePresetEdits } from './host/preset-edit-events.js';
 import { getDeferredSaveDelay } from './core/deferred-save.js';
 import { PresetSaveTransactionError } from './core/save-transaction.js';
-import { assessSaveCompletion } from './core/save-completion.js';
 import { executePresetWrite, prepareRestoreCommand } from './core/preset-write-commands.js';
 import { createJsonFingerprint } from './core/json-fingerprint.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 import { observeNativePresetSaves } from './host/native-preset-save-observer.js';
 import { resolveNativePresetSaveTarget } from './core/native-preset-save-target.js';
-import { PRESET_WATCH_SELECTORS, isInsidePresetWatchArea } from './core/preset-dom-watch.js';
 import { setSaveStatus } from './core/save-status.js';
 import { classifyCoordinatorResult } from './core/save-outcome.js';
 import { createPresetSwitchConvergence } from './core/preset-switch-convergence.js';
@@ -54,21 +52,10 @@ import { createPresetSwitchConvergence } from './core/preset-switch-convergence.
 // =====================================================
 // 监听目标（覆盖各类 API 的设置面板）
 // =====================================================
-const WATCH_SELECTORS = PRESET_WATCH_SELECTORS;
-
-// Prompt Manager 区域 - 需要单独监听（弹窗保存按钮 click 等）
-const PROMPT_MANAGER_SELECTORS = [
-    '#completion_prompt_manager',
-    '#completion_prompt_manager_popup',
-];
-
-// 应排除的字段前缀（敏感信息或非预设字段）
-const EXCLUDED_ID_PREFIXES = [
-    'api_key',
-    'oai_api_key',
-    'api_key_',
-    'pas_',
-];
+const _editIntents = createEditIntentOwner();
+let _editObserver = null;
+let _lastCaptureFailure = null;
+let _finalizingSwitchTarget = null;
 
 // =====================================================
 // 状态指示器接口（由 ui-injector 注册）
@@ -112,16 +99,11 @@ let _switchTraceSeq = 0;
 let _activeSwitchTrace = null;
 let _switchConvergence = null;
 
-// 容器级监听：只在 WATCH_SELECTORS 命中的元素上 bind input/change，
-// 而不是在整个 document 捕获。聊天框、其他扩展的输入完全不进入热路径。
-let _containerListeners = new Map();  // HTMLElement -> { input, change }
-let _containerObserver = null;        // 监听容器出现 / 消失，自动重绑
-let _containerRebindTimer = null;     // 节流定时器
+// Editable-container ownership is held by the host edit adapter.
 let _switchCaptureBound = false;      // preset selects live outside several settings containers
 let _settingUnsubscribe = null;       // 设置变更订阅
 let _eventUnsubscribers = [];         // ST 事件订阅取消函数集合
 let _nativeSaveUnsubscribe = null;
-let _promptObserver = null;           // Prompt Manager 区域 MutationObserver
 let _pollingTimer = null;             // 兜底轮询计时器
 const _runtimeTimers = new RuntimeTimerRegistry(); // 生命周期相关的延迟回调
 
@@ -155,7 +137,9 @@ export async function initAutoSave() {
     _currentPresetName = getSelectedPresetName();
 
     // 计算初始哈希（避免初次加载就触发保存）
-    const initialPreset = getPresetSnapshot();
+    let initialPreset = null;
+    try { initialPreset = getPresetSnapshot(); }
+    catch (error) { reportCaptureFailure(error); }
     if (initialPreset) {
         _lastSavedHash = hashPreset(initialPreset, _currentApiId);
         _lastSavedContent = serializeCanonicalContent(initialPreset, _currentApiId);
@@ -180,7 +164,10 @@ export async function initAutoSave() {
     bindPresetEvents();
     _nativeSaveUnsubscribe = observeNativePresetSaves({
         onSaved: recordNativeManualSave,
-        captureContext: () => ++_saveRevision,
+        captureContext: payload => ({
+            revision: ++_saveRevision,
+            editRevision: _editIntents.latest({ apiId: payload.apiId, presetName: payload.name })?.editRevision,
+        }),
         onError: error => logger.error('Native manual preset snapshot failed:', error),
         shouldCapture: () => !_isInternalSave && !_restoreInProgress,
     });
@@ -215,14 +202,15 @@ function applyEnabledState() {
 
     _enabled = shouldEnable;
     if (_enabled) {
-        bindDOMListeners();
-        bindPromptManagerListeners();
+        bindEditObserver();
         startPolling();
         logger.info('Auto-save ENABLED');
     } else {
         cancelPendingSave();
-        unbindDOMListeners();
-        unbindPromptManagerListeners();
+        _saveCoordinator?.cancelPending(request => request.trigger === TRIGGER.AUTO);
+        unbindEditObserver();
+        _editIntents.clear();
+        _dirty = false;
         stopPolling();
         _setStatus('idle');
         logger.info('Auto-save DISABLED');
@@ -245,6 +233,60 @@ function markUserActive() {
     _lastUserActivity = Date.now();
 }
 
+function reportCaptureFailure(error) {
+    _setStatus('error');
+    const signature = JSON.stringify([error?.code, error?.path, error?.valueType, error?.message]);
+    if (_lastCaptureFailure === signature) return;
+    _lastCaptureFailure = signature;
+    logger.error('Preset capture failed; no data written:', error);
+}
+
+function bindEditObserver() {
+    if (_editObserver) return;
+    _editObserver = observePresetEdits({
+        rangeReleaseOnly: () => getSettings().sliderReleaseSave,
+        capture: target => ({
+            apiId: target?.apiId || getCurrentApiId(), presetName: target?.presetName || getSelectedPresetName(),
+            preset: getLivePresetSnapshot(target?.apiId),
+        }),
+        onEdit: edit => {
+            if (!_enabled || _restoreInProgress) return;
+            if (!sameSaveTarget(edit.target, _finalizingSwitchTarget || {
+                apiId: getCurrentApiId(), presetName: getSelectedPresetName(),
+            })) return;
+            const accepted = _editIntents.record(edit);
+            if (!accepted) return;
+            _lastCaptureFailure = null;
+            markUserActive();
+            _mutationGeneration++;
+            _stats.triggeredByDOM++;
+            const delay = accepted.source === 'control-text' ? getSettings().textInputDebounce : null;
+            scheduleAutoSave(delay, accepted.source || 'user-edit', { preserveDuringSwitch: true });
+        },
+        onError: reportCaptureFailure,
+    });
+    if (!_switchCaptureBound) {
+        document.addEventListener('change', onPresetSelectChangeCapture, true);
+        _switchCaptureBound = true;
+    }
+}
+
+function unbindEditObserver() {
+    _editObserver?.dispose();
+    _editObserver = null;
+    if (_switchCaptureBound) {
+        document.removeEventListener('change', onPresetSelectChangeCapture, true);
+        _switchCaptureBound = false;
+    }
+}
+
+function finalizeBeforeSwitch() {
+    if (!_currentApiId || !_currentPresetName) return;
+    _finalizingSwitchTarget = { apiId: _currentApiId, presetName: _currentPresetName };
+    try { _editObserver?.flush({ beforeSwitch: _finalizingSwitchTarget }); }
+    finally { _finalizingSwitchTarget = null; }
+}
+
 function startPolling() {
     if (_pollingTimer) return;
     // 默认关闭：只有用户在设置里显式开启 fallbackPolling 才启动
@@ -263,18 +305,7 @@ function startPolling() {
         // 用户长时间无操作时直接跳过（不做 hash 计算）
         if (Date.now() - _lastUserActivity > POLLING_INACTIVE_THRESHOLD_MS) return;
 
-        try {
-            const preset = getPresetSnapshot();
-            if (!preset) return;
-            const h = hashPreset(preset, _currentApiId);
-            if (_lastSavedContent !== null
-                && serializeCanonicalContent(preset, _currentApiId) !== _lastSavedContent) {
-                logger.debug(`[Polling] content changed (hash ${_lastSavedHash} -> ${h}), scheduling save`);
-                scheduleAutoSave(getSettings().debounceMs, 'polling');
-            }
-        } catch (e) {
-            logger.warn('Polling check failed:', e);
-        }
+        _editObserver?.flush();
     }, interval);
     logger.debug(`Polling started (interval=${interval}ms)`);
 }
@@ -288,374 +319,8 @@ function stopPolling() {
 }
 
 // =====================================================
-// DOM 监听（容器级 - 不再全文档监听）
+// 切换追踪与已授权编辑的调度
 // =====================================================
-/**
- * 关键性能修复：
- * 旧实现把 input/change 监听绑在 document 上（捕获阶段），
- * 用户在聊天框打字、其他扩展的任何输入都会进入热路径，
- * 每个 keystroke 都要跑 closest() 上溯到 body —— CPU 显著拉高。
- *
- * 新实现只在 WATCH_SELECTORS 命中的容器元素上绑定监听器，
- * 浏览器原生事件冒泡只会送达这些容器，完全不打扰其他元素。
- *
- * 容器在 SPA 中可能后加载/销毁，所以用 MutationObserver 在
- * #form_sheld（设置面板根）下监听新出现/消失的容器并自动重绑。
- */
-function bindDOMListeners() {
-    if (_containerListeners.size > 0) return;
-
-    rebindContainers();
-    if (!_switchCaptureBound) {
-        // Preset selects are toolbar controls and are not consistently nested
-        // inside WATCH_SELECTORS (notably Kobold). A single capture-phase
-        // change listener is cheap and guarantees the old live state is frozen
-        // before SillyTavern applies the next preset.
-        document.addEventListener('change', onPresetSelectChangeCapture, true);
-        _switchCaptureBound = true;
-    }
-
-    // 容器观察器：监听 #form_sheld（设置面板根）下的子树变化
-    // 当目标容器被插入/移除时增量更新绑定
-    if (_containerObserver) return;
-    const root = document.querySelector('#form_sheld') || document.body;
-    try {
-        _containerObserver = new MutationObserver(() => {
-            // 节流：连续变化只触发一次重绑
-            if (_containerRebindTimer) return;
-            _containerRebindTimer = setTimeout(() => {
-                _containerRebindTimer = null;
-                rebindContainers();
-            }, 300);
-        });
-        _containerObserver.observe(root, { childList: true, subtree: true });
-    } catch (e) {
-        logger.warn('Failed to attach container observer:', e);
-    }
-
-    logger.debug(`DOM listeners bound to ${_containerListeners.size} container(s)`);
-}
-
-/**
- * 扫描 WATCH_SELECTORS、将监听器绑到目标容器上（已绑过的跳过）。
- * 同时清理已经从 DOM 中移除的容器对应的旧监听记录。
- */
-function rebindContainers() {
-    const present = new Set();
-    for (const selector of WATCH_SELECTORS) {
-        let nodes;
-        try { nodes = document.querySelectorAll(selector); } catch (_) { continue; }
-        for (const node of nodes) {
-            present.add(node);
-            if (_containerListeners.has(node)) continue;
-            const handlers = {
-                input: (event) => onElementInput(event),
-                change: (event) => onElementChange(event),
-            };
-            // 冒泡阶段（false）：成本低且足够触达
-            node.addEventListener('input', handlers.input, false);
-            node.addEventListener('change', handlers.change, false);
-            _containerListeners.set(node, handlers);
-        }
-    }
-    // 清理已经离开 DOM 的容器
-    for (const [node, handlers] of _containerListeners) {
-        if (!present.has(node) || !node.isConnected) {
-            try {
-                node.removeEventListener('input', handlers.input, false);
-                node.removeEventListener('change', handlers.change, false);
-            } catch (_) {}
-            _containerListeners.delete(node);
-        }
-    }
-}
-
-function unbindDOMListeners() {
-    for (const [node, handlers] of _containerListeners) {
-        try {
-            node.removeEventListener('input', handlers.input, false);
-            node.removeEventListener('change', handlers.change, false);
-        } catch (_) {}
-    }
-    _containerListeners.clear();
-    if (_switchCaptureBound) {
-        document.removeEventListener('change', onPresetSelectChangeCapture, true);
-        _switchCaptureBound = false;
-    }
-
-    if (_containerObserver) {
-        try { _containerObserver.disconnect(); } catch (_) {}
-        _containerObserver = null;
-    }
-    if (_containerRebindTimer) {
-        clearTimeout(_containerRebindTimer);
-        _containerRebindTimer = null;
-    }
-}
-
-/**
- * 判断元素是否在我们关心的区域内（容器级监听后这只是双保险）
- */
-function isInWatchedArea(element) {
-    return isInsidePresetWatchArea(element);
-}
-
-/**
- * 判断元素是否被本扩展自己创建（应忽略）
- */
-function isOwnElement(element) {
-    if (!element || !element.closest) return false;
-    return !!element.closest('[data-pas-element], #pas_history_btn, .pas-panel, .pas-popup');
-}
-
-/**
- * 判断元素是否应被自动保存监听
- */
-function isElementWatchable(element) {
-    if (!element) return false;
-    if (isOwnElement(element)) return false;
-    if (!isInWatchedArea(element)) return false;
-
-    // 排除敏感字段
-    const id = (element.id || '').toLowerCase();
-    for (const prefix of EXCLUDED_ID_PREFIXES) {
-        if (id.startsWith(prefix)) return false;
-    }
-
-    // 排除已禁用的元素
-    if (element.disabled) return false;
-
-    // 必须是表单元素
-    const tag = element.tagName;
-    if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
-        return false;
-    }
-
-    return true;
-}
-
-function describeElement(el) {
-    if (!el) return '(null)';
-    const tag = (el.tagName || '').toLowerCase();
-    const id = el.id ? `#${el.id}` : '';
-    const name = el.name ? `[name=${el.name}]` : '';
-    const type = el.type ? `:${el.type}` : '';
-    return `${tag}${type}${id}${name}`;
-}
-
-function onElementInput(event) {
-    if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress, userInitiated: event.isTrusted })) return;
-    if (!isElementWatchable(event.target)) return;
-
-    const el = event.target;
-    const settings = getSettings();
-    const scheduleUserSave = (delay, reason) => scheduleAutoSave(delay, reason, { preserveDuringSwitch: event.isTrusted });
-
-    markUserActive();
-    _stats.triggeredByDOM++;
-    logger.debug(`[DOM input] ${describeElement(el)}`);
-
-    // 滑块: 始终在 input 阶段不触发实际保存（拖动时频繁触发会卡）
-    // 等 change 事件（即"松开"）再保存
-    if (el.type === 'range') {
-        _mutationGeneration++;
-        _dirty = true;
-        _setStatus('pending');
-        return;
-    }
-
-    // 文本框/textarea: 长防抖
-    if (el.tagName === 'TEXTAREA' || el.type === 'text' || el.type === 'search') {
-        scheduleUserSave(settings.textInputDebounce);
-        return;
-    }
-
-    // 数字输入框: 通用防抖
-    if (el.type === 'number') {
-        scheduleUserSave(settings.debounceMs);
-        return;
-    }
-
-    // 默认
-    scheduleUserSave(settings.debounceMs);
-}
-
-function onElementChange(event) {
-    if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress, userInitiated: event.isTrusted })) return;
-    if (!isElementWatchable(event.target)) return;
-
-    const el = event.target;
-    const settings = getSettings();
-    const scheduleUserSave = (delay, reason) => scheduleAutoSave(delay, reason, { preserveDuringSwitch: event.isTrusted });
-
-    markUserActive();
-    _stats.triggeredByDOM++;
-    logger.debug(`[DOM change] ${describeElement(el)}`);
-
-    // 滑块: change 触发保存（用户松开了），sliderReleaseSave 关闭时使用更短的延迟
-    if (el.type === 'range') {
-        const delay = settings.sliderReleaseSave ? settings.debounceMs : 0;
-        scheduleUserSave(delay);
-        return;
-    }
-
-    // 复选框/单选/select: change 立即触发
-    if (el.type === 'checkbox' || el.type === 'radio' || el.tagName === 'SELECT') {
-        scheduleUserSave(settings.debounceMs);
-        return;
-    }
-
-    // 其他: blur 时的 change（如失焦后值改变）
-    scheduleUserSave(settings.debounceMs);
-}
-
-// =====================================================
-// Prompt Manager 专项监听
-// =====================================================
-/**
- * Prompt Manager 的弹窗保存按钮、增删条目、拖拽排序都不会触发标准 input/change，
- * 我们用 click 委托 + MutationObserver 来捕获它们，再调度保存。
- */
-let _pmClickHandler = null;
-let _pmClickHandlerTarget = null;     // 当前 click handler 绑定的目标节点
-function bindPromptManagerListeners() {
-    if (_pmClickHandler || _promptObserver) return; // 幂等
-
-    /**
-     * 性能修复：把 click 委托从 document 上移到 #completion_prompt_manager 容器上。
-     * 这样用户在聊天界面、其他扩展点击不会进入这个 handler。
-     *
-     * 同时**删除**了原来基于 attributes 的 MutationObserver——
-     * 它每次 prompt 行 class 切换都触发，是可观察到的性能损耗，
-     * 而且现在 click handler 已经覆盖了所有用户操作（toggle/add/delete）。
-     * 仅保留 childList observer 来捕获 SortableJS 拖拽排序这种纯 DOM 操作。
-     */
-    const handler = (event) => {
-        if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress, userInitiated: event.isTrusted })) return;
-
-        const target = event.target;
-        if (!target || !target.closest) return;
-
-        // 弹窗的"Save"按钮
-        if (target.closest('#completion_prompt_manager_popup_entry_form_save')) {
-            _stats.triggeredByPrompt++;
-            logger.debug('[PromptManager] entry form save clicked');
-            // 点击后，PromptManager 会在内部 mutate oai_settings 然后保存。
-            // 给它足够的延迟以同步到内存
-            scheduleAutoSave(getSettings().debounceMs, 'prompt-edit-save', { preserveDuringSwitch: event.isTrusted });
-            return;
-        }
-
-        // Prompt 行上的"启用/禁用"切换、"删除"按钮等
-        const promptRow = target.closest('.completion_prompt_manager_prompt');
-        if (promptRow) {
-            if (target.closest('.prompt-manager-toggle-action, .prompt-manager-detach-action, .prompt-manager-edit-action, [data-pm-action]')) {
-                _stats.triggeredByPrompt++;
-                logger.debug('[PromptManager] action button clicked');
-                scheduleAutoSave(getSettings().debounceMs, 'prompt-action', { preserveDuringSwitch: event.isTrusted });
-            }
-        }
-
-        // 添加按钮
-        if (target.closest('#completion_prompt_manager_footer_append_prompt') || target.closest('#completion_prompt_manager_new_prompt')) {
-            _stats.triggeredByPrompt++;
-            logger.debug('[PromptManager] add prompt clicked');
-            scheduleAutoSave(getSettings().debounceMs, 'prompt-add', { preserveDuringSwitch: event.isTrusted });
-        }
-    };
-
-    // 优先绑到 PromptManager 容器；找不到时回落到 #form_sheld（设置面板根）
-    const target = document.querySelector('#completion_prompt_manager')
-        || document.querySelector('#form_sheld')
-        || document.body;
-    target.addEventListener('click', handler, false);
-    _pmClickHandler = handler;
-    _pmClickHandlerTarget = target;
-
-    // MutationObserver：仅监听 childList（拖拽排序 / 删除条目），
-    // 不监听 attributes（class 切换走 click handler 已覆盖，attributes
-    // observer 在 prompt 列表频繁 hover/选中时会被疯狂触发，是发热元凶之一）
-    //
-    // 性能优化：双层节流
-    //   1. _pmMutationPending（microtask 级）：同一 tick 内的多个 mutation 合并
-    //   2. _pmMutationThrottleUntil（时间窗口级）：500ms 内的多批 mutation 合并
-    //   一次用户操作（如 toggle prompt）会产生 4-8 个分散在几百毫秒内的 mutation，
-    //   不加时间窗口的话每批都会触发 scheduleAutoSave → doSave → 完整深拷贝+hash。
-    let _pmMutationPending = false;
-    let _pmMutationThrottleUntil = 0;
-    const PM_MUTATION_THROTTLE_MS = 500;
-    try {
-        _promptObserver = new MutationObserver((mutations) => {
-            if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress })) return;
-            if (_pmMutationPending) return;
-
-            // 快速过滤：只关心新增/删除节点
-            let hasChild = false;
-            for (const m of mutations) {
-                if (m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length)) {
-                    hasChild = true;
-                    break;
-                }
-            }
-            if (!hasChild) return;
-
-            // 时间窗口节流：500ms 内只触发一次
-            const now = Date.now();
-            if (now < _pmMutationThrottleUntil) return;
-            _pmMutationThrottleUntil = now + PM_MUTATION_THROTTLE_MS;
-
-            // 节流：同一 tick 内多个 mutation 合并为一次
-            _pmMutationPending = true;
-            queueMicrotask(() => {
-                _pmMutationPending = false;
-                if (!shouldAcceptUserMutation({ enabled: _enabled, ignoreInput: _ignoreInput, restoreInProgress: _restoreInProgress })) return;
-                _stats.triggeredByPrompt++;
-                logger.debug('[PromptManager] DOM childList mutation');
-                scheduleAutoSave(getSettings().debounceMs, 'prompt-mutation');
-            });
-        });
-
-        const tryAttach = () => {
-            for (const sel of PROMPT_MANAGER_SELECTORS) {
-                const node = document.querySelector(sel);
-                if (node) {
-                    _promptObserver.observe(node, {
-                        childList: true,
-                        subtree: true,
-                        // attributes: false  ← 关键：去掉，避免高频触发
-                    });
-                    logger.debug(`[PromptManager] observer attached to ${sel}`);
-                }
-            }
-        };
-        tryAttach();
-        // PromptManager 可能后加载，再延迟尝试一次
-        _runtimeTimers.schedule(tryAttach, 1500);
-    } catch (e) {
-        logger.warn('Failed to attach prompt manager observer:', e);
-    }
-}
-
-function unbindPromptManagerListeners() {
-    if (_pmClickHandler && _pmClickHandlerTarget) {
-        try { _pmClickHandlerTarget.removeEventListener('click', _pmClickHandler, false); } catch (_) {}
-        _pmClickHandler = null;
-        _pmClickHandlerTarget = null;
-    }
-    if (_promptObserver) {
-        try { _promptObserver.disconnect(); } catch (_) {}
-        _promptObserver = null;
-    }
-}
-
-// =====================================================
-// 防抖调度
-// =====================================================
-/**
- * 调度自动保存
- * @param {number} [delay] 自定义延迟，默认使用 settings.debounceMs
- * @param {string} [reason] 触发原因（用于日志诊断）
- */
 function createSwitchTrace(source, eventData = null) {
     const trace = {
         id: `sw-${++_switchTraceSeq}`,
@@ -713,6 +378,7 @@ function onPresetSelectChangeCapture(event) {
     const select = event.target;
     if (!select?.matches?.('select[data-preset-manager-for]')) return;
     if (!_enabled || _restoreInProgress || _ignoreInput) return;
+    finalizeBeforeSwitch();
     if (!_dirty && !_debounceTimer) return;
     if (!_currentApiId || !_currentPresetName) return;
     const trace = createSwitchTrace('dom-capture');
@@ -722,34 +388,15 @@ function onPresetSelectChangeCapture(event) {
         selectValue: select.value ?? null,
     });
 
-    const preset = getLivePresetSnapshot(_currentApiId);
-    if (!preset) {
-        noteSwitchTrace('dom-capture:no-live-preset');
-        logger.warn(`Native switch guard could not capture live preset "${_currentPresetName}"`);
-        return;
-    }
-    const liveHash = hashPreset(preset, _currentApiId);
-    if (_lastSavedContent !== null
-        && serializeCanonicalContent(preset, _currentApiId) === _lastSavedContent) {
-        noteSwitchTrace('dom-capture:unchanged', { liveHash, lastSavedHash: _lastSavedHash });
-        cancelPendingSave();
-        _dirty = false;
-        _stats.switchGuardSkipped++;
-        return;
-    }
-
     const target = { apiId: _currentApiId, presetName: _currentPresetName };
-    const payload = _buildSavePayload('native-switch-capture', target, preset);
-    if (!payload) return;
-    noteSwitchTrace('dom-capture:payload-ready', { target, liveHash, newHash: payload.newHash });
-
+    if (!_editIntents.peek(target)) return;
     cancelPendingSave();
     _stats.switchGuardSaved++;
     // Suppress the input storm produced synchronously by SillyTavern's target
     // change handler. PRESET_CHANGED will extend the same guard window later.
     setIgnoreInput(true, IGNORE_INPUT_AFTER_SWITCH_MS + 500);
     _suspendUntil = Date.now() + SUSPEND_AFTER_SWITCH_MS;
-    submitSavePayload(payload, TRIGGER.SWITCH_GUARD, 'native-switch-capture')
+    doSave(TRIGGER.SWITCH_GUARD, 'native-switch-capture', target)
         .catch(error => logger.error('Native switch guard failed:', error));
 }
 
@@ -757,7 +404,8 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified', { preserv
     // 切换中 / 内部保存中 / 未启用 / 原子恢复中 -> 静默忽略
     if (!_enabled) return;
     if (_restoreInProgress) return;
-    _mutationGeneration++;
+    const target = _finalizingSwitchTarget || { apiId: getCurrentApiId(), presetName: getSelectedPresetName() };
+    if (!_editIntents.peek(target)) return;
     if (_ignoreInput) {
         if (preserveDuringSwitch) queueCompensationSave(reason);
         return;
@@ -791,7 +439,7 @@ export function scheduleAutoSave(delay = null, reason = 'unspecified', { preserv
             queueCompensationSave(reason);
             return;
         }
-        doSave(TRIGGER.AUTO, reason).catch(e => logger.error('Scheduled save failed:', e));
+        doSave(TRIGGER.AUTO, reason).catch(reportCaptureFailure);
     }, ms);
 }
 
@@ -816,7 +464,7 @@ export async function flushSave() {
 // =====================================================
 // 核心保存
 // =====================================================
-const SAVE_TIMEOUT_MS = 15_000;  // 单次保存最大允许时长，超时强制释放锁
+const SAVE_TIMEOUT_MS = 15_000;  // Report overdue writes without releasing their ownership.
 let _saveStartedAt = 0;
 let _saveTimeoutId = null;
 
@@ -867,7 +515,8 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
 
     // 仅在非显式目标的情况下才做"切换中"中止逻辑
     // （显式 target 通常来自 switch-guard，必须强制保存到指定预设）
-    if (!explicitTarget && _currentPresetName && _currentPresetName !== presetName) {
+    if (!explicitTarget && _currentPresetName
+        && (_currentPresetName !== presetName || _currentApiId !== apiId)) {
         logger.debug(
             `Preset changed during save: "${_currentPresetName}" -> "${presetName}", aborting old save`
         );
@@ -893,7 +542,7 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
     //    settings_updated 是"高频无变化重复触发"的主要来源（ST 内部大量操作都会触发），
     //    快速预检在此场景下收益最高，且完整字符串比较不会采样漏检。
     const isSettingsUpdated = reason === 'settings_updated';
-    if (!explicitTarget && isSettingsUpdated && _lastSavedContent !== null && _lastQuickFingerprint) {
+    if (!presetOverride && !explicitTarget && isSettingsUpdated && _lastSavedContent !== null && _lastQuickFingerprint) {
         const qfp = _computeQuickFingerprint(apiId);
         if (qfp && qfp === _lastQuickFingerprint) {
             _noChangeCount++;
@@ -922,7 +571,7 @@ function _buildSavePayload(reason, explicitTarget, presetOverride = null) {
     // 关键字段指纹（便于排查"toggle 改了但 hash 没变"这类幻觉）
     const fingerprint = computeFingerprint(preset);
 
-    if (_lastSavedContent !== null && canonicalContent === _lastSavedContent) {
+    if (!_saveCoordinator?.getState().active && _lastSavedContent !== null && canonicalContent === _lastSavedContent) {
         // 与上次比较没变化（可能是 SETTINGS_UPDATED 重复触发）
         // 仅在前 3 次相同 hash 内打日志，超出后采样降噪
         _noChangeCount++;
@@ -978,14 +627,8 @@ function scheduleFailedSaveRetry(request) {
         if (!_enabled || !_initialized) return;
         if (_latestRevisionByTarget.get(key) !== request.revision) return;
 
-        if (sameSaveTarget(request, { apiId: _currentApiId, presetName: _currentPresetName })) {
-            _dirty = true;
-            scheduleAutoSave(0, `retry:${request.reason || 'save'}`, { preserveDuringSwitch: true });
-            return;
-        }
-
-        // The user has switched away, so the old live UI is no longer capturable.
-        // Retry the immutable request only if no newer revision for that target exists.
+        if (_editIntents.peek(request)) return;
+        // Retry the failed immutable command, never recapture unrelated live drift.
         submitSavePayload(request, request.trigger, `retry:${request.reason || 'save'}`)
             .catch(error => logger.error('Background save retry failed:', error));
     }, delay);
@@ -999,15 +642,27 @@ async function doSave(trigger = TRIGGER.AUTO, reason = '', explicitTarget = null
     // 在进入队列前冻结目标和数据。即使等待期间用户切换预设，
     // worker 也不会重新读取全局 UI 并把数据写到错误名称下。
     let payload;
+    const target = explicitTarget || { apiId: getCurrentApiId(), presetName: getSelectedPresetName() };
+    const explicitCommand = reason === 'manual';
+    const edit = explicitCommand ? _editIntents.latest(target) : _editIntents.peek(target);
+    if (!explicitCommand && !edit) return detailed ? { status: 'unavailable' } : null;
     try {
-        payload = _buildSavePayload(reason, explicitTarget);
+        payload = _buildSavePayload(reason, explicitTarget, explicitCommand ? null : edit.preset);
     } catch (error) {
         _stats.aborted++;
-        _setStatus('error');
+        reportCaptureFailure(error);
         if (detailed) return { status: 'failed', error };
         throw error;
     }
-    if (!payload) return detailed ? { status: 'unavailable' } : null;
+    if (!payload) {
+        if (edit) _editIntents.acknowledge(edit);
+        return detailed ? { status: 'unavailable' } : null;
+    }
+    _lastCaptureFailure = null;
+    if (edit) {
+        payload.editRevision = edit.editRevision;
+        _editIntents.submitted(edit);
+    }
     return await submitSavePayload(payload, trigger, reason, { detailed });
 }
 
@@ -1068,14 +723,12 @@ async function executeSaveRequest(request) {
     _saveStartedAt = Date.now();
     if (isCurrentTarget()) _setStatus('saving');
 
-    // 超时保护：如果 15 秒内还没完成，强制重置锁防止永久卡死
+    // A timeout cannot cancel the host promise or release the single writer.
     _saveTimeoutId = setTimeout(() => {
         if (_isInternalSave && Date.now() - _saveStartedAt >= SAVE_TIMEOUT_MS) {
             logger.error(
-                `Save took >${SAVE_TIMEOUT_MS}ms (reason=${reason}), forcibly releasing lock`
+                `Save still pending after ${SAVE_TIMEOUT_MS}ms (reason=${reason}); writer remains owned`
             );
-            _isInternalSave = false;
-            _saveStartedAt = 0;
             if (isCurrentTarget()) _setStatus('error');
             _stats.aborted++;
         }
@@ -1096,22 +749,17 @@ async function executeSaveRequest(request) {
         const snapshot = transaction.snapshot;
 
         if (isCurrentTarget()) {
-            const completion = assessSaveCompletion(request, {
-                liveFingerprint: _computeQuickFingerprint(apiId),
-                liveCanonicalContent: request.quickFingerprint == null
-                    ? serializeCanonicalContent(getLivePresetSnapshot(apiId), apiId) : null,
-                mutationGeneration: _mutationGeneration,
-                latestRevision: _latestRevisionByTarget.get(saveTargetKey(request)),
-            });
-            _lastSavedHash = snapshot?.hash || completion.committedHash;
-            _lastSavedContent = completion.committedCanonicalContent;
-            _lastQuickFingerprint = completion.committedFingerprint;
-            _dirty = completion.pending;
-            _setStatus(_dirty ? 'pending' : 'saved');
+            _editIntents.acknowledge(request);
+            _lastSavedHash = snapshot?.hash || request.newHash;
+            _lastSavedContent = request.canonicalContent;
+            _lastQuickFingerprint = request.quickFingerprint;
+            _dirty = _editIntents.has(request);
+            _setStatus(!_enabled ? 'idle' : _dirty ? 'pending' : 'saved');
             if (_dirty && !_debounceTimer && !_restoreInProgress) {
                 scheduleAutoSave(null, 'newer-edit-after-commit');
             }
         } else {
+            _editIntents.acknowledge(request);
             logger.debug(`[Saved] completion belongs to inactive target [${apiId}] ${presetName}; tracking state unchanged`);
         }
         if (!snapshot) {
@@ -1164,7 +812,7 @@ export async function saveNowDetailed(trigger = TRIGGER.MANUAL) {
     return await doSave(trigger, 'manual', null, { detailed: true });
 }
 
-async function recordNativeManualSave({ apiId, name, preset }, capturedRevision = -1) {
+async function recordNativeManualSave({ apiId, name, preset }, captured = {}) {
     if (!_enabled || _restoreInProgress) return null;
 
     cancelPendingSave();
@@ -1175,7 +823,7 @@ async function recordNativeManualSave({ apiId, name, preset }, capturedRevision 
     const key = saveTargetKey(target);
     if (_deletedTargets.has(key)) {
         const selected = { apiId: getCurrentApiId(), presetName: getSelectedPresetName() };
-        if (capturedRevision <= _deletedTargets.get(key) || !sameSaveTarget(target, selected)) return null;
+        if ((captured.revision ?? -1) <= _deletedTargets.get(key) || !sameSaveTarget(target, selected)) return null;
         _deletedTargets.delete(key);
         allowPresetSeeding(target);
     }
@@ -1184,6 +832,7 @@ async function recordNativeManualSave({ apiId, name, preset }, capturedRevision 
     const canonicalPreset = requireCanonicalPreset(preset, { apiId: target.apiId });
     return submitSavePayload({
         ...target, preset: canonicalPreset,
+        editRevision: captured.editRevision,
         newHash: hashPreset(canonicalPreset, target.apiId),
         quickFingerprint: null,
         mutationGeneration: _mutationGeneration,
@@ -1314,8 +963,8 @@ function bindPresetEvents() {
         if (Date.now() < _suspendUntil) return;
         _stats.triggeredBySettingsUpdated++;
         logger.debug('[ST event] SETTINGS_UPDATED');
-        // SETTINGS_UPDATED 是 ST 已经更新完内存后发的，不需要再让出微任务
-        scheduleAutoSave(getSettings().debounceMs, 'settings_updated');
+        // A host-wide notification can finish a known edit, not authorize one.
+        _editObserver?.flush();
     }));
 
     // ----- OpenAI 专属切换前事件（最可靠的保护点）-----
@@ -1332,6 +981,7 @@ function bindPresetEvents() {
             setIgnoreInput(true);
             return;
         }
+        finalizeBeforeSwitch();
 
         const trace = _activeSwitchTrace || createSwitchTrace('oai-before', eventData);
         trace.oaiBeforeSeen = true;
@@ -1360,48 +1010,11 @@ function bindPresetEvents() {
                 logger.debug('Switch guard skipped: not dirty, no pending save');
                 return;
             }
-            // 第三步：用完整规范化内容判断"内容是否真变了"
-            //   防止自动保存已经把内容写盘但 _dirty 还没复位的边缘情况
-            //   （正常情况：doSave 完成后 _dirty=false，内容相等就跳过）
-            const preset = getPresetSnapshot(_currentPresetName, { apiId: _currentApiId });
-            if (!preset) {
-                noteSwitchTrace('oai-before:lookup-failed-fallback', {
-                    target: { apiId: _currentApiId, presetName: _currentPresetName },
-                    willCallDoSave: true,
-                });
-                logger.warn('Switch guard: cannot read preset snapshot, falling back to save');
-                cancelPendingSave();
-                await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
-                    apiId: _currentApiId,
-                    presetName: _currentPresetName,
-                });
-                return;
-            }
-            const liveHash = hashPreset(preset, _currentApiId);
-            if (_lastSavedContent !== null
-                && serializeCanonicalContent(preset, _currentApiId) === _lastSavedContent) {
-                // 内容跟上次保存一致：取消未触发的 debounce，纯跳过
-                _stats.switchGuardSkipped++;
-                noteSwitchTrace('oai-before:unchanged', { liveHash, lastSavedHash: _lastSavedHash });
-                cancelPendingSave();
-                _dirty = false;
-                logger.debug(`Switch guard skipped: canonical content unchanged (${liveHash})`);
-                return;
-            }
-
-            // 第四步：真的有未保存修改，触发兜底保存
+            const target = { apiId: _currentApiId, presetName: _currentPresetName };
+            if (!_editIntents.peek(target)) return;
             _stats.switchGuardSaved++;
-            noteSwitchTrace('oai-before:saving-dirty', {
-                target: { apiId: _currentApiId, presetName: _currentPresetName },
-                liveHash,
-                lastSavedHash: _lastSavedHash,
-            });
-            logger.info(`Switch guard: saving dirty preset "${_currentPresetName}" before switch (${_lastSavedHash || 'null'} -> ${liveHash})`);
             cancelPendingSave();
-            await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', {
-                apiId: _currentApiId,
-                presetName: _currentPresetName,
-            });
+            await doSave(TRIGGER.SWITCH_GUARD, 'switch-guard', target);
         } catch (e) {
             logger.error('Switch guard error:', e);
         }
@@ -1470,7 +1083,7 @@ function readSwitchCandidate() {
 }
 
 function finishSwitchConvergence(candidate) {
-    const preserveDirty = _dirty;
+    const preserveDirty = _editIntents.has(candidate);
     _currentApiId = candidate.apiId;
     _currentPresetName = candidate.presetName;
     _lastSavedHash = candidate.verified ? candidate.liveHash : null;
@@ -1516,6 +1129,7 @@ function timeoutSwitchConvergence(result) {
     _lastQuickFingerprint = null;
     _suspendUntil = 0;
     setIgnoreInput(false);
+    _dirty = _editIntents.has({ apiId: _currentApiId, presetName: _currentPresetName });
     _setStatus(_dirty ? 'pending' : 'idle');
     logger.warn(
         `Preset switch did not converge; history seeding skipped for ` +
@@ -1541,19 +1155,21 @@ function createSwitchConvergenceController() {
         intervalMs: 80,
         timeoutMs: 10_000,
         requiredStableSamples: 2,
+        allowUnverifiedFallback: true,
+        allowStableMismatch: true,
+        unverifiedDelayMs: 750,
     });
 }
 
 function beginSwitchConvergence(data = {}) {
     if (!_switchConvergence) _switchConvergence = createSwitchConvergenceController();
-    const wasActive = _switchConvergence.isActive();
     const hint = {
         apiId: data.apiId || getCurrentApiId(),
         presetName: data.name || data.presetName || getSelectedPresetName(),
     };
     _suspendUntil = Date.now() + 10_000;
     setIgnoreInput(true, 11_000);
-    if (!wasActive) _dirty = false;
+    _dirty = _editIntents.has(hint);
     _switchConvergence.begin(hint);
 }
 
@@ -1618,6 +1234,7 @@ export async function restoreSnapshotDetailed(target) {
     coordinator.cancelPending(request => sameSaveTarget(request, command)
         && request.coalesce !== false && request.trigger === TRIGGER.AUTO);
     cancelPendingSave();
+    _editIntents.discard(command);
     if (_suspendCompensationTimer) clearTimeout(_suspendCompensationTimer);
     _suspendCompensationTimer = null;
     _switchConvergence?.cancel();
@@ -1694,8 +1311,9 @@ export async function teardown() {
     // active request finish, so recovery can never race an in-flight save.
     const coordinator = _saveCoordinator;
     if (coordinator) coordinator.close();
-    unbindDOMListeners();
-    unbindPromptManagerListeners();
+    unbindEditObserver();
+    _editIntents.clear();
+    _lastCaptureFailure = null;
     stopPolling();
     if (_settingUnsubscribe) {
         try { _settingUnsubscribe(); } catch (_) {}

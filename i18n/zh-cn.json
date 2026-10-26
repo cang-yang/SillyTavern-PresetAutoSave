@@ -224,7 +224,7 @@
     "Diff Not Same Family": "这两条快照不属于同一分组家族，无法比较。",
 
     "Fallback Polling": "兜底轮询",
-    "Fallback Polling Desc": "定期扫描预设是否变化（默认关闭，仅当事件触发不可靠时再开启）",
+    "Fallback Polling Desc": "定期完成已确认编辑的待处理采集。后台字段变化不会独立触发保存（默认关闭）",
 
     "Summary Initial": "初始基线（首次记录）",
     "Summary Minor": "细微改动（无明显字段差异）",
