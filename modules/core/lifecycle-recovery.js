@@ -49,10 +49,10 @@ export async function runDeleteRecovery({
         failed: 1,
     });
 
-    const archiveReady = Number(archive.failed || 0) === 0
-        && Number(archive.cleanupFailed || 0) === 0
+    const archiveReady = archive.failed === 0
+        && archive.cleanupFailed === 0
         && !archive.error;
-    const snapshotsReady = Number(snapshots.failed || 0) === 0 && !snapshots.error;
+    const snapshotsReady = snapshots.failed === 0 && !snapshots.error;
 
     const snapshotCleanup = archiveReady && snapshotsReady
         ? await safeClear(clearSnapshots, 'Snapshot')

@@ -27,3 +27,13 @@ test('removing an aliased group clears only its canonical manual members', () =>
     assert.deepEqual(result, { 'Other V1': 'Elsewhere' });
     assert.deepEqual(overrides, { 'Utility V1': 'Story', 'Other V1': 'Elsewhere' });
 });
+
+test('moving a prototype-shaped preset name preserves its literal canonical identity', () => {
+    const result = movePresetMembership({
+        presetName: '__proto__', targetKey: 'story', automaticKey: 'proto',
+        groups: groupNamesBySeries(names), overrides: {},
+    });
+    assert.equal(Object.hasOwn(result, '__proto__'), true);
+    assert.equal(result.__proto__, 'Story');
+    assert.equal(Object.getPrototypeOf(result), Object.prototype);
+});

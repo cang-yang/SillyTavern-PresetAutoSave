@@ -1373,7 +1373,7 @@ export function getNodePath(tree, nodeKey) {
     const path = [];
     let current = nodeKey;
     const visited = new Set();
-    while (current && typeof tree[current] === 'string' && tree[current].trim()) {
+    while (current && Object.hasOwn(tree, current) && typeof tree[current] === 'string' && tree[current].trim()) {
         if (visited.has(current)) break;  // 循环引用防护
         visited.add(current);
         path.push(current);

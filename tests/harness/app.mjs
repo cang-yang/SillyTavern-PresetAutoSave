@@ -475,12 +475,11 @@ function closeImportPreview() {
     document.querySelector('.pas-harness-dialog')?.remove();
 }
 
-async function showGroupManager() {
+async function showGroupManager({ presetNames = [...nativeSelect.options].map(option => option.textContent).filter(Boolean) } = {}) {
     groupManagerMount?.dispose();
     groupManagerMount = null;
     document.querySelector('.pas-harness-dialog')?.remove();
     const { mountGroupingManager } = groupManager;
-    const presetNames = [...nativeSelect.options].map(option => option.textContent).filter(Boolean);
     const host = document.createElement('div');
     host.className = 'pas-harness-dialog pas-harness-group-dialog';
     document.body.append(host);
@@ -751,6 +750,49 @@ async function exerciseCoreOperations() {
         events: Object.freeze([...operationEvents]),
         consoleErrors: Object.freeze([...consoleErrors]),
     });
+}
+
+async function exerciseLiteralGroupIdentity() {
+    const { getSettings, batchUpdate } = await import('../../modules/settings.js');
+    const keys = ['groupingManualOverrides', 'groupingSeriesAliases', 'groupingTree'];
+    const before = Object.fromEntries(keys.map(key => [key, structuredClone(getSettings()[key])]));
+    const read = () => {
+        const settings = getSettings();
+        return {
+            own: Object.hasOwn(settings.groupingSeriesAliases, '__proto__'),
+            alias: settings.groupingSeriesAliases.__proto__,
+            member: settings.groupingManualOverrides.Demo,
+        };
+    };
+    try {
+        batchUpdate({ groupingManualOverrides: { Demo: '__proto__' }, groupingSeriesAliases: {}, groupingTree: {} });
+        await showGroupManager({ presetNames: ['Demo'] });
+        const manager = groupManagerMount.root;
+        manager.querySelector('[data-series-key="__proto__"] .pas-gm-rename-btn').click();
+        const input = manager.querySelector('.pas-gm-name-input');
+        input.value = 'Literal Alias';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await nextPaint();
+        const renamed = read();
+        manager.querySelector('.pas-gm-undo-btn').click();
+        await nextPaint();
+        const undone = read();
+        manager.querySelector('.pas-gm-redo-btn').click();
+        await nextPaint();
+        const redone = read();
+        if (!renamed.own || renamed.alias !== 'Literal Alias' || undone.own
+            || !redone.own || redone.alias !== renamed.alias
+            || [renamed, undone, redone].some(state => state.member !== '__proto__')) {
+            throw new Error('Literal group rename/undo/redo changed or lost canonical data');
+        }
+        return { renamed: true, undone: true, redone: true, membershipPreserved: true };
+    } finally {
+        groupManagerMount?.dispose();
+        groupManagerMount = null;
+        document.querySelector('.pas-harness-group-dialog')?.remove();
+        batchUpdate(before);
+    }
 }
 
 async function exercisePresetSwitchConvergence() {
@@ -1095,10 +1137,11 @@ function collectMetrics() {
     const metadataText = [...metricsRoot.querySelectorAll([
         '.pas-series-snapshots', '.pas-series-size', '.pas-series-latest',
         '.pas-version-count', '.pas-version-size', '.pas-version-latest',
-        '.pas-tag-empty', '.pas-version-empty-hint',
+        '.pas-tag-empty', '.pas-tag-subgroup', '.pas-version-empty-hint',
         '.pas-card-time', '.pas-card-size', '.pas-card-hash',
         '.pas-diff-side-meta-time', '.pas-diff-side-meta-extra',
         '.pas-diff-line-label',
+        '.pas-setting-desc', '.pas-setting-unit',
     ].join(','))].filter(isVisible).map(element => ({
         selector: selectorFor(element),
         ...collectTextContrast(element),
@@ -1311,6 +1354,7 @@ window.__PAS_HARNESS__ = Object.freeze({
     closeImportPreview,
     showGroupManager,
     exerciseCoreOperations,
+    exerciseLiteralGroupIdentity,
     exercisePresetSwitchConvergence,
     exerciseGroupingMenus,
     exerciseGroupingLayout,

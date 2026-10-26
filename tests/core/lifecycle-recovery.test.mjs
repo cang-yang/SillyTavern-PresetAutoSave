@@ -87,3 +87,17 @@ test('delete recovery converts thrown restore operations into safe failure resul
     assert.equal(result.archive.failed, 1);
     assert.equal(result.snapshots.failed, 1);
 });
+
+test('missing or malformed failure counters never authorize recovery deletion', async () => {
+    for (const invalid of [{}, [], { failed: -1 }, { failed: '0' }, { failed: NaN }]) {
+        let clears = 0;
+        const result = await runDeleteRecovery({
+            restoreArchives: async () => invalid,
+            writeBackSnapshots: async () => invalid,
+            clearSnapshots: async () => { clears++; },
+            clearArchives: async () => { clears++; },
+        });
+        assert.equal(result.complete, false);
+        assert.equal(clears, 0);
+    }
+});

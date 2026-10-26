@@ -347,6 +347,13 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 .pas-snapshot-list,
 .pas-log-view,
 .pas-settings { min-height: 0; flex: 1 1 auto; overflow: auto; padding: 2px 4px 18px 2px; scrollbar-width: thin; }
+.pas-panel .pas-settings-group { background: var(--pas-v4-surface); }
+.pas-panel .pas-setting-desc,
+.pas-panel .pas-setting-unit {
+    color: var(--pas-v4-metadata-text);
+    font-size: 12px;
+    line-height: 1.5;
+}
 .pas-series-group,
 .pas-preset-group {
     content-visibility: auto;
@@ -387,6 +394,16 @@ body.pas-light .pas-panel-tabs { background: rgba(32, 36, 54, .04); }
 .pas-panel .pas-version-empty-hint {
     color: var(--pas-v4-metadata-text);
     font-size: 12px;
+}
+
+.pas-panel .pas-tag-subgroup {
+    color: var(--pas-v4-metadata-text);
+    background: var(--pas-v4-surface-raised);
+    border-color: var(--pas-v4-border-strong);
+    font-size: 12px;
+    height: auto;
+    min-height: 20px;
+    letter-spacing: 0;
 }
 
 .pas-card { border: 1px solid var(--pas-v4-border); border-radius: 10px; background: var(--pas-v4-surface-raised); box-shadow: none; transition: border-color .16s ease, background .16s ease; }

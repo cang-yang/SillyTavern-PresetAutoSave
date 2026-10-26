@@ -7,6 +7,22 @@ import { HistoryRepository } from '../../modules/core/history-repository.js';
 const record = extra => ({ id: 'incoming', timestamp: 2, preset: { temperature: 0.8 }, ...extra });
 const payload = extra => ({ version: 2, data: { 'openai::Broken': [record(extra)] } });
 
+test('strict import validates before cloning and never executes snapshot accessors', () => {
+    let calls = 0;
+    const input = record({});
+    Object.defineProperty(input, 'customMetadata', {
+        enumerable: true, get() { calls++; return 'evaluated'; },
+    });
+    assert.throws(() => validateHistoryBackup({ data: { 'openai::Broken': [input] } }), TypeError);
+    assert.equal(calls, 0);
+});
+
+test('strict import rejects sparse arrays and array metadata before normalization loses them', () => {
+    for (const value of [Array(1), Object.assign([1], { note: 'owned' })]) {
+        assert.throws(() => validateHistoryBackup(payload({ preset: { extensions: { plugin: value } } })), TypeError);
+    }
+});
+
 test('external imports reject empty canonical payloads before enrichment', () => {
     for (const preset of [{}, { not_a_preset: true }, { api_key_openai: 'synthetic' }]) {
         assert.throws(() => validateHistoryBackup(payload({ preset })), /canonical/i);
@@ -55,7 +71,7 @@ test('valid old omissions, stale hashes, explicit partial status and JSON metada
     assert.equal(Object.hasOwn(restored, 'name'), false);
 });
 
-test('official preset shapes, aliases and valid current or legacy summaries remain importable', async () => {
+test('official preset shapes and legacy summaries remain importable with rebuilt safe comparisons', async () => {
     const preset = JSON.parse(await readFile(new URL('../fixtures/chat-completion-structure.json', import.meta.url), 'utf8'));
     preset.temp_openai = '0.8';
     delete preset.temperature;
@@ -73,7 +89,8 @@ test('official preset shapes, aliases and valid current or legacy summaries rema
         assert.equal(result.preset.temperature, 0.8);
         assert.equal(result.preset.stream_openai, true);
         assert.deepEqual(result.preset.prompts[0].customExtensionField, { mode: 'user-defined' });
-        assert.deepEqual(result.summary, summary);
+        assert.equal(result.summary.isFirst, true);
+        assert.deepEqual(result.summary.sections, []);
     }
     const other = validateHistoryBackup({ data: { 'custom-api::Custom': [
         record({ preset: { arbitrary_supported_field: { values: [1, true] } } }),

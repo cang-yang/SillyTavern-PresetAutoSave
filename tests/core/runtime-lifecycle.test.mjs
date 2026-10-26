@@ -69,3 +69,42 @@ test('a repeated stop operation is idempotent until explicitly enabled again', a
     await lifecycle.start({ explicit: true });
     assert.equal(await lifecycle.stop(), 2);
 });
+
+test('a rejected stop is retryable without enabling the runtime', async () => {
+    let attempts = 0;
+    const lifecycle = createRuntimeLifecycle({
+        initialize: async () => true,
+        cleanup: async () => { if (++attempts === 1) throw new Error('storage busy'); return { complete: true }; },
+    });
+    await lifecycle.start();
+    await assert.rejects(lifecycle.stop(), /storage busy/);
+    assert.deepEqual(await lifecycle.stop(), { complete: true });
+    assert.equal(attempts, 2);
+});
+
+test('an explicitly incomplete stop result is not cached as successful cleanup', async () => {
+    let attempts = 0;
+    const lifecycle = createRuntimeLifecycle({
+        initialize: async () => true,
+        cleanup: async () => ({ complete: ++attempts > 1 }),
+    });
+    await lifecycle.start();
+    assert.equal((await lifecycle.stop()).complete, false);
+    assert.equal((await lifecycle.stop()).complete, true);
+    assert.equal(attempts, 2);
+});
+
+test('a different stop command waits for active cleanup and is not silently dropped', async () => {
+    const gate = deferred();
+    const calls = [];
+    const disable = async () => { calls.push('disable'); await gate.promise; return 'disabled'; };
+    const remove = async () => { calls.push('delete'); return 'deleted'; };
+    const lifecycle = createRuntimeLifecycle({ initialize: async () => true, cleanup: disable });
+    await lifecycle.start();
+    const first = lifecycle.stop(disable);
+    const second = lifecycle.stop(remove);
+    gate.resolve();
+    assert.equal(await first, 'disabled');
+    assert.equal(await second, 'deleted');
+    assert.deepEqual(calls, ['disable', 'delete']);
+});

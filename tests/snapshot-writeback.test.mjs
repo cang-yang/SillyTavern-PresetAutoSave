@@ -94,3 +94,73 @@ test('snapshot loading failure returns a diagnosable partial result', async () =
         error: 'Error: storage unavailable',
     });
 });
+
+test('authoritative inventory absence is not overridden by null or stale selector results', async () => {
+    for (const selectorValue of [null, undefined, 0]) {
+        let writes = 0;
+        const { writeBack } = createHarness({
+            snapshots: [snapshot('openai', 'Missing', 20)],
+            managers: { openai: {
+                getPresetList: () => ({ preset_names: [], presets: [] }),
+                findPreset: () => selectorValue,
+            } },
+            savePreset: async () => { writes++; },
+        });
+        assert.deepEqual(await writeBack({ skipExisting: true }), { written: 1, skipped: 0, failed: 0 });
+        assert.equal(writes, 1);
+    }
+});
+
+test('selector-only presence cannot authorize skipping lifecycle recovery', async () => {
+    const { writeBack } = createHarness({
+        snapshots: [snapshot('openai', 'Unverified', 20)],
+        managers: { openai: { findPreset: () => 0 } },
+    });
+    assert.deepEqual(await writeBack({ skipExisting: true }), { written: 0, skipped: 0, failed: 1 });
+});
+
+test('a listed name without readable native content cannot authorize recovery cleanup', async () => {
+    for (const presets of [[], [null], [false], [[]]]) {
+        const { writeBack } = createHarness({
+            snapshots: [snapshot('openai', 'Unverified', 20)],
+            managers: { openai: {
+                getPresetList: () => ({ preset_names: ['Unverified'], presets }),
+                findPreset: () => 0,
+            } },
+        });
+        assert.deepEqual(await writeBack({ skipExisting: true }), { written: 0, skipped: 0, failed: 1 });
+    }
+});
+
+test('legacy existing-only writeback treats both null and undefined as absent', async () => {
+    for (const value of [null, undefined]) {
+        let writes = 0;
+        const { writeBack } = createHarness({
+            snapshots: [snapshot('openai', 'Missing', 20)],
+            managers: { openai: { findPreset: () => value } },
+            savePreset: async () => { writes++; },
+        });
+        assert.deepEqual(await writeBack(), { written: 0, skipped: 1, failed: 0 });
+        assert.equal(writes, 0);
+    }
+});
+
+test('malformed snapshot enumeration never reports successful empty recovery', async () => {
+    for (const snapshots of [null, {}, 'unreadable']) {
+        const { writeBack } = createHarness({ snapshots });
+        const result = await writeBack({ skipExisting: true });
+        assert.equal(result.failed, 1);
+        assert.equal(result.written, 0);
+        assert.match(result.error, /snapshot/i);
+    }
+});
+
+test('unsupported inventory containers fail closed instead of looking empty', async () => {
+    for (const preset_names of [new Map(), new Date(), [undefined]]) {
+        const { writeBack } = createHarness({
+            snapshots: [snapshot('openai', 'Missing', 20)],
+            managers: { openai: { getPresetList: () => ({ preset_names, presets: [] }) } },
+        });
+        assert.deepEqual(await writeBack({ skipExisting: true }), { written: 0, skipped: 0, failed: 1 });
+    }
+});

@@ -51,6 +51,7 @@ import { showSnapshotViewer as onView, cleanupSnapshotViewer } from './snapshot-
 import { setDisclosureExpanded } from './panel-disclosure.js';
 import { increaseSnapshotRenderLimit } from './core/bounded-snapshot-list.js';
 import { createPresetDeletionCommand } from './core/preset-deletion.js';
+import { selectGroupDefault } from './core/group-organization.js';
 
 // --- 从子模块导入分组管理函数（软拆分：panel-group-manager.js） ---
 import {
@@ -807,14 +808,9 @@ export function updateDiffBar(panelCtx) {
 async function onToggleSeriesDefault(seriesKey, presetName, panelCtx) {
     if (!seriesKey || !presetName) return;
     const settings = getSettings();
-    const map = { ...(settings.seriesDefaultApply || {}) };
-    const wasDefault = map[seriesKey] === presetName;
-
-    if (wasDefault) {
-        delete map[seriesKey];
-    } else {
-        map[seriesKey] = presetName;
-    }
+    const defaults = settings.seriesDefaultApply || {};
+    const wasDefault = Object.hasOwn(defaults, seriesKey) && defaults[seriesKey] === presetName;
+    const map = selectGroupDefault(defaults, seriesKey, presetName, { toggle: true });
 
     updateSetting('seriesDefaultApply', map);
     // ⚡ 关键：不再触发 refreshTakeover()！
@@ -864,8 +860,7 @@ async function onApplyVersionDirect(presetName) {
             // 推断目标系列
             const info = parsePresetName(presetName);
             const seriesKey = info.series || presetName;
-            const map = { ...(settings.seriesDefaultApply || {}) };
-            map[seriesKey] = presetName;
+            const map = selectGroupDefault(settings.seriesDefaultApply, seriesKey, presetName);
             updateSetting('seriesDefaultApply', map);
             // 等接管刷新落地（防抖窗口 220ms + 接管 + 浏览器渲染）
             await new Promise(r => setTimeout(r, TAKEOVER_REFRESH_WAIT_MS));

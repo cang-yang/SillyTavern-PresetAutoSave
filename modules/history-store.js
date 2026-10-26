@@ -31,7 +31,7 @@ import { HistoryRepository } from './core/history-repository.js';
 import { readHistoryBucket, readHistoryBuckets } from './core/history-bucket-reader.js';
 import { SerialTaskQueue } from './core/serial-task-queue.js';
 import { emitHistoryChange } from './core/history-change-events.js';
-import { canCoalesceSnapshotTrigger } from './core/snapshot-retention-policy.js';
+import { canCoalesceSnapshotTrigger, isProtectedSnapshot, isSnapshotCommitted, retainSnapshotList } from './core/snapshot-retention-policy.js';
 import { createHistoryCatalog } from './core/history-catalog.js';
 import { createHistoryMigrationWorker } from './core/history-migration-worker.js';
 import {
@@ -81,10 +81,16 @@ let _catalogBuildAbortController = null;
 let _catalogRuntimeVerified = false;
 let _migrationWorker = null;
 let _initialized = false;
+let _closing = false;
 let _keysCache = null;
 let _keysCacheTime = 0;
 const KEYS_CACHE_TTL = 5000;  // 5秒
 const _historyMutations = new SerialTaskQueue();
+
+function queueHistoryMutation(operation) {
+    if (_closing) return Promise.reject(new Error('HistoryStore is closing'));
+    return _historyMutations.run(operation);
+}
 
 // =====================================================
 // 初始化
@@ -106,7 +112,7 @@ export async function initHistoryStore() {
             yieldEvery: 4,
         });
         _migrationWorker = createHistoryMigrationWorker({
-            migrateKey: key => _historyMutations.run(() => _store.migrateItem(key)),
+            migrateKey: key => queueHistoryMutation(() => _store.migrateItem(key)),
             onMigrated: syncCatalogBucketAfterMigration,
             onError: (error, context) => logger.warn('Background history migration deferred:', context, error),
         });
@@ -126,6 +132,7 @@ export async function initHistoryStore() {
             }
         }
         _initialized = true;
+        _closing = false;
         const presetCount = sourceManifest.length;
         logger.success(`History repository v2 ready: ${presetCount} preset histories (lazy migration enabled)`);
     } catch (e) {
@@ -256,30 +263,6 @@ function invalidateKeysCache() {
     _keysCache = null;
 }
 
-/**
- * 裁剪一个快照列表到上限，但保留所有 pinned 快照。
- * 输入 list 假定已按时间倒序（最新在前），原地修改。
- *
- * 算法：
- *   1) 把 pinned 快照按原顺序提取
- *   2) 把非 pinned 也按原顺序提取，取前 (max - pinnedCount) 条
- *   3) 重新合并并按 timestamp 倒序
- *
- * 极端情况：pinned 数量 ≥ max 时全部保留 pinned + 最新一条非 pinned，
- * 避免锁定泛滥导致新快照立即被挤走（这通常说明用户应该提高上限了）。
- */
-function trimListWithPinned(list, max) {
-    if (!Array.isArray(list) || list.length <= max) return list;
-    const pinned = list.filter(s => s && s.pinned);
-    const unpinned = list.filter(s => s && !s.pinned);
-    const keepUnpinnedCount = Math.max(1, max - pinned.length);
-    const keptUnpinned = unpinned.slice(0, keepUnpinnedCount);
-    const merged = [...pinned, ...keptUnpinned].sort((a, b) => b.timestamp - a.timestamp);
-    list.length = 0;
-    for (const s of merged) list.push(s);
-    return list;
-}
-
 // =====================================================
 // 核心: 添加快照
 // =====================================================
@@ -299,7 +282,7 @@ function trimListWithPinned(list, max) {
  */
 export function addSnapshot(presetName, apiId, preset, trigger = TRIGGER.AUTO) {
     const captured = structuredClone(preset);
-    return _historyMutations.run(() => addSnapshotMutation(presetName, apiId, captured, trigger));
+    return queueHistoryMutation(() => addSnapshotMutation(presetName, apiId, captured, trigger));
 }
 
 async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.AUTO) {
@@ -309,7 +292,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
     const canonicalPreset = requireCanonicalPreset(preset, { apiId });
 
     const key = makeKey(apiId, presetName);
-    const list = await readHistoryBucket(_store, key);
+    let list = await readHistoryBucket(_store, key);
     const settings = getSettings();
     const now = Date.now();
     const presetStr = stableStringify(canonicalPreset);
@@ -329,6 +312,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
         && trigger !== TRIGGER.MANUAL
         && trigger !== TRIGGER.RESTORE
         && list.length > 0
+        && isSnapshotCommitted(list[0])
         && previousCanonicalContent === presetStr
     ) {
         logger.debug(`Snapshot skipped (unchanged): ${presetName}`);
@@ -348,7 +332,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
         && mergeWindowMs > 0
         && list.length > 0
         && list[0].trigger === trigger
-        && !list[0].pinned
+        && !isProtectedSnapshot(list[0])
     ) {
         const elapsed = now - list[0].timestamp;
         if (elapsed < mergeWindowMs) {
@@ -395,7 +379,7 @@ async function addSnapshotMutation(presetName, apiId, preset, trigger = TRIGGER.
 
     // 4. 按上限裁剪（保留所有 pinned + 最新的非 pinned 直到上限）
     const max = settings.maxHistoryPerPreset;
-    trimListWithPinned(list, max);
+    list = retainSnapshotList(list, max);
     const retainedIds = new Set(list.map(item => item?.id).filter(Boolean));
     const removedIds = [...previousIds].filter(id => !retainedIds.has(id));
 
@@ -447,15 +431,18 @@ async function safeSetItem(key, value) {
 export async function teardownHistoryStore() {
     const worker = _migrationWorker;
     const build = _catalogBuildPromise;
-    _initialized = false;
+    _closing = true;
     _migrationWorker = null;
     _catalogBuildAbortController?.abort();
 
     await Promise.allSettled([
         worker?.close(),
         build,
+        _keysFetchPromise,
     ].filter(Boolean));
+    await _historyMutations.whenIdle();
 
+    _initialized = false;
     if (_catalogBuildPromise === build) _catalogBuildPromise = null;
     _catalogBuildAbortController = null;
     _catalogRuntimeVerified = false;
@@ -558,7 +545,7 @@ export function ensureHistoryCatalog({ onProgress = () => {}, signal } = {}) {
     const internalAbortController = new AbortController();
     _catalogBuildAbortController = internalAbortController;
     const buildSignal = combineAbortSignals(signal, internalAbortController.signal);
-    const operation = _historyMutations.run(async () => {
+    const operation = queueHistoryMutation(async () => {
         const current = catalog.readState();
         if (_catalogRuntimeVerified && current.status === 'ready') return catalog.read();
 
@@ -769,7 +756,7 @@ export async function filterSnapshots(filter = {}) {
  * 如果 UI 想强删（例如先解锁再删），传 force=true。
  */
 export function deleteSnapshot(snapshotId, options = {}) {
-    return _historyMutations.run(() => deleteSnapshotMutation(snapshotId, options));
+    return queueHistoryMutation(() => deleteSnapshotMutation(snapshotId, options));
 }
 
 async function deleteSnapshotMutation(snapshotId, options = {}) {
@@ -808,7 +795,7 @@ async function deleteSnapshotMutation(snapshotId, options = {}) {
  * @returns {Promise<boolean>}
  */
 export function renameSnapshot(snapshotId, newName) {
-    return _historyMutations.run(() => renameSnapshotMutation(snapshotId, newName));
+    return queueHistoryMutation(() => renameSnapshotMutation(snapshotId, newName));
 }
 
 async function renameSnapshotMutation(snapshotId, newName) {
@@ -839,7 +826,7 @@ async function renameSnapshotMutation(snapshotId, newName) {
  * @returns {Promise<boolean|null>} 切换后的 pinned 状态；找不到时返回 null
  */
 export function togglePinSnapshot(snapshotId, pinned) {
-    return _historyMutations.run(() => togglePinSnapshotMutation(snapshotId, pinned));
+    return queueHistoryMutation(() => togglePinSnapshotMutation(snapshotId, pinned));
 }
 
 async function togglePinSnapshotMutation(snapshotId, pinned) {
@@ -867,7 +854,7 @@ async function togglePinSnapshotMutation(snapshotId, pinned) {
  * 清空某预设的所有历史
  */
 export function clearPresetHistory(apiId, presetName) {
-    return _historyMutations.run(() => clearPresetHistoryMutation(apiId, presetName));
+    return queueHistoryMutation(() => clearPresetHistoryMutation(apiId, presetName));
 }
 
 async function clearPresetHistoryMutation(apiId, presetName) {
@@ -894,7 +881,7 @@ async function clearPresetHistoryMutation(apiId, presetName) {
  * @returns {Promise<{ deleted: number, kept: number, total: number }>}
  */
 export function deleteOldSnapshotsForPreset(apiId, presetName, options = {}) {
-    return _historyMutations.run(() => deleteOldSnapshotsForPresetMutation(apiId, presetName, options));
+    return queueHistoryMutation(() => deleteOldSnapshotsForPresetMutation(apiId, presetName, options));
 }
 
 async function deleteOldSnapshotsForPresetMutation(apiId, presetName, options = {}) {
@@ -947,7 +934,7 @@ async function deleteOldSnapshotsForPresetMutation(apiId, presetName, options = 
  * Clear all history.
  */
 export function clearAll() {
-    return _historyMutations.run(clearAllMutation);
+    return queueHistoryMutation(clearAllMutation);
 }
 
 async function clearAllMutation() {
@@ -966,7 +953,7 @@ async function clearAllMutation() {
  * @returns {Promise<{cleaned: number, scanned: number, quarantined: number}>}
  */
 export function cleanCorruptSnapshots() {
-    return _historyMutations.run(cleanCorruptSnapshotsMutation);
+    return queueHistoryMutation(cleanCorruptSnapshotsMutation);
 }
 
 async function cleanCorruptSnapshotsMutation() {
@@ -996,7 +983,7 @@ async function cleanCorruptSnapshotsMutation() {
  * 删除超过指定数量的旧快照（保留每预设最新的 N 条 + 所有 pinned）
  */
 export function trimOldSnapshots(keepPerPreset = null) {
-    return _historyMutations.run(() => trimOldSnapshotsMutation(keepPerPreset));
+    return queueHistoryMutation(() => trimOldSnapshotsMutation(keepPerPreset));
 }
 
 async function trimOldSnapshotsMutation(keepPerPreset = null) {
@@ -1008,10 +995,10 @@ async function trimOldSnapshotsMutation(keepPerPreset = null) {
     // 性能优化：并行读取
     const lists = await readHistoryBuckets(_store, keys);
     for (let i = 0; i < keys.length; i++) {
-        const list = lists[i] || [];
+        let list = lists[i] || [];
         if (list.length > keep) {
             const before = list.length;
-            trimListWithPinned(list, keep);
+            list = retainSnapshotList(list, keep);
             trimmed += before - list.length;
             await _store.setItem(keys[i], list);
         }
@@ -1027,7 +1014,7 @@ async function trimOldSnapshotsMutation(keepPerPreset = null) {
  * 删除超过指定天数的旧快照（pinned 永久保留）
  */
 export function trimByAge(maxDays) {
-    return _historyMutations.run(() => trimByAgeMutation(maxDays));
+    return queueHistoryMutation(() => trimByAgeMutation(maxDays));
 }
 
 async function trimByAgeMutation(maxDays) {
@@ -1042,8 +1029,7 @@ async function trimByAgeMutation(maxDays) {
     const lists = await readHistoryBuckets(_store, keys);
     for (let i = 0; i < keys.length; i++) {
         const list = lists[i] || [];
-        // pinned 永远不被按年龄裁剪
-        const filtered = list.filter(s => s.pinned || s.timestamp >= cutoff);
+        const filtered = list.filter(s => isProtectedSnapshot(s) || s.timestamp >= cutoff);
         if (filtered.length !== list.length) {
             trimmed += list.length - filtered.length;
             if (filtered.length === 0) {
@@ -1132,7 +1118,7 @@ export async function exportAll() {
  * @param {'merge'|'replace'} mode 合并或替换
  */
 export function importAll(payload, mode = 'merge') {
-    return _historyMutations.run(() => importAllMutation(payload, mode));
+    return queueHistoryMutation(() => importAllMutation(payload, mode));
 }
 
 /**
@@ -1141,7 +1127,7 @@ export function importAll(payload, mode = 'merge') {
  * reads the preview are still handled by the normal verified transaction.
  */
 export function previewImportAll(payload) {
-    return _historyMutations.run(async () => {
+    return queueHistoryMutation(async () => {
         await ensureStore();
         const max = getSettings().maxHistoryPerPreset;
         const existing = await captureHistoryImage(_store);

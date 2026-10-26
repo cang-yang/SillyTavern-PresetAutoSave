@@ -23,16 +23,22 @@ function objectArray(value, path, inspect = () => {}) {
     });
 }
 
-function jsonValue(value, path, ancestors = new Set()) {
+export function validateImportedJson(value, path = 'backup', ancestors = new Set()) {
     if (value === null || isString(value) || isBoolean(value) || isNumber(value)) return;
     requireType(value, item => Array.isArray(item) || isObject(item), path);
     if (ancestors.has(value)) throw new TypeError(`Circular imported snapshot field: ${path}`);
     ancestors.add(value);
+    if (Array.isArray(value) && Object.keys(value).length !== value.length) {
+        throw new TypeError(`Invalid imported array shape: ${path}`);
+    }
     for (const key of Reflect.ownKeys(value)) {
         if (Array.isArray(value) && key === 'length') continue;
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         requireType(descriptor, item => typeof key === 'string' && item.enumerable && Object.hasOwn(item, 'value'), path);
-        jsonValue(descriptor.value, `${path}.${key}`, ancestors);
+        if (Array.isArray(value) && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length)) {
+            throw new TypeError(`Invalid imported array property: ${path}`);
+        }
+        validateImportedJson(descriptor.value, `${path}.${key}`, ancestors);
     }
     ancestors.delete(value);
 }
@@ -120,7 +126,7 @@ function presetShape(canonical, apiId) {
  * remain readable without applying new-import acceptance rules.
  */
 export function validateImportedSnapshot(snapshot, apiId) {
-    jsonValue(snapshot, 'snapshot');
+    validateImportedJson(snapshot, 'snapshot');
     optional(snapshot, 'pinned', isBoolean, 'snapshot');
     for (const key of ['name', 'hash', 'canonicalHash', 'trigger', 'transactionId']) {
         optional(snapshot, key, isString, 'snapshot');

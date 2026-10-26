@@ -10,6 +10,8 @@ import {
     createHistoryBackup,
     validateHistoryBackup,
 } from '../../modules/core/history-backup.js';
+import { canonicalizePreset } from '../../modules/core/preset-schema.js';
+import { captureHostPreset } from '../../modules/core/host-preset-capture.js';
 
 class MemoryRepository {
     constructor(entries = {}, failKey = null) {
@@ -37,6 +39,16 @@ function snapshot(overrides = {}) {
         ...overrides,
     };
 }
+
+test('import retention preserves all explicit recovery records even when they exceed the limit', () => {
+    const incoming = [
+        snapshot({ id: 'partial', timestamp: 1, saveStatus: 'partial' }),
+        snapshot({ id: 'pending', timestamp: 2, saveStatus: 'pending' }),
+        snapshot({ id: 'latest', timestamp: 3, saveStatus: 'committed' }),
+    ];
+    const plan = buildHistoryImportPlan({ data: { 'openai::Demo': incoming } }, new Map(), { max: 1 });
+    assert.deepEqual(plan.data.get('openai::Demo').map(item => item.id), ['latest', 'pending', 'partial']);
+});
 
 test('creates a v2 backup with repository diagnostics', () => {
     const backup = createHistoryBackup(
@@ -161,6 +173,83 @@ test('production backup export and import exclude nested provider connection fie
         }] });
     }
     assert.deepEqual(data, before);
+});
+
+test('custom provider credentials are excluded consistently without a provider allowlist', () => {
+    const connection = { max_tokens: 512, token_count: 3, template: 'api_key_custom is a literal example' };
+    for (const provider of ['custom', 'horde', 'future_provider_42']) {
+        for (const key of [`api_key_${provider}`, `${provider}ApiKey`, `access_token_${provider}`, `${provider}ClientSecret`]) {
+            connection[key] = `SYNTHETIC_PRIVATE_${provider}`;
+        }
+    }
+    const preset = { temperature: 0.7, extensions: { plugin: { nested: [connection] } } };
+    const data = { 'openai::Demo': [snapshot({ preset })] };
+    const before = structuredClone(data);
+    const outputs = [
+        canonicalizePreset(preset).canonical, captureHostPreset(preset),
+        createHistoryBackup(data).data['openai::Demo'][0].preset,
+        validateHistoryBackup({ data }).data.get('openai::Demo')[0].preset,
+    ];
+    for (const output of outputs) {
+        assert.equal(JSON.stringify(output).includes('SYNTHETIC_PRIVATE_'), false);
+        assert.deepEqual(output.extensions.plugin.nested, [{
+            max_tokens: 512, token_count: 3, template: 'api_key_custom is a literal example',
+        }]);
+    }
+    assert.deepEqual(data, before);
+});
+
+test('non-OpenAI nested settings use the same credential boundary as extensions', () => {
+    const apiId = 'textgenerationwebui';
+    const preset = { sampler_order: [1, 2], plugin_settings: {
+        api_key_custom: 'SYNTHETIC_PRIVATE_nested', max_tokens: 128,
+    } };
+    const data = { [`${apiId}::Demo`]: [snapshot({ apiId, preset })] };
+    for (const output of [
+        canonicalizePreset(preset, { apiId }).canonical,
+        captureHostPreset(preset, { apiId }),
+        createHistoryBackup(data).data[`${apiId}::Demo`][0].preset,
+        validateHistoryBackup({ data }).data.get(`${apiId}::Demo`)[0].preset,
+    ]) {
+        assert.deepEqual(output, { sampler_order: [1, 2], plugin_settings: { max_tokens: 128 } });
+    }
+});
+
+test('backup metadata excludes structured credentials without losing labels or unknown user data', () => {
+    const entry = snapshot({ pinned: true, name: 'literal api_key_custom label',
+        customMetadata: { customApiKey: 'SYNTHETIC_PRIVATE_metadata', note: 'preserve', token_count: 2 } });
+    const data = { 'openai::Demo': [entry] };
+    const exported = createHistoryBackup(data, { api_key_custom: 'SYNTHETIC_PRIVATE_diagnostic', count: 1 });
+    const imported = validateHistoryBackup({ data }).data.get('openai::Demo')[0];
+    for (const output of [exported.data['openai::Demo'][0], imported]) {
+        assert.deepEqual(output.customMetadata, { note: 'preserve', token_count: 2 });
+        assert.equal(output.name, entry.name);
+        assert.equal(output.id, entry.id);
+        assert.equal(output.pinned, true);
+    }
+    assert.deepEqual(exported.repository, { count: 1 });
+    assert.equal(entry.customMetadata.customApiKey, 'SYNTHETIC_PRIVATE_metadata');
+});
+
+test('export and import rebuild old summaries so filtered credentials cannot survive in from/to values', () => {
+    const older = snapshot({ id: 'older', timestamp: 1, preset: { temperature: 0.5 } });
+    const newer = snapshot({ preset: { temperature: 0.7 }, summary: {
+        sections: [{ kind: 'field', items: [{
+            key: 'extensions.custom.api_key_custom', from: 'SYNTHETIC_PRIVATE_old', to: 'SYNTHETIC_PRIVATE_new',
+        }] }],
+    } });
+    const data = { 'openai::Demo': [newer, older] };
+    for (const output of [
+        createHistoryBackup(data).data['openai::Demo'],
+        validateHistoryBackup({ data }).data.get('openai::Demo'),
+    ]) {
+        assert.equal(JSON.stringify(output).includes('SYNTHETIC_PRIVATE_'), false);
+        assert.equal(output[0].summary.sections[0].items[0].key, 'temperature');
+        assert.equal(output[0].summary.sections[0].items[0].from, 0.5);
+        assert.equal(output[0].summary.sections[0].items[0].to, 0.7);
+        assert.deepEqual(output.map(item => item.id), ['snap-1', 'older']);
+    }
+    assert.equal(newer.summary.sections[0].items[0].from, 'SYNTHETIC_PRIVATE_old');
 });
 
 test('merge planning deduplicates IDs, sorts, trims, and preserves pinned records', () => {

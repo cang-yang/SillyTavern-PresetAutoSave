@@ -103,3 +103,28 @@ test('empty version ancestors do not fade readable history metadata below contra
         assert.ok(ratio >= 4.5, `empty header metadata contrast was ${ratio}`);
     }
 });
+
+test('subgroup counts use readable theme metadata instead of legacy dark-only badges', async () => {
+    const rule = panelCss.match(/\.pas-panel \.pas-tag-subgroup\s*\{([^}]*)\}/)?.[1] || '';
+    assert.match(rule, /color:\s*var\(--pas-v4-metadata-text\)/);
+    assert.match(rule, /background:\s*var\(--pas-v4-surface-raised\)/);
+    assert.match(rule, /font-size:\s*12px/);
+    assert.match(rule, /height:\s*auto/);
+    for (const token of [lightThemeToken, darkThemeToken]) {
+        assert.ok(contrastRatio(token('--pas-v4-metadata-text'), token('--pas-v4-surface-raised')) >= 4.5);
+    }
+    const harness = await readFile(new URL('./harness/app.mjs', import.meta.url), 'utf8');
+    const metadata = harness.slice(harness.indexOf('const metadataText ='), harness.indexOf('const commandNames ='));
+    assert.match(metadata, /'\.pas-tag-subgroup'/);
+});
+
+test('settings descriptions and units have readable scoped text and browser contrast coverage', async () => {
+    const rule = panelCss.match(/\.pas-panel \.pas-setting-desc,\s*\.pas-panel \.pas-setting-unit\s*\{([^}]*)\}/)?.[1] || '';
+    assert.match(rule, /color:\s*var\(--pas-v4-metadata-text\)/);
+    assert.match(rule, /font-size:\s*12px/);
+    assert.match(panelCss, /\.pas-panel \.pas-settings-group\s*\{[^}]*background:\s*var\(--pas-v4-surface\)/s);
+    const harness = await readFile(new URL('./harness/app.mjs', import.meta.url), 'utf8');
+    const metadata = harness.slice(harness.indexOf('const metadataText ='), harness.indexOf('const commandNames ='));
+    assert.match(metadata, /'\.pas-setting-desc'/);
+    assert.match(metadata, /'\.pas-setting-unit'/);
+});

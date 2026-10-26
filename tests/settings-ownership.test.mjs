@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DEFAULT_SETTINGS, getSettings, getSetting, getDefault, initSettings,
-    updateSetting, onSettingChange,
+    updateSetting, onSettingChange, resetSettings,
 } from '../modules/settings.js';
 
 let writes = 0;
@@ -45,4 +45,22 @@ test('listener values cannot mutate stored settings or later notifications', () 
     } finally {
         stopFirst(); stopSecond();
     }
+});
+
+test('setting maps preserve prototype-shaped names as literal own keys', () => {
+    const input = JSON.parse('{"__proto__":"Parent","constructor":"Named","toString":"Literal"}');
+    for (const key of ['groupingSeriesAliases', 'groupingManualOverrides', 'groupingTree', 'seriesDefaultApply']) {
+        updateSetting(key, input);
+        assert.deepEqual(getSettings()[key], input);
+        assert.equal(Object.getPrototypeOf(getSettings()[key]), Object.prototype);
+    }
+});
+
+test('resetting already default settings is a no-op for persistence and revision', () => {
+    resetSettings();
+    const before = writes;
+    const state = getSettings();
+    resetSettings();
+    assert.equal(writes, before);
+    assert.equal(getSettings(), state);
 });

@@ -436,3 +436,36 @@ test('disabled release-only setting preserves live slider input editing', () => 
     assert.equal(f.edits[0].source, 'control-range');
     f.adapter.dispose();
 });
+
+test('typing a large quick-edit draft captures only its host commit on blur', () => {
+    const f = fixture();
+    f.state.preset.prompts[0].content = 'x'.repeat(500_000);
+    const text = new Node({ id: 'main_prompt_quick_edit_textarea', tag: 'TEXTAREA', parent: f.root });
+    for (let index = 0; index < 20; index++) {
+        f.root.dispatch('beforeinput', text);
+        f.root.dispatch('input', text);
+        f.tick();
+    }
+    assert.equal(f.captureCount(), 0, 'local drafts do not change the host preset yet');
+    f.root.dispatch('blur', text);
+    f.state.preset.prompts[0].content = 'committed';
+    f.tick();
+    assert.equal(f.captureCount(), 2);
+    assert.equal(f.edits.length, 1);
+    assert.equal(f.edits[0].after.prompts[0].content, 'committed');
+    f.adapter.dispose();
+});
+
+test('popup draft text and untouched control blur never capture the full preset', () => {
+    const f = fixture();
+    const draft = new Node({ id: 'edit_content', tag: 'TEXTAREA', parent: f.popup });
+    const untouched = new Node({ id: 'temperature', tag: 'INPUT', parent: f.root });
+    for (let index = 0; index < 20; index++) {
+        f.popup.dispatch('input', draft);
+        f.root.dispatch('blur', untouched);
+        f.tick();
+    }
+    assert.equal(f.captureCount(), 0);
+    assert.equal(f.edits.length, 0);
+    f.adapter.dispose();
+});

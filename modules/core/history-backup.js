@@ -1,7 +1,9 @@
 import { enrichSnapshotList, HISTORY_SCHEMA_VERSION } from './history-schema.js';
-import { canonicalizePreset } from './preset-schema.js';
+import { canonicalizePreset, sanitizeConnectionData } from './preset-schema.js';
 import { stableStringify } from './value-utils.js';
-import { validateImportedSnapshot } from './history-import-validation.js';
+import { validateImportedSnapshot, validateImportedJson } from './history-import-validation.js';
+import { retainSnapshotList } from './snapshot-retention-policy.js';
+import { comparePresetStates } from './preset-comparison.js';
 
 export const HISTORY_BACKUP_VERSION = 2;
 const KEY_DELIMITER = '::';
@@ -42,10 +44,14 @@ function validateSnapshot(snapshot, key, identity, seenIds, { importing = false 
         throw new TypeError(`History backup snapshot ${snapshot.id} presetName does not match key ${key}`);
     }
     seenIds.add(snapshot.id);
-    const sanitized = structuredClone(snapshot);
     const canonical = importing
         ? validateImportedSnapshot(snapshot, identity.apiId)
-        : canonicalizePreset(sanitized.preset, { apiId: identity.apiId }).canonical;
+        : canonicalizePreset(snapshot.preset, { apiId: identity.apiId }).canonical;
+    const metadata = Object.getOwnPropertyDescriptors(snapshot);
+    // Derived caches can contain old values or unset from/to members. Rebuild
+    // them below instead of treating their contents as authoritative metadata.
+    for (const field of ['preset', 'summary', 'changeSet']) delete metadata[field];
+    const sanitized = sanitizeConnectionData(Object.defineProperties({}, metadata));
     sanitized.preset = canonical;
     return {
         ...sanitized,
@@ -61,23 +67,29 @@ function sanitizeBackupData(data) {
         const identity = parseHistoryKey(key);
         if (!identity) throw new TypeError(`Invalid history backup key: ${key}`);
         if (!Array.isArray(list)) throw new TypeError(`History backup value for ${key} must be an array`);
-        sanitized[key] = list.map(snapshot => validateSnapshot(snapshot, key, identity, seenIds));
+        sanitized[key] = refreshComparisons(list.map(snapshot => validateSnapshot(snapshot, key, identity, seenIds)));
     }
     return sanitized;
 }
 
-function trimListWithPinned(list, max) {
-    if (list.length <= max) return list;
-    const pinned = list.filter(snapshot => snapshot?.pinned);
-    const unpinned = list.filter(snapshot => !snapshot?.pinned);
-    const keepUnpinned = Math.max(1, max - pinned.length);
-    return [...pinned, ...unpinned.slice(0, keepUnpinned)]
-        .sort((left, right) => right.timestamp - left.timestamp);
+function refreshComparisons(list) {
+    return list.map((snapshot, index) => {
+        const comparison = comparePresetStates(list[index + 1]?.preset, snapshot.preset, { apiId: snapshot.apiId });
+        return {
+            ...snapshot,
+            summary: comparison.summary,
+            changeSet: {
+                meaningful: comparison.changeSet.meaningful,
+                changedPaths: comparison.changeSet.changed.map(item => item.path),
+                counts: { ...comparison.changeSet.counts },
+            },
+        };
+    });
 }
 
 function normalizeList(list, max = Number.POSITIVE_INFINITY) {
     const ordered = [...list].sort((left, right) => right.timestamp - left.timestamp);
-    return enrichSnapshotList(trimListWithPinned(ordered, max));
+    return refreshComparisons(enrichSnapshotList(retainSnapshotList(ordered, max)));
 }
 
 function snapshotIdentityContent(snapshot) {
@@ -125,12 +137,13 @@ export function createHistoryBackup(data, diagnostics = {}, now = () => Date.now
         schemaVersion: HISTORY_SCHEMA_VERSION,
         source: 'PresetAutoSave',
         exportedAt: now(),
-        repository: structuredClone(diagnostics ?? {}),
+        repository: sanitizeConnectionData(diagnostics ?? {}),
         data: sanitizeBackupData(data),
     };
 }
 
 export function validateHistoryBackup(payload) {
+    validateImportedJson(payload);
     if (!isPlainObject(payload)) throw new TypeError('Invalid history backup payload');
     const sourceVersion = payload.version === undefined ? 1 : payload.version;
     if (!Number.isInteger(sourceVersion) || sourceVersion < 1 || sourceVersion > HISTORY_BACKUP_VERSION) {

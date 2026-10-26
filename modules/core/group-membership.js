@@ -10,7 +10,10 @@ export function movePresetMembership({
         return next;
     }
     const target = findCanonicalGroup(groups, targetKey);
-    next[presetName] = target?.automaticName || newGroupName || targetKey;
+    Object.defineProperty(next, presetName, {
+        value: target?.automaticName || newGroupName || targetKey,
+        enumerable: true, writable: true, configurable: true,
+    });
     return next;
 }
 

@@ -1,3 +1,5 @@
+import { lookupPresetInventory } from './preset-inventory-lookup.js';
+
 function targetKey(apiId, presetName) {
     return JSON.stringify([apiId, presetName]);
 }
@@ -23,32 +25,14 @@ function findLatestSnapshots(snapshots) {
     return { latestByTarget, failed };
 }
 
-function presetExists(manager, snapshot) {
-    let exists = false;
-    let known = false;
-    if (typeof manager.getPresetList === 'function') {
-        try {
-            const { preset_names: names } = manager.getPresetList(snapshot.apiId) || {};
-            if (Array.isArray(names)) {
-                exists = names.includes(snapshot.presetName);
-                known = true;
-            } else if (names && typeof names === 'object') {
-                exists = Object.hasOwn(names, snapshot.presetName);
-                known = true;
-            }
-        } catch (_) {
-            // A second host capability may still provide a reliable answer.
-        }
+function presetExists(manager, snapshot, allowSelectorFallback) {
+    try {
+        return lookupPresetInventory(manager.getPresetList?.(snapshot.apiId), snapshot.presetName).exists;
+    } catch (error) {
+        // Selector lookup is not sufficient authority for destructive recovery.
+        if (!allowSelectorFallback || typeof manager.findPreset !== 'function') throw error;
+        return manager.findPreset(snapshot.presetName) != null;
     }
-    if (!exists && typeof manager.findPreset === 'function') {
-        try {
-            exists = manager.findPreset(snapshot.presetName) !== undefined;
-            known = true;
-        } catch (_) {
-            // Unknown existence is handled by the caller as a recovery failure.
-        }
-    }
-    return { exists, known };
 }
 
 /**
@@ -66,7 +50,8 @@ export function createSnapshotWriteback({
         const { skipExisting = false } = options;
         try {
             const snapshots = await loadSnapshots();
-            if (!Array.isArray(snapshots) || snapshots.length === 0) return emptyResult();
+            if (!Array.isArray(snapshots)) throw new TypeError('Recovery snapshot enumeration is not an array');
+            if (snapshots.length === 0) return emptyResult();
 
             const selected = findLatestSnapshots(snapshots);
             let failed = selected.failed;
@@ -83,21 +68,10 @@ export function createSnapshotWriteback({
                     const manager = getPresetManager(snapshot.apiId);
                     if (!manager) throw new Error(`PresetManager unavailable for ${snapshot.apiId}`);
 
-                    if (skipExisting) {
-                        const existence = presetExists(manager, snapshot);
-                        if (!existence.known) throw new Error(`Could not verify whether preset exists: ${snapshot.presetName}`);
-                        if (existence.exists) {
-                            skipped++;
-                            continue;
-                        }
-                    } else {
-                        if (typeof manager.findPreset !== 'function') {
-                            throw new Error(`Could not verify existing preset: ${snapshot.presetName}`);
-                        }
-                        if (manager.findPreset(snapshot.presetName) === undefined) {
-                            skipped++;
-                            continue;
-                        }
+                    const exists = presetExists(manager, snapshot, !skipExisting);
+                    if (exists === skipExisting) {
+                        skipped++;
+                        continue;
                     }
 
                     await savePreset(snapshot.presetName, snapshot.preset, {

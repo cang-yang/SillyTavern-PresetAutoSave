@@ -117,3 +117,49 @@ test('queued history writes capture their caller payload before asynchronous wor
     const saved = await pending;
     assert.equal(saved.preset.temperature, 0.2);
 });
+
+test('automatic retention preserves unpinned partial recovery records beyond the history cap', async () => {
+    const name = 'partial-retention';
+    const key = `openai::${name}`;
+    const partial = { id: 'partial-old', apiId: 'openai', presetName: name,
+        timestamp: 1, preset: preset(0.1), trigger: 'auto', saveStatus: 'partial', pinned: false };
+    stores.get('history_v2').set(key, [partial]);
+    settings.batchUpdate({ maxHistoryPerPreset: 5, mergeWindowSec: 0 });
+    for (let i = 0; i < 6; i++) await history.addSnapshot(name, 'openai', preset(i + 1));
+    const snapshots = await history.getSnapshots('openai', name);
+    assert.deepEqual(snapshots.find(item => item.id === partial.id)?.preset, partial.preset);
+    assert.equal(snapshots.find(item => item.id === partial.id)?.saveStatus, 'partial');
+});
+
+test('merge window never replaces an unverified recovery record', async () => {
+    const name = 'partial-merge';
+    const partial = { id: 'partial-new', apiId: 'openai', presetName: name,
+        timestamp: Date.now(), preset: preset(0.1), trigger: 'auto', saveStatus: 'pending' };
+    stores.get('history_v2').set(`openai::${name}`, [partial]);
+    settings.updateSetting('mergeWindowSec', 30);
+    const saved = await history.addSnapshot(name, 'openai', preset(0.2));
+    assert.notEqual(saved.id, partial.id);
+    assert.deepEqual((await history.getSnapshots('openai', name)).find(item => item.id === partial.id)?.preset, partial.preset);
+});
+
+test('age cleanup preserves explicit recovery states while removing old committed history', async () => {
+    const name = 'partial-age';
+    const make = (id, saveStatus) => ({ id, apiId: 'openai', presetName: name,
+        timestamp: 1, preset: preset(0.1), saveStatus });
+    stores.get('history_v2').set(`openai::${name}`, [make('keep-partial', 'partial'), make('remove-committed', 'committed')]);
+    await history.trimByAge(1);
+    assert.deepEqual((await history.getSnapshots('openai', name)).map(item => item.id), ['keep-partial']);
+});
+
+test('equal content in an unverified record cannot suppress a new committed snapshot', async () => {
+    const name = 'partial-equality';
+    const partial = { id: 'unverified-equal', apiId: 'openai', presetName: name,
+        timestamp: Date.now(), preset: preset(0.3), trigger: 'auto', saveStatus: 'partial' };
+    stores.get('history_v2').set(`openai::${name}`, [partial]);
+    const saved = await history.addSnapshot(name, 'openai', preset(0.3));
+    assert.ok(saved?.id);
+    assert.notEqual(saved.id, partial.id);
+    const list = await history.getSnapshots('openai', name);
+    assert.equal(list.find(item => item.id === saved.id).saveStatus, 'committed');
+    assert.equal(list.find(item => item.id === partial.id).saveStatus, 'partial');
+});

@@ -261,6 +261,15 @@ export function observePresetEdits({
             else if (action) propose(action);
             return;
         }
+        if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(element?.tagName) || element.disabled
+            || closest(element, '#completion_prompt_manager_popup')) return;
+        const blur = event.type === 'blur' || event.type === 'focusout';
+        if (blur && !typed.has(element)) return;
+        // Quick-edit text is a local draft until the host's blur handler commits it.
+        if (QUICK_PROMPTS.has(element.id) && element.id.endsWith('_quick_edit_textarea') && !blur) {
+            if (event.type === 'input') typed.add(element);
+            return;
+        }
         const state = read();
         if (!state) return;
         const scope = fieldScope(element, state);
@@ -269,8 +278,6 @@ export function observePresetEdits({
             beforeInput.set(element, state);
             return;
         }
-        const blur = event.type === 'blur' || event.type === 'focusout';
-        if (blur && !typed.has(element)) return;
         if (blur) typed.delete(element);
         else typed.add(element);
         const before = beforeInput.get(element) || state;

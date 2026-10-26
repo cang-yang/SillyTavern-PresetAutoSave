@@ -10,6 +10,7 @@ export function createRuntimeLifecycle({ initialize, cleanup }) {
     let stopping = null;
     let stoppedOperation = null;
     let stoppedResult = null;
+    const stopOperations = new Map();
 
     function start({ explicit = false } = {}) {
         if (stopping) {
@@ -44,22 +45,31 @@ export function createRuntimeLifecycle({ initialize, cleanup }) {
     }
 
     function stop(operation = cleanup) {
-        if (stopping) return stopping;
-        if (!allowed && stoppedOperation === operation) return stoppedResult;
+        if (stopOperations.has(operation)) return stopOperations.get(operation);
+        if (!stopping && !allowed && stoppedOperation === operation) return stoppedResult;
         allowed = false;
         ready = false;
         generation++;
         const pending = starting;
+        const preceding = stopping;
         const stopped = (async () => {
+            if (preceding) await preceding.catch(() => {});
             if (pending) await pending.catch(() => {});
             return operation();
         })();
         stopping = stopped;
-        stoppedOperation = operation;
-        stoppedResult = stopped;
-        stopped.finally(() => {
-            if (stopping === stopped) stopping = null;
-        }).catch(() => {});
+        stopOperations.set(operation, stopped);
+        const finish = successful => {
+            stopOperations.delete(operation);
+            if (stopping !== stopped) return;
+            stopping = null;
+            stoppedOperation = successful ? operation : null;
+            stoppedResult = successful ? stopped : null;
+        };
+        stopped.then(
+            result => finish(result !== false && result?.complete !== false && result?.settingsCleared !== false),
+            () => finish(false),
+        );
         return stopped;
     }
 

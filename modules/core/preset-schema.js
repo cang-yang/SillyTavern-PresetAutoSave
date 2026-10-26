@@ -1,26 +1,17 @@
 import { normalizeBooleanString, normalizeNumberString, normalizeValue, stableStringify } from './value-utils.js';
 
 export const PRESET_CONTRACT_VERSION = 1;
-const CREDENTIAL_KEYS = new Set([
+const CREDENTIAL_KEYS = [
     'apikey', 'accesstoken', 'refreshtoken', 'authtoken', 'bearertoken',
     'clientsecret', 'secretkey', 'authorization', 'proxypassword',
     'proxyauthorization', 'xapikey',
-]);
-const CREDENTIAL_PROVIDERS = new Set([
-    'openai', 'claude', 'anthropic', 'google', 'gemini', 'openrouter',
-    'azure', 'azureopenai', 'mistral', 'mistralai', 'cohere', 'groq',
-    'deepseek', 'xai', 'ai21', 'perplexity', 'novel', 'novelai',
-]);
-
+];
 function normalizeConnectionKey(key) {
     return key.replace(/[_-]/g, '').toLowerCase();
 }
 
 function isCredentialKey(normalized, value) {
-    const provider = normalized.startsWith('apikey') ? normalized.slice(6)
-        : normalized.endsWith('apikey') ? normalized.slice(0, -6) : '';
-    return CREDENTIAL_KEYS.has(normalized)
-        || CREDENTIAL_PROVIDERS.has(provider)
+    return CREDENTIAL_KEYS.some(marker => normalized.startsWith(marker) || normalized.endsWith(marker))
         || (typeof value === 'string' && ['token', 'password'].includes(normalized));
 }
 
@@ -30,10 +21,10 @@ export function connectionExclusionReason(key, value) {
     return isCredentialKey(normalized, value) ? 'connection-credential' : '';
 }
 
-function removeExtensionCredentials(value, path, ignored) {
+function removeConnectionFields(value, path, ignored) {
     if (!value || typeof value !== 'object') return value;
     if (Array.isArray(value)) {
-        return value.map((item, index) => removeExtensionCredentials(item, `${path}[${index}]`, ignored));
+        return value.map((item, index) => removeConnectionFields(item, `${path}[${index}]`, ignored));
     }
     const output = {};
     for (const [key, item] of Object.entries(value)) {
@@ -44,11 +35,17 @@ function removeExtensionCredentials(value, path, ignored) {
             continue;
         }
         Object.defineProperty(output, key, {
-            value: removeExtensionCredentials(item, itemPath, ignored),
+            value: removeConnectionFields(item, itemPath, ignored),
             enumerable: true, writable: true, configurable: true,
         });
     }
     return output;
+}
+
+/** Sanitize structured metadata without inspecting or rewriting literal prose. */
+export function sanitizeConnectionData(value) {
+    validateJson(value, 'data');
+    return removeConnectionFields(value, '', []);
 }
 export const FIELD_SYNONYMS = new Map([
     ['temp_openai', 'temperature'], ['freq_pen_openai', 'frequency_penalty'],
@@ -223,7 +220,14 @@ function validateJson(value, path, ancestors = new Set()) {
     }
     if (ancestors.has(value)) throw presetValueError(path, 'object', 'PRESET_CIRCULAR');
     ancestors.add(value);
-    for (const key of Object.keys(value)) {
+    const array = Array.isArray(value);
+    const keys = Reflect.ownKeys(value).filter(key => Object.getOwnPropertyDescriptor(value, key).enumerable);
+    if (array && keys.length !== value.length) throw presetValueError(path, 'sparse-or-extended-array');
+    for (const key of keys) {
+        if (typeof key !== 'string') throw presetValueError(path, 'symbol-key');
+        if (array && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length)) {
+            throw presetValueError(path, 'array-property');
+        }
         const itemPath = Array.isArray(value) ? `${path}[${key}]` : appendPresetPath(path, key);
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (!Object.hasOwn(descriptor, 'value')) throw presetValueError(itemPath, 'accessor');
@@ -293,18 +297,25 @@ export function canonicalizePreset(preset, { apiId = 'openai' } = {}) {
         throw new TypeError('Preset root must be a plain object');
     }
 
-    const normalized = normalizePresetFields(preset);
     const canonical = {};
     const ignored = [];
-    for (const key of Object.keys(normalized).sort()) {
-        const reason = presetFieldExclusionReason(key, normalized[key], { apiId });
+    for (const key of Object.getOwnPropertySymbols(preset)) {
+        if (Object.getOwnPropertyDescriptor(preset, key).enumerable) throw presetValueError('preset', 'symbol-key');
+    }
+    const fields = Object.keys(preset).flatMap(source => {
+        const key = FIELD_SYNONYMS.get(source) || source;
+        if (key !== source && Object.hasOwn(preset, key)) return [];
+        return [{ key, descriptor: Object.getOwnPropertyDescriptor(preset, source) }];
+    }).sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+    for (const { key, descriptor } of fields) {
+        const reason = presetFieldExclusionReason(key, descriptor.value, { apiId });
         if (reason) {
             ignored.push({ path: key, reason });
             continue;
         }
-        validateJson(normalized[key], appendPresetPath('', key));
-        const value = key === 'extensions'
-            ? removeExtensionCredentials(normalized[key], key, ignored) : normalized[key];
+        if (!Object.hasOwn(descriptor, 'value')) throw presetValueError(appendPresetPath('', key), 'accessor');
+        validateJson(descriptor.value, appendPresetPath('', key));
+        const value = removeConnectionFields(descriptor.value, key, ignored);
         Object.defineProperty(canonical, key, {
             value: normalizePresetField(key, value), enumerable: true, writable: true, configurable: true,
         });

@@ -122,7 +122,7 @@ function sanitizeStringMap(v) {
         if (typeof k !== 'string' || !k) continue;
         if (typeof val !== 'string' || !val) continue;
         if (k.length > 200 || val.length > 200) continue;  // 防御过长
-        out[k] = val;
+        Object.defineProperty(out, k, { value: val, enumerable: true, writable: true, configurable: true });
     }
     return out;
 }
@@ -360,6 +360,7 @@ export function batchUpdate(updates) {
  */
 export function resetSettings() {
     if (!_initialized) return;
+    if (sameSettingValue(_settings, DEFAULT_SETTINGS)) return;
 
     const oldSettings = { ..._settings };
     Object.assign(_settings, structuredClone(DEFAULT_SETTINGS));
@@ -432,7 +433,7 @@ export function sanitizeSeriesAliasMap(v) {
         if (typeof value !== 'string') continue;
         const trimmed = value.trim();
         if (!trimmed || Array.from(trimmed).length > 120) continue;
-        out[key] = trimmed;
+        Object.defineProperty(out, key, { value: trimmed, enumerable: true, writable: true, configurable: true });
     }
     return out;
 }

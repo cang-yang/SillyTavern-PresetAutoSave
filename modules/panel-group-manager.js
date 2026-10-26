@@ -35,6 +35,7 @@ import { createGroupAliasEditor } from './core/group-alias-editor.js';
 import { OrganizationCommandHistory } from './core/organization-command-history.js';
 import { movePresetMembership, removeGroupMembership } from './core/group-membership.js';
 import { findCanonicalGroup } from './core/group-projection.js';
+import { updateGroupAlias, setGroupParent, removeGroupParent } from './core/group-organization.js';
 import {
     closeGroupManagerContextMenu,
     openGroupManagerContextMenu,
@@ -443,25 +444,8 @@ function arePresetsComparable(seriesKeyA, seriesKeyB, settings) {
     }
 
     // 构建 A 的祖先链（包含自身）
-    const ancestorsA = new Set();
-    let current = seriesKeyA;
-    while (current) {
-        if (ancestorsA.has(current)) break; // 循环引用防护
-        ancestorsA.add(current);
-        current = tree[current]; // 上溯父节点
-    }
-
-    // 检查 B 的祖先链是否与 A 有交集
-    const visitedB = new Set();
-    current = seriesKeyB;
-    while (current) {
-        if (ancestorsA.has(current)) return true; // 找到共同祖先
-        if (visitedB.has(current)) break; // B 链自身的循环引用防护
-        visitedB.add(current);
-        current = tree[current];
-    }
-
-    return false;
+    const ancestorsA = new Set(getNodePath(tree, seriesKeyA));
+    return getNodePath(tree, seriesKeyB).some(key => ancestorsA.has(key));
 }
 
 // =====================================================
@@ -529,9 +513,7 @@ function performMoveGroup(childKey, newParentKey, container) {
     }
 
     // 写入新父子关系（如果 childKey 已有旧父节点，直接覆盖）
-    tree[childKey] = newParentKey;
-
-    saveGroupingSettings(_gmOverrides, tree);
+    saveGroupingSettings(_gmOverrides, setGroupParent(tree, childKey, newParentKey));
     recordOrganizationChange('Grouping Action Move Group', ['groupingTree', PENDING_GROUPS_STATE_KEY], before, container);
     refreshGroupingUI(container);
 }
@@ -672,10 +654,7 @@ function prepareGroupingManager(panelCtx, presetNames) {
 function restoreGroupAlias(seriesKey, container) {
     const keys = ['groupingSeriesAliases'];
     const before = captureOrganizationState(keys);
-    const aliases = { ...(getSettings().groupingSeriesAliases || {}) };
-    for (const key of Object.keys(aliases)) {
-        if (normalizeSeriesKey(key) === normalizeSeriesKey(seriesKey)) delete aliases[key];
-    }
+    const aliases = updateGroupAlias(getSettings().groupingSeriesAliases, seriesKey, null, null, normalizeSeriesKey);
     batchUpdate({ groupingSeriesAliases: aliases });
     recordOrganizationChange('Grouping Action Restore Name', keys, before, container);
     refreshTakeover({ force: true });
@@ -746,11 +725,7 @@ function beginInlineRename(seriesKey, container) {
             closed = true;
             const keys = ['groupingSeriesAliases'];
             const before = captureOrganizationState(keys);
-            const aliases = { ...(getSettings().groupingSeriesAliases || {}) };
-            for (const key of Object.keys(aliases)) {
-                if (normalizeSeriesKey(key) === normalizeSeriesKey(seriesKey)) delete aliases[key];
-            }
-            if (value !== automaticName) aliases[seriesKey] = value;
+            const aliases = updateGroupAlias(getSettings().groupingSeriesAliases, seriesKey, value, automaticName, normalizeSeriesKey);
             batchUpdate({ groupingSeriesAliases: aliases });
             recordOrganizationChange('Grouping Action Rename Group', keys, before, container);
             refreshTakeover({ force: true });
@@ -949,17 +924,7 @@ async function onDeleteCustomGroup(seriesKey, container) {
     const before = captureOrganizationState(keys);
 
     // 处理子分组：将它们提升到被删分组的父节点（或成为根节点）
-    const deletedParent = tree[seriesKey];
-    for (const childKey of childKeys) {
-        if (deletedParent) {
-            tree[childKey] = deletedParent;
-        } else {
-            delete tree[childKey];
-        }
-    }
-
-    // 删除 groupingTree 中以 seriesKey 为 child 的条目
-    delete tree[seriesKey];
+    const nextTree = removeGroupParent(tree, seriesKey);
 
     // 删除该分组内所有预设的 overrides
     _gmOverrides = removeGroupMembership({
@@ -974,7 +939,7 @@ async function onDeleteCustomGroup(seriesKey, container) {
         }
     }
 
-    saveGroupingSettings(_gmOverrides, tree);
+    saveGroupingSettings(_gmOverrides, nextTree);
     recordOrganizationChange('Grouping Action Delete Group', keys, before, container);
     refreshGroupingUI(container);
 }
@@ -1032,8 +997,7 @@ async function onCreateSubGroup(parentKey, container) {
     // 写入分组树
     const keys = ['groupingTree'];
     const before = captureOrganizationState(keys);
-    tree[newChildKey] = parentKey;
-    saveGroupingSettings(_gmOverrides, tree);
+    saveGroupingSettings(_gmOverrides, setGroupParent(tree, newChildKey, parentKey));
     recordOrganizationChange('Grouping Action Create Subgroup', keys, before, container);
     toast.success(t('Grouping Subgroup Created', { name: trimmed }));
     refreshGroupingUI(container);

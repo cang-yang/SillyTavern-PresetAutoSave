@@ -22,7 +22,6 @@ import { logger } from './logger.js';
 import { getSettings, onSettingChange } from './settings.js';
 import {
     on, getEventType, getCurrentApiId, escapeHtml, escapeAttr,
-    savePresetSafe,
     toast, t,
 } from './compatibility.js';
 import {
@@ -46,6 +45,7 @@ import { readPresetInventory, getPresetSelectApiId as getApiIdOfSelect,
 import { seedSnapshotsIfNeeded } from './history-seeding.js';
 export { seedSnapshotsIfNeeded, seedSnapshotForPreset, forceReseedSnapshots } from './history-seeding.js';
 import { restoreArchiveEntries } from './core/archive-recovery.js';
+import { restorePresetVerified } from './host/preset-recovery.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 import { bindPresetDropdown, renderDropdownControls } from './dropdown-controller.js';
 // =====================================================
@@ -1081,7 +1081,7 @@ export async function restoreAllFromArchive() {
         const result = await restoreArchiveEntries(archives, {
             getSnapshots,
             persistPreset: async (entry, preset, context) => {
-                await savePresetSafe(entry.presetName, preset, { apiId: entry.apiId });
+                await restorePresetVerified(entry.presetName, preset, { apiId: entry.apiId });
                 const sourceLabel = context.source === 'snapshot'
                     ? `snapshot(${context.snapshot?.id?.slice(0, 6) || '?'}, ts=${context.snapshot?.timestamp})`
                     : 'archive';

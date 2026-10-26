@@ -12,7 +12,7 @@ function defineValue(object, key, value) {
     Object.defineProperty(object, key, { value, enumerable: true, writable: true, configurable: true });
 }
 
-function copyValue(value, path, ancestors, filterConnections) {
+function copyValue(value, path, ancestors) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     if (!Array.isArray(value) && !isPlainObject(value)) {
@@ -38,18 +38,18 @@ function copyValue(value, path, ancestors, filterConnections) {
             const itemPath = `${path}[${index}]`;
             if (descriptor && !Object.hasOwn(descriptor, 'value')) throw presetValueError(itemPath, 'accessor');
             output.push(descriptor?.value === undefined ? null
-                : copyValue(descriptor.value, itemPath, ancestors, filterConnections));
+                : copyValue(descriptor.value, itemPath, ancestors));
         }
     } else {
         for (const key of Reflect.ownKeys(value)) {
             const descriptor = Object.getOwnPropertyDescriptor(value, key);
             if (!descriptor.enumerable) continue;
             if (typeof key !== 'string') throw presetValueError(path, 'symbol-key');
-            if (filterConnections && connectionExclusionReason(key, descriptor.value)) continue;
+            if (connectionExclusionReason(key, descriptor.value)) continue;
             const itemPath = appendPresetPath(path, key);
             if (!Object.hasOwn(descriptor, 'value')) throw presetValueError(itemPath, 'accessor');
             if (descriptor.value === undefined) continue;
-            defineValue(output, key, copyValue(descriptor.value, itemPath, ancestors, filterConnections));
+            defineValue(output, key, copyValue(descriptor.value, itemPath, ancestors));
         }
     }
     ancestors.delete(value);
@@ -72,7 +72,7 @@ export function captureHostPreset(preset, { apiId = 'openai' } = {}) {
         if (!Object.hasOwn(descriptor, 'value')) throw presetValueError(path, 'accessor');
         if (descriptor.value === undefined) continue;
         defineValue(projected, canonicalKey,
-            copyValue(descriptor.value, path, new Set([preset]), canonicalKey === 'extensions'));
+            copyValue(descriptor.value, path, new Set([preset])));
     }
     return canonicalizePreset(projected, { apiId }).canonical;
 }

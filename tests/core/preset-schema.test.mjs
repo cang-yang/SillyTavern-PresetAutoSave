@@ -125,3 +125,20 @@ test('removes connection secrets from every preset family', () => {
         { path: 'proxy_password', reason: 'connection-setting' },
     ]);
 });
+
+test('canonicalization rejects owned accessors without evaluating them', () => {
+    let calls = 0;
+    const input = Object.defineProperty({}, 'temperature', {
+        enumerable: true, get() { calls++; return 0.5; },
+    });
+    assert.throws(() => canonicalizePreset(input), /accessor/);
+    assert.equal(calls, 0);
+});
+
+test('canonicalization rejects symbol keys, sparse arrays and array metadata instead of discarding them', () => {
+    const extra = Object.assign([1], { note: 'owned' });
+    const symbolic = { [Symbol('owned')]: 'value', ordinary: 1 };
+    for (const value of [extra, symbolic, Array(1)]) {
+        assert.throws(() => canonicalizePreset({ extensions: { plugin: value } }), TypeError);
+    }
+});

@@ -9,7 +9,7 @@
 import { initLogger, logger, teardownLogger } from './modules/logger.js';
 import {
     initCompatibility, ENV, offAll, on, getEventType,
-    savePresetSafe, getPresetManager, getContextSafe,
+    getPresetManager, getContextSafe,
 } from './modules/compatibility.js';
 import { initSettings, getSettings, resetSettings } from './modules/settings.js';
 import {
@@ -45,6 +45,7 @@ import { createDebugInterface } from './modules/debug-interface.js';
 import { createSnapshotWriteback } from './modules/core/snapshot-writeback.js';
 import { createRuntimeLifecycle } from './modules/core/runtime-lifecycle.js';
 import { initHistorySeeding, teardownHistorySeeding } from './modules/history-seeding.js';
+import { restorePresetVerified } from './modules/host/preset-recovery.js';
 
 const VERSION = '1.0.0';
 
@@ -61,7 +62,7 @@ let _domReadyHandler = null;
 const _writeBackLatestSnapshots = createSnapshotWriteback({
     loadSnapshots: getAllSnapshots,
     getPresetManager,
-    savePreset: savePresetSafe,
+    savePreset: restorePresetVerified,
     parsePresetName,
     logger,
 });
@@ -214,6 +215,7 @@ async function deleteRuntime() {
     try {
         await teardownAutoSave();
         await teardownHistorySeeding();
+        await initHistoryStore();
         saveQuiesced = true;
     } catch (e) {
         logger.error('onDelete: could not quiesce auto-save; recovery data will be preserved', e);
@@ -306,6 +308,7 @@ async function disableRuntime() {
     try {
         await teardownAutoSave();
         await teardownHistorySeeding();
+        await initHistoryStore();
         saveQuiesced = true;
     } catch (e) {
         logger.error('onDisable: could not quiesce auto-save; preset recovery skipped', e);
@@ -316,7 +319,7 @@ async function disableRuntime() {
     let snapshots = { written: 0, skipped: 0, failed: 1 };
     if (saveQuiesced) {
         archive = await restoreAllFromArchive();
-        snapshots = await _writeBackLatestSnapshots();
+        snapshots = await _writeBackLatestSnapshots({ skipExisting: true });
     }
 
     try { teardownThemeDetector(); } catch (_) { /* best-effort */ }
