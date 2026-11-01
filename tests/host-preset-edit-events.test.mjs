@@ -239,6 +239,108 @@ test('toggle is semantic but passive prompt DOM mutations cannot create edits', 
     f.adapter.dispose();
 });
 
+function touchCommandFixture() {
+    const f = fixture();
+    const row = new Node({ classes: ['completion_prompt_manager_prompt'], dataset: { pmIdentifier: 'main' }, parent: f.promptRoot });
+    const toggle = new Node({ classes: ['prompt-manager-toggle-action'], parent: row });
+    const point = { identifier: 7, clientX: 20, clientY: 30 };
+    const start = () => f.promptRoot.dispatch('touchstart', toggle, { touches: [point], changedTouches: [point] });
+    const end = () => f.documentObject.dispatch('touchend', toggle, { touches: [], changedTouches: [point] });
+    const click = (target = toggle) => f.promptRoot.dispatch('click', target, { isTrusted: false });
+    return { ...f, row, toggle, point, start, end, click };
+}
+
+test('touch-forwarded toggle authorizes one scoped edit from a completed trusted gesture', () => {
+    const f = touchCommandFixture();
+    f.start();
+    f.end();
+    f.click();
+    f.state.preset.prompt_order[0].order[0].enabled = false;
+    f.tick();
+    assert.equal(f.edits.length, 1);
+    assert.deepEqual(f.edits[0].scope, { kind: 'order', identifier: 'main' });
+    f.click();
+    f.state.preset.prompt_order[0].order[0].enabled = true;
+    f.tick();
+    assert.equal(f.edits.length, 1, 'touch evidence is consumed once');
+    f.adapter.dispose();
+    assert.equal(f.documentObject.count(), 0);
+    assert.equal(f.timers.size, 0);
+});
+
+test('touch-forwarded clicks reject incomplete, moved, cancelled, expired and mismatched gestures', () => {
+    for (const scenario of ['synthetic', 'incomplete', 'cancel', 'move', 'multitouch',
+        'expired', 'wrong-target', 'wrong-finger', 'changed-action', 'switched', 'detached', 'disposed']) {
+        const f = touchCommandFixture();
+        if (scenario !== 'synthetic') f.start();
+        if (scenario === 'cancel') f.documentObject.dispatch('touchcancel', f.toggle);
+        if (scenario === 'move') f.documentObject.dispatch('touchmove', f.toggle,
+            { touches: [{ ...f.point, clientY: 80 }] });
+        if (scenario === 'multitouch') f.documentObject.dispatch('touchstart', f.toggle,
+            { touches: [f.point, { ...f.point, identifier: 8 }] });
+        if (scenario === 'wrong-finger') f.documentObject.dispatch('touchend', f.toggle,
+            { touches: [], changedTouches: [{ ...f.point, identifier: 8 }] });
+        else if (!['synthetic', 'incomplete'].includes(scenario)) f.end();
+        if (scenario === 'expired') f.tick();
+        if (scenario === 'changed-action') f.row.dataset.pmIdentifier = 'other';
+        if (scenario === 'switched') f.state.presetName = 'B';
+        if (scenario === 'detached') f.toggle.isConnected = false;
+        if (scenario === 'disposed') f.adapter.dispose();
+        const other = new Node({ classes: ['prompt-manager-toggle-action'], parent: f.row });
+        f.click(scenario === 'wrong-target' ? other : f.toggle);
+        f.state.preset.prompt_order[0].order[0].enabled = false;
+        f.state.preset.prompt_order[0].order.push({ identifier: 'other', enabled: true });
+        f.tick();
+        assert.equal(f.edits.length, 0, scenario);
+        f.adapter.dispose();
+        assert.equal(f.documentObject.count(), 0, `${scenario} leaked document listeners`);
+        assert.equal(f.timers.size, 0, `${scenario} leaked timers`);
+    }
+});
+
+test('touch without a forwarded command cannot grant permission to background changes', () => {
+    const f = touchCommandFixture();
+    f.start();
+    f.end();
+    f.state.preset.prompt_order[0].order[0].enabled = false;
+    f.adapter.flush();
+    f.tick();
+    assert.equal(f.edits.length, 0);
+    f.adapter.dispose();
+});
+
+test('switching away and back invalidates an unfinished touch command', () => {
+    const f = touchCommandFixture();
+    f.start();
+    f.adapter.flush({ beforeSwitch: { apiId: 'openai', presetName: 'A' } });
+    f.state.presetName = 'B';
+    f.adapter.flush({ beforeSwitch: { apiId: 'openai', presetName: 'B' } });
+    f.state.presetName = 'A';
+    f.end();
+    f.click();
+    f.state.preset.prompt_order[0].order[0].enabled = false;
+    f.tick();
+    assert.equal(f.edits.length, 0);
+    f.adapter.dispose();
+});
+
+test('touch-forwarded popup submission captures content but still rejects unchanged commands', () => {
+    const f = fixture();
+    const save = new Node({ id: 'completion_prompt_manager_popup_entry_form_save',
+        dataset: { pmPrompt: 'main' }, parent: f.popup });
+    const point = { identifier: 1, clientX: 10, clientY: 10 };
+    for (const changed of [false, true]) {
+        f.popup.dispatch('touchstart', save, { touches: [point], changedTouches: [point] });
+        f.documentObject.dispatch('touchend', save, { touches: [], changedTouches: [point] });
+        f.popup.dispatch('click', save, { isTrusted: false });
+        if (changed) f.state.preset.prompts[0].content = 'mobile edit';
+        f.tick();
+        assert.equal(f.edits.length, changed ? 1 : 0);
+    }
+    assert.equal(f.edits[0].scope.identifier, 'main');
+    f.adapter.dispose();
+});
+
 test('confirmed deletion is bound to the new dialog; cancellation does not retain permission', () => {
     const f = fixture();
     const footer = new Node({ classes: ['completion_prompt_manager_footer'], parent: f.promptRoot });

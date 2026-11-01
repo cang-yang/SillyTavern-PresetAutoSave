@@ -1,6 +1,7 @@
 import { PRESET_WATCH_SELECTORS } from '../core/preset-dom-watch.js';
 import { editScopeChanged } from '../core/edit-intent.js';
 import { resolvePresetControlField } from './preset-control-contract.js';
+import { createTouchCommandGate } from './touch-command-gate.js';
 
 const ROOTS = [...PRESET_WATCH_SELECTORS, '#completion_prompt_manager_popup'];
 const ROOT_SELECTOR = ROOTS.join(',');
@@ -84,6 +85,7 @@ export function observePresetEdits({
         return id;
     };
     const clearTimer = id => { if (id != null) { cancel(id); timers.delete(id); } };
+    const touchCommands = createTouchCommandGate({ documentObject, schedule: later, cancel: clearTimer });
     const read = targetOverride => {
         try {
             const state = capture?.(targetOverride);
@@ -208,10 +210,34 @@ export function observePresetEdits({
         for (const [type, handler] of dragListeners) documentObject.addEventListener?.(type, handler, true);
     };
     const handle = event => {
-        if (disposed || event.isTrusted !== true || seenEvents.has(event)) return;
+        if (disposed || seenEvents.has(event)) return;
+        if (event.isTrusted !== true) {
+            if (event.type !== 'click') return;
+            const forwarded = touchCommands.consume(event);
+            if (!forwarded) return;
+            seenEvents.add(event);
+            const action = promptAction(event.target, documentObject);
+            const before = read();
+            if (!sameTarget(before, forwarded.target)
+                || JSON.stringify(action) !== forwarded.action) return;
+            if (action?.confirm) beginConfirmation(action);
+            else if (action) propose(action, before);
+            return;
+        }
         seenEvents.add(event);
         const element = event.target;
         if (closest(element, '.pas-panel, .pas-popup, #pas_history_btn')) return;
+        if (event.type === 'touchstart') {
+            const action = promptAction(element, documentObject);
+            if (action) {
+                const state = read();
+                if (state) touchCommands.begin(event, {
+                    action: JSON.stringify(action),
+                    target: { apiId: state.apiId, presetName: state.presetName },
+                });
+                return;
+            }
+        }
         if (element?.type === 'range') {
             if (event.type === 'pointercancel' || event.type === 'touchcancel') {
                 ranges.delete(element);
@@ -236,6 +262,7 @@ export function observePresetEdits({
             return;
         }
         if (event.type === 'click') {
+            touchCommands.clear();
             const action = promptAction(element, documentObject);
             if (action?.confirm) beginConfirmation(action);
             else if (action) propose(action);
@@ -269,6 +296,7 @@ export function observePresetEdits({
         const next = new Set(documentObject?.querySelectorAll?.(ROOT_SELECTOR) || []);
         for (const root of roots) {
             if (!next.has(root) || root.isConnected === false) {
+                touchCommands.clear();
                 for (const element of ranges.keys()) if (root.contains?.(element)) ranges.delete(element);
                 for (const type of EVENTS) root.removeEventListener(type, handle, true);
                 root.removeEventListener('sortupdate', sortCompleted, true);
@@ -308,6 +336,7 @@ export function observePresetEdits({
             // Keep capture at the next task boundary; never extend its lifetime.
             if (disposed) return;
             if (beforeSwitch?.apiId && beforeSwitch?.presetName) {
+                touchCommands.clear();
                 for (const [element, range] of ranges) {
                     if (!sameTarget(range.before, beforeSwitch)) continue;
                     ranges.delete(element);
@@ -329,6 +358,7 @@ export function observePresetEdits({
             disposed = true;
             clearConfirmation();
             stopDrag();
+            touchCommands.clear();
             observer?.disconnect();
             for (const root of roots) {
                 for (const type of EVENTS) root.removeEventListener(type, handle, true);
