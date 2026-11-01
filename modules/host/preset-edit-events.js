@@ -2,6 +2,7 @@ import { PRESET_WATCH_SELECTORS } from '../core/preset-dom-watch.js';
 import { editScopeChanged } from '../core/edit-intent.js';
 import { resolvePresetControlField } from './preset-control-contract.js';
 import { createTouchCommandGate } from './touch-command-gate.js';
+import { createKeyboardCommandGate } from './keyboard-command-gate.js';
 
 const ROOTS = [...PRESET_WATCH_SELECTORS, '#completion_prompt_manager_popup'];
 const ROOT_SELECTOR = ROOTS.join(',');
@@ -86,6 +87,7 @@ export function observePresetEdits({
     };
     const clearTimer = id => { if (id != null) { cancel(id); timers.delete(id); } };
     const touchCommands = createTouchCommandGate({ documentObject, schedule: later, cancel: clearTimer });
+    const keyboardCommands = createKeyboardCommandGate({ documentObject, schedule: later, cancel: clearTimer });
     const read = targetOverride => {
         try {
             const state = capture?.(targetOverride);
@@ -213,7 +215,8 @@ export function observePresetEdits({
         if (disposed || seenEvents.has(event)) return;
         if (event.isTrusted !== true) {
             if (event.type !== 'click') return;
-            const forwarded = touchCommands.consume(event);
+            const forwarded = touchCommands.consume(event) || keyboardCommands.consume(event);
+            keyboardCommands.clear();
             if (!forwarded) return;
             seenEvents.add(event);
             const action = promptAction(event.target, documentObject);
@@ -263,6 +266,7 @@ export function observePresetEdits({
         }
         if (event.type === 'click') {
             touchCommands.clear();
+            keyboardCommands.clear();
             const action = promptAction(element, documentObject);
             if (action?.confirm) beginConfirmation(action);
             else if (action) propose(action);
@@ -292,11 +296,31 @@ export function observePresetEdits({
         const text = element.tagName === 'TEXTAREA' || ['text', 'search'].includes(element.type);
         propose({ scope, source: blur ? 'control-blur' : text ? 'control-text' : 'control-edit' }, before);
     };
+    // Coexisting editors can consume commands at document capture. Observe only
+    // recognized preset commands before that boundary; typing stays root-scoped.
+    const commandGateway = event => {
+        if (disposed || !closest(event.target, ROOT_SELECTOR)
+            || !promptAction(event.target, documentObject)) return;
+        if (event.type !== 'click') {
+            const state = read();
+            if (state) keyboardCommands.begin(event, {
+                action: JSON.stringify(promptAction(event.target, documentObject)),
+                target: { apiId: state.apiId, presetName: state.presetName },
+            });
+            return;
+        }
+        handle(event);
+    };
+    const windowObject = documentObject?.defaultView;
+    windowObject?.addEventListener?.('click', commandGateway, true);
+    windowObject?.addEventListener?.('keydown', commandGateway, true);
+    windowObject?.addEventListener?.('keyup', commandGateway, true);
     const rebind = () => {
         const next = new Set(documentObject?.querySelectorAll?.(ROOT_SELECTOR) || []);
         for (const root of roots) {
             if (!next.has(root) || root.isConnected === false) {
                 touchCommands.clear();
+                keyboardCommands.clear();
                 for (const element of ranges.keys()) if (root.contains?.(element)) ranges.delete(element);
                 for (const type of EVENTS) root.removeEventListener(type, handle, true);
                 root.removeEventListener('sortupdate', sortCompleted, true);
@@ -337,6 +361,7 @@ export function observePresetEdits({
             if (disposed) return;
             if (beforeSwitch?.apiId && beforeSwitch?.presetName) {
                 touchCommands.clear();
+                keyboardCommands.clear();
                 for (const [element, range] of ranges) {
                     if (!sameTarget(range.before, beforeSwitch)) continue;
                     ranges.delete(element);
@@ -359,6 +384,10 @@ export function observePresetEdits({
             clearConfirmation();
             stopDrag();
             touchCommands.clear();
+            keyboardCommands.clear();
+            windowObject?.removeEventListener?.('click', commandGateway, true);
+            windowObject?.removeEventListener?.('keydown', commandGateway, true);
+            windowObject?.removeEventListener?.('keyup', commandGateway, true);
             observer?.disconnect();
             for (const root of roots) {
                 for (const type of EVENTS) root.removeEventListener(type, handle, true);

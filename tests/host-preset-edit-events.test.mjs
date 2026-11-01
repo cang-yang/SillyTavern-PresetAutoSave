@@ -38,11 +38,30 @@ class Node {
         const event = { type, target, isTrusted: true, ...values };
         for (const fn of [...(this.listeners.get(type) || [])]) fn(event);
     }
+    capture(type, values = {}) {
+        let stopped = false;
+        let immediate = false;
+        const event = { type, target: this, isTrusted: true,
+            stopPropagation() { stopped = true; },
+            stopImmediatePropagation() { stopped = immediate = true; },
+            ...values,
+        };
+        const path = [];
+        for (let node = this; node; node = node.parentElement) path.unshift(node);
+        for (const node of path) {
+            for (const fn of [...(node.listeners.get(type) || [])]) {
+                fn(event);
+                if (immediate) break;
+            }
+            if (stopped) break;
+        }
+    }
     count() { return [...this.listeners.values()].reduce((sum, set) => sum + set.size, 0); }
 }
 
-function fixture(options = {}) {
-    const documentObject = new Node();
+function fixture(options = {}, installBefore = () => {}) {
+    const windowObject = new Node();
+    const documentObject = new Node({ parent: windowObject });
     const body = new Node({ parent: documentObject });
     documentObject.body = body;
     documentObject.getElementById = id => documentObject.querySelector(`#${id}`);
@@ -50,11 +69,12 @@ function fixture(options = {}) {
     const promptRoot = new Node({ id: 'completion_prompt_manager', parent: body });
     const popup = new Node({ id: 'completion_prompt_manager_popup', parent: body });
     const observers = [];
-    documentObject.defaultView = { MutationObserver: class {
+    documentObject.defaultView = windowObject;
+    windowObject.MutationObserver = class {
         constructor(fn) { this.fn = fn; observers.push(this); }
         observe() {}
         disconnect() { this.closed = true; }
-    } };
+    };
     const state = { apiId: 'openai', presetName: 'A', preset: {
         temperature: 0.5,
         prompts: [{ identifier: 'main', content: 'before' }],
@@ -66,6 +86,7 @@ function fixture(options = {}) {
     let captureCount = 0;
     let sequence = 0;
     const timers = new Map();
+    installBefore({ documentObject, state });
     const adapter = observePresetEdits({
         documentObject, capture: targetOverride => {
             captureCount++;
@@ -82,9 +103,146 @@ function fixture(options = {}) {
         current.forEach(([id]) => timers.delete(id));
         current.forEach(([, timer]) => timer.fn());
     };
-    return { documentObject, body, root, promptRoot, popup, state, edits, errors, timers, observers, adapter, tick,
+    return { windowObject, documentObject, body, root, promptRoot, popup, state, edits, errors, timers, observers, adapter, tick,
         setCaptureError: error => { captureError = error; }, captureCount: () => captureCount };
 }
+
+test('earlier document capture interceptors cannot hide trusted toggle and popup save commands', () => {
+    const f = fixture({}, ({ documentObject, state }) => {
+        documentObject.addEventListener('click', event => {
+            if (event.target.closest('.prompt-manager-toggle-action')) {
+                state.preset.prompt_order[0].order[0].enabled = false;
+            } else if (event.target.id === 'completion_prompt_manager_popup_entry_form_save') {
+                state.preset.prompts[0].content = 'document handler commit';
+            } else return;
+            event.stopImmediatePropagation();
+        });
+    });
+    const row = new Node({ classes: ['completion_prompt_manager_prompt'],
+        dataset: { pmIdentifier: 'main' }, parent: f.promptRoot });
+    const toggle = new Node({ classes: ['prompt-manager-toggle-action'], parent: row });
+    const save = new Node({ id: 'completion_prompt_manager_popup_entry_form_save',
+        dataset: { pmPrompt: 'main' }, parent: f.popup });
+    toggle.capture('click');
+    f.tick();
+    assert.equal(f.edits.length, 1, 'document interception must not hide a real toggle');
+    assert.deepEqual(f.edits[0].scope, { kind: 'order', identifier: 'main' });
+    save.capture('click');
+    f.tick();
+    assert.equal(f.edits.length, 2);
+    assert.equal(f.edits[1].before.prompts[0].content, 'before');
+    assert.equal(f.edits[1].after.prompts[0].content, 'document handler commit');
+    save.capture('click');
+    f.tick();
+    assert.equal(f.edits.length, 2, 'unchanged commands cannot mint edits');
+    f.adapter.dispose();
+    assert.equal(f.windowObject.count(), 0);
+});
+
+test('command gateway deduplicates normal propagation and rejects unrelated, outside and synthetic clicks', () => {
+    const f = fixture();
+    const row = new Node({ classes: ['completion_prompt_manager_prompt'],
+        dataset: { pmIdentifier: 'main' }, parent: f.promptRoot });
+    const toggle = new Node({ classes: ['prompt-manager-toggle-action'], parent: row });
+    toggle.addEventListener('click', () => { f.state.preset.prompt_order[0].order[0].enabled = false; });
+    toggle.capture('click');
+    f.tick();
+    assert.equal(f.edits.length, 1);
+    assert.equal(f.captureCount(), 2, 'window and root must share the same event ownership');
+    const captureCount = f.captureCount();
+    new Node({ parent: f.body }).capture('click');
+    const outsideRow = new Node({ classes: ['completion_prompt_manager_prompt'],
+        dataset: { pmIdentifier: 'main' }, parent: f.body });
+    new Node({ classes: ['prompt-manager-toggle-action'], parent: outsideRow }).capture('click');
+    toggle.capture('click', { isTrusted: false });
+    f.state.preset.prompt_order[0].order[0].enabled = true;
+    f.adapter.flush();
+    f.tick();
+    assert.equal(f.captureCount(), captureCount);
+    assert.equal(f.edits.length, 1);
+    f.adapter.dispose();
+    assert.equal(f.windowObject.count(), 0);
+    toggle.capture('click');
+    f.tick();
+    assert.equal(f.edits.length, 1);
+});
+
+test('completed touch forwarding survives document interception but unsupported synthetic commands do not', () => {
+    const f = fixture({}, ({ documentObject, state }) => {
+        documentObject.addEventListener('click', event => {
+            if (!event.target.closest('.prompt-manager-toggle-action')) return;
+            state.preset.prompt_order[0].order[0].enabled = !state.preset.prompt_order[0].order[0].enabled;
+            event.stopImmediatePropagation();
+        });
+    });
+    const row = new Node({ classes: ['completion_prompt_manager_prompt'],
+        dataset: { pmIdentifier: 'main' }, parent: f.promptRoot });
+    const toggle = new Node({ classes: ['prompt-manager-toggle-action'], parent: row });
+    const point = { identifier: 1, clientX: 20, clientY: 20 };
+    toggle.capture('touchstart', { touches: [point], changedTouches: [point] });
+    toggle.capture('touchend', { touches: [], changedTouches: [point] });
+    toggle.capture('click', { isTrusted: false });
+    f.tick();
+    assert.equal(f.edits.length, 1);
+    assert.deepEqual(f.edits[0].scope, { kind: 'order', identifier: 'main' });
+    toggle.capture('click', { isTrusted: false });
+    f.tick();
+    assert.equal(f.edits.length, 1);
+    f.adapter.dispose();
+    assert.equal(f.windowObject.count(), 0);
+    assert.equal(f.timers.size, 0);
+});
+
+test('trusted keyboard activation may forward one synchronous command before document interception', () => {
+    for (const [type, key] of [['keydown', 'Enter'], ['keyup', ' ']]) {
+        const f = fixture({}, ({ documentObject, state }) => {
+            documentObject.addEventListener(type, event => event.target.capture('click', { isTrusted: false }));
+            documentObject.addEventListener('click', event => {
+                state.preset.prompt_order[0].order[0].enabled = !state.preset.prompt_order[0].order[0].enabled;
+                event.stopImmediatePropagation();
+            });
+        });
+        const row = new Node({ classes: ['completion_prompt_manager_prompt'],
+            dataset: { pmIdentifier: 'main' }, parent: f.promptRoot });
+        const toggle = new Node({ tag: 'BUTTON', classes: ['prompt-manager-toggle-action'], parent: row });
+        f.documentObject.activeElement = toggle;
+        toggle.capture(type, { key });
+        f.tick();
+        assert.equal(f.edits.length, 1, `${key} activation must preserve the native command`);
+        toggle.capture('click', { isTrusted: false });
+        f.tick();
+        assert.equal(f.edits.length, 1);
+        f.adapter.dispose();
+        assert.equal(f.windowObject.count(), 0);
+        assert.equal(f.timers.size, 0);
+    }
+});
+
+test('keyboard forwarding rejects unfocused, modified, repeated, expired and changed commands', () => {
+    for (const scenario of ['untrusted', 'unfocused', 'ctrl', 'alt', 'meta', 'composing', 'repeat',
+        'disabled', 'expired', 'changed-action', 'switched', 'disposed']) {
+        const f = fixture();
+        const row = new Node({ classes: ['completion_prompt_manager_prompt'],
+            dataset: { pmIdentifier: 'main' }, parent: f.promptRoot });
+        const toggle = new Node({ tag: 'BUTTON', classes: ['prompt-manager-toggle-action'], parent: row });
+        f.documentObject.activeElement = scenario === 'unfocused' ? f.body : toggle;
+        toggle.disabled = scenario === 'disabled';
+        toggle.capture('keydown', { key: 'Enter', isTrusted: scenario !== 'untrusted',
+            ctrlKey: scenario === 'ctrl', altKey: scenario === 'alt', metaKey: scenario === 'meta',
+            isComposing: scenario === 'composing', repeat: scenario === 'repeat' });
+        if (scenario === 'expired') f.tick();
+        if (scenario === 'changed-action') row.dataset.pmIdentifier = 'other';
+        if (scenario === 'switched') f.state.presetName = 'B';
+        if (scenario === 'disposed') f.adapter.dispose();
+        toggle.capture('click', { isTrusted: false });
+        f.state.preset.prompt_order[0].order[0].enabled = false;
+        f.tick();
+        assert.equal(f.edits.length, 0, scenario);
+        f.adapter.dispose();
+        assert.equal(f.windowObject.count(), 0);
+        assert.equal(f.timers.size, 0);
+    }
+});
 
 test('trusted native field edits are scoped; synthetic events and ambient changes grant no edit', () => {
     const f = fixture();
