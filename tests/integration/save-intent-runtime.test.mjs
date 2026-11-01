@@ -308,3 +308,30 @@ test('disable cancels queued automatic writes while the active writer retains ow
         settings.updateSetting('enabled', true);
     });
 });
+
+test('native stream toggle commits the actual preset and history instead of silently ignoring the edit', async () => {
+    await run(async () => {
+        host.live.stream_openai = false;
+        const writes = host.writes.length;
+        controls.change('stream_openai', true, { id: 'stream_toggle', type: 'checkbox', eventType: 'change' });
+        await wait(200);
+        assert.equal(host.writes.length, writes + 1);
+        assert.equal(host.writes.at(-1).preset.stream_openai, true);
+        assert.equal((await history.getSnapshots('openai', 'race'))[0].preset.stream_openai, true);
+    });
+});
+
+test('native utility prompt typing commits without requiring a manual snapshot', async () => {
+    await run(async () => {
+        settings.updateSetting('textInputDebounce', 100);
+        host.live.new_chat_prompt = 'original';
+        const writes = host.writes.length;
+        controls.change('new_chat_prompt', 'user edit', {
+            id: 'newchat_prompt_textarea', tagName: 'TEXTAREA', type: 'textarea',
+        });
+        await wait(250);
+        assert.equal(host.writes.length, writes + 1);
+        assert.equal(host.writes.at(-1).preset.new_chat_prompt, 'user edit');
+        assert.equal((await history.getSnapshots('openai', 'race'))[0].preset.new_chat_prompt, 'user edit');
+    });
+});

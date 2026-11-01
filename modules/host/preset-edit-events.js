@@ -1,6 +1,6 @@
-import { FIELD_SYNONYMS, OPENAI_PRESET_FIELDS, EXPORT_EXCLUDED_FIELDS } from '../core/preset-schema.js';
 import { PRESET_WATCH_SELECTORS } from '../core/preset-dom-watch.js';
 import { editScopeChanged } from '../core/edit-intent.js';
+import { resolvePresetControlField } from './preset-control-contract.js';
 
 const ROOTS = [...PRESET_WATCH_SELECTORS, '#completion_prompt_manager_popup'];
 const ROOT_SELECTOR = ROOTS.join(',');
@@ -10,11 +10,6 @@ const DIALOGS = 'dialog[open], #dialogue_popup';
 const QUICK_PROMPTS = new Map(['main', 'nsfw', 'jailbreak'].flatMap(identifier => [
     [`${identifier}_prompt`, identifier], [`${identifier}_prompt_quick_edit_textarea`, identifier],
 ]));
-const NOVEL_ALIASES = new Map([
-    ['temp', 'temperature'], ['rep_pen', 'repetition_penalty'],
-    ['rep_pen_size', 'repetition_penalty_range'], ['rep_pen_slope', 'repetition_penalty_slope'],
-    ['rep_pen_freq', 'repetition_penalty_frequency'], ['rep_pen_presence', 'repetition_penalty_presence'],
-]);
 const sameTarget = (a, b) => a?.apiId === b?.apiId && a?.presetName === b?.presetName;
 const closest = (node, selector) => node?.closest?.(selector) || null;
 
@@ -23,23 +18,8 @@ function fieldScope(element, state) {
     if (closest(element, '#completion_prompt_manager_popup')) return null;
     const promptId = QUICK_PROMPTS.get(element.id);
     if (promptId) return { kind: 'prompt', identifier: promptId, fields: ['content'] };
-    const id = String(element.id || '').replace(/_counter(?=_|$)/, '').replace(/_text$/, '');
-    if (state?.apiId && state.apiId !== 'openai') {
-        const suffix = state.apiId === 'textgenerationwebui' ? '_textgenerationwebui'
-            : state.apiId === 'novel' ? '_novel' : '';
-        const nativeKey = suffix && id.endsWith(suffix) ? id.slice(0, -suffix.length) : id;
-        const key = state.apiId === 'novel' ? NOVEL_ALIASES.get(nativeKey) || nativeKey : nativeKey;
-        const value = state.preset?.[key];
-        return Object.hasOwn(state.preset || {}, key) && !EXPORT_EXCLUDED_FIELDS.has(key)
-            && (value == null || ['string', 'number', 'boolean'].includes(typeof value))
-            ? { kind: 'field', key } : null;
-    }
-    const candidates = [id, id.replace(/^openai_/, ''), id.replace(/_openai$/, '')];
-    const key = candidates.map(name => FIELD_SYNONYMS.get(name) || name)
-        .find(name => OPENAI_PRESET_FIELDS.has(name) && !EXPORT_EXCLUDED_FIELDS.has(name));
-    if (['prompts', 'prompt_order', 'extensions'].includes(key)) return null;
-    return OPENAI_PRESET_FIELDS.has(key) && !EXPORT_EXCLUDED_FIELDS.has(key)
-        ? { kind: 'field', key } : null;
+    const key = resolvePresetControlField(element.id, state);
+    return key ? { kind: 'field', key } : null;
 }
 
 function promptAction(element, documentObject) {

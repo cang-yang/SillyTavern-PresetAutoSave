@@ -158,6 +158,39 @@ test('other APIs map native scalar controls only to existing canonical keys', ()
     f.adapter.dispose();
 });
 
+test('native utility, stream, assistant and enum controls authorize their real preset fields', () => {
+    const f = fixture();
+    const cases = [
+        ['stream_toggle', 'stream_openai', true],
+        ['oai_max_context_unlocked', 'max_context_unlocked', true],
+        ['send_if_empty_textarea', 'send_if_empty', 'empty replacement'],
+        ['impersonation_prompt_textarea', 'impersonation_prompt', 'impersonate'],
+        ['newchat_prompt_textarea', 'new_chat_prompt', 'new chat'],
+        ['newgroupchat_prompt_textarea', 'new_group_chat_prompt', 'new group'],
+        ['newexamplechat_prompt_textarea', 'new_example_chat_prompt', 'new example'],
+        ['continue_nudge_prompt_textarea', 'continue_nudge_prompt', 'continue'],
+        ['wi_format_textarea', 'wi_format', 'world info'],
+        ['scenario_format_textarea', 'scenario_format', 'scenario'],
+        ['personality_format_textarea', 'personality_format', 'personality'],
+        ['group_nudge_prompt_textarea', 'group_nudge_prompt', 'group nudge'],
+        ['claude_assistant_prefill', 'assistant_prefill', 'prefill'],
+        ['claude_assistant_impersonation', 'assistant_impersonation', 'assistant'],
+        ['character_names_content', 'names_behavior', 2],
+        ['continue_postfix_space', 'continue_postfix', ' '],
+    ];
+    for (const [id, key, value] of cases) {
+        const input = new Node({ id, tag: typeof value === 'string' ? 'TEXTAREA' : 'INPUT', parent: f.root });
+        const before = f.edits.length;
+        f.state.preset[key] = typeof value === 'string' ? '' : 0;
+        f.root.dispatch('input', input);
+        f.state.preset[key] = value;
+        f.tick();
+        assert.equal(f.edits.length, before + 1, `native control ${id} must authorize ${key}`);
+        assert.deepEqual(f.edits.at(-1).scope, { kind: 'field', key });
+    }
+    f.adapter.dispose();
+});
+
 test('popup edits are captured only on final save; opening and selecting do not grant intent', () => {
     const f = fixture();
     const row = new Node({ classes: ['completion_prompt_manager_prompt'], dataset: { pmIdentifier: 'main' }, parent: f.promptRoot });

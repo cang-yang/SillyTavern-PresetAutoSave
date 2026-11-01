@@ -16,8 +16,8 @@ export function installEditControls(host) {
         mutate?.();
     };
     return {
-        change(key, value, { isTrusted = true, eventType = 'input' } = {}) {
-            const target = { id: key, tagName: 'INPUT', type: 'number', closest: () => null };
+        change(key, value, { isTrusted = true, eventType = 'input', id = key, tagName = 'INPUT', type = 'number' } = {}) {
+            const target = { id, tagName, type, closest: () => null };
             dispatch('beforeinput', target, null, isTrusted);
             dispatch(eventType, target, () => { host.live[key] = value; }, isTrusted);
         },
