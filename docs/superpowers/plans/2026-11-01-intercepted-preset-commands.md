@@ -37,5 +37,5 @@ schema migration, broad input listener, or ambient save permission.
   touch/keyboard behavior and reload persistence in the actual application.
 - [x] Run `npm test`, `npm run check`, syntax checks for every tracked production
   JS/MJS file, and `git diff --check`; obtain one narrowly scoped review.
-- [ ] Restore original selection, detach diagnostics, document results and
+- [x] Restore original selection, detach diagnostics, document results and
   limitations; commit exact files, push dev and verify remote SHA.

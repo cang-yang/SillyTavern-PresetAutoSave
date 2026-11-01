@@ -66,6 +66,16 @@ as a successful commit.
 Original preset files: 58 checked against backup, zero differences.
 The disposable preset and its three unpinned test snapshots were removed
 after verification; original preset selection was restored. Backups retained.
+Final cleanup found host-added compatibility fields in two original files
+after switching presets (plus BaiBai metadata in one). Their prompt content
+and order were unchanged. The post-test versions were backed up separately,
+the two original files restored, and all 58 original file hashes verified
+against the initial backup again.
+
+Production fix pushed and remote-verified as dev 5c711e3. The installed
+extension was fast-forwarded to that commit with a clean worktree, rather
+than left with experimental file replacements. The application was restarted
+without the temporary debugging arguments and port 9227 was confirmed closed.
 
 ## Verification and Review
 
