@@ -3,6 +3,7 @@ import { getCurrentApiId, getSelectedPresetName } from './compatibility.js';
 import { groupNamesBySeries, buildNestedGroupTree } from './preset-grouping.js';
 import { indexPresetMembership } from './core/group-projection.js';
 import { projectHistoryGroups } from './core/history-group-projection.js';
+import { currentFirst, orderPresetTree } from './core/current-preset-order.js';
 import { listAllPresetsIncludingDetached } from './preset-takeover.js';
 import { logger } from './logger.js';
 
@@ -26,8 +27,9 @@ export function resolvePanelSeriesProjection(snapshots, panelCtx, cachedGroups =
         logger.debug('Panel native inventory failed:', error);
     }
     const state = panelCtx.state();
+    const currentName = getSelectedPresetName();
     const currentKey = groupNamesBySeries(
-        [getSelectedPresetName()].filter(Boolean), settings.groupingManualOverrides,
+        [currentName].filter(Boolean), settings.groupingManualOverrides,
     )[0]?.canonicalKey;
     const search = (state.search || '').toLowerCase();
     const groups = projectHistoryGroups({
@@ -54,7 +56,13 @@ export function resolvePanelSeriesProjection(snapshots, panelCtx, cachedGroups =
         node.children = node.children.filter(keepVisible);
         return node.items.length > 0 || node.children.length > 0;
     };
-    return { groups, tree: tree?.filter(keepVisible) || null };
+    const isCurrent = version => version.apiId === apiId && version.presetName === currentName;
+    const ordered = currentFirst([...groups.values()].sort((a, b) =>
+        b.latestTime - a.latestTime || a.series.localeCompare(b.series)), group => group.versions.some(isCurrent));
+    const orderedGroups = new Map(ordered.map(group => [group.canonicalKey, {
+        ...group, versions: currentFirst(group.versions, isCurrent),
+    }]));
+    return { groups: orderedGroups, tree: tree ? orderPresetTree(tree.filter(keepVisible), currentName) : null };
 }
 
 export function resolveSeriesExpansion(snapshots, panelCtx, { currentOnly = false } = {}) {

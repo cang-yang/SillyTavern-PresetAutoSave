@@ -29,6 +29,7 @@ import {
     presetKey, parsePresetKey, groupSnapshotsByPreset, resolvePanelSeriesProjection,
 } from './panel-list-model.js';
 import { renderSnapshotCard } from './panel-snapshot-card.js';
+import { currentFirst } from './core/current-preset-order.js';
 
 // =====================================================
 // 工具函数
@@ -390,9 +391,13 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
 
             // 过滤空壳节点：无预设、无快照、无子组数据 → 跳过
             // 递归子节点（先递归，获取子节点 HTML）
+            let currentChildrenHtml = '';
             let childrenHtml = '';
             if (isExpanded && hasChildren) {
-                childrenHtml = node.children.map(child => renderNode(child)).join('');
+                for (const child of node.children) {
+                    if (child.containsCurrentPreset) currentChildrenHtml += renderNode(child);
+                    else childrenHtml += renderNode(child);
+                }
             }
 
             if (!hasItems && !hasChildren && !seriesData) return '';
@@ -446,6 +451,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
                     </div>
                 </div>
                 <div class="pas-series-body"${isExpanded ? '' : ' hidden'}>
+                    ${currentChildrenHtml}
                     ${versionsHtml}
                     ${childrenHtml}
                 </div>
@@ -456,10 +462,7 @@ export function renderSeriesView(filtered, panelCtx, cachedSeriesMap) {
     }
 
     // 扁平模式（nestingEnabled=false 或无 groupingTree）：保持原有逻辑
-    const seriesList = Array.from(seriesMap.values()).sort((a, b) => {
-        if (a.latestTime !== b.latestTime) return b.latestTime - a.latestTime;
-        return a.series.localeCompare(b.series);
-    });
+    const seriesList = Array.from(seriesMap.values());
     return seriesList.map(info => renderSeriesGroup(info, panelCtx)).join('');
 }
 
@@ -483,5 +486,7 @@ export function renderFlatView(filtered, panelCtx) {
         const bt = grouped[b][0]?.timestamp || 0;
         return bt - at;
     });
-    return presetKeys.map(k => renderPresetGroup(k, grouped[k], panelCtx)).join('');
+    const currentKey = presetKey(currentApi, getSelectedPresetName());
+    return currentFirst(presetKeys, key => key === currentKey)
+        .map(k => renderPresetGroup(k, grouped[k], panelCtx)).join('');
 }

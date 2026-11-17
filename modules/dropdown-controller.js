@@ -15,7 +15,10 @@ export function focusDropdownControl(panel, direction, edge = null) {
     const controls = visibleDropdownControls(panel);
     if (!controls.length) { panel.focus?.(); return; }
     const current = controls.findIndex(control => control.classList.contains(FOCUS_CLASS));
-    const index = edge === 'first' ? 0 : edge === 'last' ? controls.length - 1
+    const active = edge === 'current' ? controls.findIndex(control => control.classList.contains('pas-dd-item--active')) : -1;
+    const activeGroup = edge === 'current' ? controls.findIndex(control => control.classList.contains('pas-dd-group--has-active')) : -1;
+    const index = edge === 'current' ? active >= 0 ? active : activeGroup >= 0 ? activeGroup : 0
+        : edge === 'first' ? 0 : edge === 'last' ? controls.length - 1
         : current < 0 ? direction > 0 ? 0 : controls.length - 1
             : (current + direction + controls.length) % controls.length;
     for (const control of panel.querySelectorAll(CONTROL_SELECTOR)) {
@@ -49,6 +52,7 @@ export function renderDropdownControls(panel, html, select, toggleGroup) {
     const expanded = new Set(Array.from(panel.querySelectorAll('.pas-dd-group--open'),
         group => group.getAttribute('data-series-key')));
     panel.innerHTML = html;
+    panel._pasRenderedValue = select.value;
     decorateDropdown(panel);
     for (const group of panel.querySelectorAll('.pas-dd-group')) {
         if (expanded.has(group.getAttribute('data-series-key'))) toggleGroup(group);
@@ -95,14 +99,14 @@ export function bindPresetDropdown({
     };
     const triggerClick = event => {
         event.stopPropagation();
-        if (panel.style.display === 'none') { open(); focusDropdownControl(panel, 1, 'first'); }
+        if (panel.style.display === 'none') { open(); focusDropdownControl(panel, 1, 'current'); }
         else close();
     };
     const triggerKey = event => {
         if (['Enter', ' ', 'ArrowDown', 'ArrowUp'].includes(event.key)) {
             event.preventDefault();
             open();
-            focusDropdownControl(panel, 1, event.key === 'ArrowUp' ? 'last' : 'first');
+            focusDropdownControl(panel, 1, 'current');
         } else if (event.key === 'Escape') { close(); }
     };
     const panelKey = event => {

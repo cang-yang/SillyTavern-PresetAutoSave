@@ -70,3 +70,39 @@ test('one controller owns click/key/outside listeners and disposes idempotently'
     teardown();
     assert.equal(panel.listeners.size + trigger.listeners.size + documentObject.listeners.size, 0);
 });
+
+test('opening focuses the visible current target rather than an unrelated first row', () => {
+    for (const key of ['click', 'Enter', 'ArrowDown', 'ArrowUp']) {
+        const panel = node();
+        panel.style.display = 'none';
+        const trigger = node();
+        const first = node('pas-dd-group-header', panel);
+        const current = node('pas-dd-group-header pas-dd-group--has-active', panel);
+        panel.querySelectorAll = () => [first, current];
+        const teardown = dropdown.bindPresetDropdown({
+            panel, trigger, wrapper: node(), documentObject: node(),
+            onSelect() {}, toggleGroup() {},
+            open: () => { panel.style.display = 'block'; }, close() {},
+        });
+        trigger.dispatch(key === 'click' ? 'click' : 'keydown', { key, stopPropagation() {}, preventDefault() {} });
+        assert.equal(current.focused, true, key);
+        assert.equal(first.focused, false, key);
+        teardown();
+    }
+});
+
+test('an expanded active item receives opening focus before its containing header', () => {
+    const panel = node();
+    panel.style.display = 'none';
+    const trigger = node();
+    const header = node('pas-dd-group-header pas-dd-group--has-active', panel);
+    const item = node('pas-dd-item pas-dd-item--active', panel);
+    panel.querySelectorAll = () => [header, item];
+    const teardown = dropdown.bindPresetDropdown({
+        panel, trigger, wrapper: node(), documentObject: node(),
+        onSelect() {}, toggleGroup() {}, open() {}, close() {},
+    });
+    trigger.dispatch('click', { stopPropagation() {} });
+    assert.equal(item.focused, true);
+    teardown();
+});

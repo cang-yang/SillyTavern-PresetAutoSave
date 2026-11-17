@@ -48,6 +48,7 @@ import { restoreArchiveEntries } from './core/archive-recovery.js';
 import { restorePresetVerified } from './host/preset-recovery.js';
 import { RuntimeTimerRegistry } from './core/runtime-timers.js';
 import { bindPresetDropdown, renderDropdownControls } from './dropdown-controller.js';
+import { currentFirst, orderPresetTree } from './core/current-preset-order.js';
 // =====================================================
 // 常量
 // =====================================================
@@ -424,11 +425,13 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
     }
     // 构建 HTML
     let html = '';
-    // 排序系列：按系列名字母序
-    const sortedSeries = Array.from(seriesGroups.entries()).sort((a, b) =>
+    // 当前系列优先，其余系列保持字母序。
+    const sortedSeries = currentFirst(Array.from(seriesGroups.entries()).sort((a, b) =>
         a[0].localeCompare(b[0])
-    );
-    for (const [normKey, items] of sortedSeries) {
+    ), ([, items]) => items.some(item => item.value === currentValue));
+    for (const [normKey, groupItems] of sortedSeries) {
+        const items = currentFirst([...groupItems].sort((a, b) => compareVersion(b.version, a.version)),
+            item => item.value === currentValue);
         const displayName = seriesDisplayNames.get(normKey) || normKey;
         // 单版本系列 → 作为独立项（除非它是手动覆盖到自定义分组的，需要显示分组名）
         // AT-1 fix: manualOverride 的预设即使只有 1 个也要作为组渲染，
@@ -442,8 +445,7 @@ function renderDropdownContent(panel, select, apiId, overrides, seriesDefaults, 
             continue;
         }
         // 多版本系列 → 组
-        // 版本按版本号倒序（最新在前）
-        items.sort((a, b) => compareVersion(b.version, a.version));
+        // 当前版本已优先，其余版本保持版本号倒序。
         const hasActiveInGroup = items.some(it => it.value === currentValue);
         // T7: 移除 ⭐ 默认预设标记；T5: group-body 默认 display:none（收起）
         html += `<div class="pas-dd-group" data-series-key="${escapeAttr(normKey)}">
@@ -507,7 +509,9 @@ function renderDropdownNested(panel, select, optionList, currentValue, overrides
     // 2. 构建嵌套树（Bug B: forceTree 优先）
     const tree = forceTree || settings.groupingTree || {};
     const maxDepth = settings.nestingMaxDepth || 3;
-    const rootNodes = buildNestedGroupTree(allPresetNames, overrides, tree, maxDepth, settings.groupingSeriesAliases || {});
+    const currentName = optionList.find(option => option.value === currentValue)?.textContent;
+    const rootNodes = orderPresetTree(buildNestedGroupTree(allPresetNames, overrides, tree, maxDepth,
+        settings.groupingSeriesAliases || {}), currentName);
     //    使用共享函数 getNodePath 获取祖先 key 链，再映射为 displayName 拼接成显示路径
     const keyToDisplay = new Map();
     (function collectDisplayNames(nodes) {
@@ -576,12 +580,13 @@ function renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrid
     let html = '';
     for (const node of rootNodes) {
         // 递归子节点（先递归，获取子节点 HTML）
-        const childHtml = node.children && node.children.length > 0
-            ? renderNestedDropdownGroups(node.children, optionsMap, currentValue, overrides)
-            : '';
+        const currentChildren = node.children.filter(child => child.containsCurrentPreset);
+        const otherChildren = node.children.filter(child => !child.containsCurrentPreset);
+        const currentChildHtml = renderNestedDropdownGroups(currentChildren, optionsMap, currentValue, overrides);
+        const childHtml = renderNestedDropdownGroups(otherChildren, optionsMap, currentValue, overrides);
         // 跳过空壳节点：自身无 items + 递归子节点 HTML 也为空 → 不渲染
         const hasOverride = overrides && Object.values(overrides).some(v => normalizeSeriesKey(v) === node.key);
-        if (node.items.length === 0 && !childHtml.trim() && !hasOverride) continue;
+        if (node.items.length === 0 && !childHtml.trim() && !currentChildHtml.trim() && !hasOverride) continue;
         const depth = node.depth;
         const hasActive = _nodeHasActive(node, optionsMap, currentValue);
         const itemCount = node.items.length;
@@ -596,12 +601,11 @@ function renderNestedDropdownGroups(rootNodes, optionsMap, currentValue, overrid
                 ${badgeText ? `<span class="pas-dd-badge pas-dd-version-count">${escapeHtml(badgeText)}</span>` : ''}
                 <i class="fas fa-chevron-right pas-dd-group-chevron"></i>
             </div>
-            <div class="pas-dd-group-body" style="display:none;">`;
+            <div class="pas-dd-group-body" style="display:none;">${currentChildHtml}`;
         // 渲染直接归属于当前节点的预设项（按版本倒序）
-        const directItems = node.items
+        const directItems = currentFirst(node.items
             .map(name => optionsMap.get(name))
-            .filter(Boolean);
-        directItems.sort((a, b) => compareVersion(b.version, a.version));
+            .filter(Boolean).sort((a, b) => compareVersion(b.version, a.version)), item => item.value === currentValue);
         for (const it of directItems) {
             const isActive = it.value === currentValue;
             html += `<div class="pas-dd-item${isActive ? ' pas-dd-item--active' : ''}" data-value="${escapeAttr(it.value)}" data-preset-name="${escapeAttr(it.presetName)}" title="${escapeAttr(it.presetName)}">
@@ -736,6 +740,12 @@ function updateActiveState(select, wrapper) {
 // Panel 开/关
 // =====================================================
 function openPanel(panel, trigger) {
+    const select = panel.parentElement?.querySelector('select');
+    if (select && panel._pasRenderedValue !== select.value) {
+        const settings = getSettings();
+        renderDropdownContent(panel, select, getApiIdOfSelect(select),
+            _cachedOverrides || settings.groupingManualOverrides || {}, settings.seriesDefaultApply || {}, _cachedTree);
+    }
     panel.style.display = 'block';
     trigger.setAttribute('aria-expanded', 'true');
     // 阶段11：动态 max-width（面板左边缘到视口右边缘-16px安全边距）
