@@ -12,6 +12,15 @@ function defineValue(object, key, value) {
     Object.defineProperty(object, key, { value, enumerable: true, writable: true, configurable: true });
 }
 
+function readHostField(preset, descriptor, path) {
+    if (Object.hasOwn(descriptor, 'value')) return descriptor.value;
+    if (typeof descriptor.get !== 'function') throw presetValueError(path, 'accessor');
+    // Host settings may expose native fields through getters. Materialize once
+    // at this boundary; documents and nested values keep strict JSON validation.
+    try { return descriptor.get.call(preset); }
+    catch (_) { throw presetValueError(path, 'accessor-read-failed'); }
+}
+
 function copyValue(value, path, ancestors) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -57,8 +66,8 @@ function copyValue(value, path, ancestors) {
 }
 
 /**
- * Host objects are not JSON documents. Only unset properties receive JSON's
- * omission/null semantics; malformed owned values must never be coerced.
+ * Host objects are not JSON documents. Read admitted root fields once, then
+ * validate their values; malformed owned values must never be coerced.
  */
 export function captureHostPreset(preset, { apiId = 'openai' } = {}) {
     if (!isPlainObject(preset)) throw presetValueError('preset', 'non-plain-object');
@@ -69,10 +78,10 @@ export function captureHostPreset(preset, { apiId = 'openai' } = {}) {
         const descriptor = Object.getOwnPropertyDescriptor(preset, key);
         if (presetFieldExclusionReason(canonicalKey, descriptor.value, { apiId })) continue;
         const path = appendPresetPath('', canonicalKey);
-        if (!Object.hasOwn(descriptor, 'value')) throw presetValueError(path, 'accessor');
-        if (descriptor.value === undefined) continue;
+        const value = readHostField(preset, descriptor, path);
+        if (value === undefined) continue;
         defineValue(projected, canonicalKey,
-            copyValue(descriptor.value, path, new Set([preset])));
+            copyValue(value, path, new Set([preset])));
     }
     return canonicalizePreset(projected, { apiId }).canonical;
 }

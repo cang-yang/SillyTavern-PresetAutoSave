@@ -32,6 +32,34 @@ async function run(body) {
     }
 }
 
+test('getter-backed live prompts allow switch convergence and automatic persisted edits', async () => {
+    const original = Object.getOwnPropertyDescriptor(host.live, 'prompts');
+    const storedPrompts = host.stored.prompts;
+    let prompts = [{ identifier: 'main', content: 'getter-backed content' }];
+    host.stored.prompts = structuredClone(prompts);
+    Object.defineProperty(host.live, 'prompts', { enumerable: true, configurable: true,
+        get() { return prompts; }, set(value) { prompts = value; } });
+    try {
+        await run(async () => {
+            host.emit('preset_changed');
+            await wait(600);
+            assert.equal(auto.getCurrentTracking().ignoring, false, 'valid host accessors must not block switching');
+            assert.ok(auto.getCurrentTracking().lastHash, 'switch must converge on a readable canonical preset');
+            const count = host.writes.length;
+            controls.change('temperature', 0.287);
+            await wait(200);
+            assert.equal(host.writes.length, count + 1, 'trusted edits must save with accessor-backed prompts');
+            assert.deepEqual(host.writes.at(-1).preset.prompts, prompts);
+            const snapshot = (await history.getSnapshots('openai', 'race'))[0];
+            assert.equal(snapshot.saveStatus, 'committed');
+            assert.deepEqual(snapshot.preset.prompts, prompts);
+        });
+    } finally {
+        Object.defineProperty(host.live, 'prompts', original);
+        host.stored.prompts = storedPrompts;
+    }
+});
+
 test('background extension updates never authorize host writes or snapshots', async () => {
     await run(async () => {
         const writes = host.writes.length;

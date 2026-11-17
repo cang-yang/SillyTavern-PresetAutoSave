@@ -14,6 +14,79 @@ function withLive(preset, run) {
     try { return run(); } finally { host.pm.getPresetList = original; }
 }
 
+test('host root getters materialize once with their receiver and detach live prompt data', () => {
+    for (const capture of [() => compatibility.getLivePresetSnapshot('openai'),
+        () => compatibility.getPresetSnapshot('race'),
+        () => compatibility.getStoredPresetSnapshot('race', { apiId: 'openai' })]) {
+        const prompts = [{ identifier: 'main', content: 'live content' }];
+        const order = [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }];
+        const reads = new Map();
+        const preset = {};
+        for (const [key, value] of Object.entries({ prompts, prompt_order: order, temperature: 0.7 })) {
+            Object.defineProperty(preset, key, { enumerable: true, get() {
+                assert.equal(this, preset);
+                reads.set(key, (reads.get(key) || 0) + 1);
+                return value;
+            } });
+        }
+        withLive(preset, () => {
+            const result = capture();
+            assert.deepEqual(result, { prompts, prompt_order: order, temperature: 0.7 });
+            assert.deepEqual([...reads.values()], [1, 1, 1]);
+            result.prompts[0].content = 'snapshot edit';
+            result.prompt_order[0].order[0].enabled = false;
+            assert.equal(prompts[0].content, 'live content');
+            assert.equal(order[0].order[0].enabled, true);
+        });
+    }
+});
+
+test('excluded root getters and shadowed aliases are never invoked', () => {
+    const preset = { temperature: 0.6 };
+    let reads = 0;
+    for (const key of ['api_key_openai', 'custom_include_headers', 'unknownRuntime', 'temp_openai']) {
+        Object.defineProperty(preset, key, { enumerable: true, get() { reads++; throw new Error('DO_NOT_LOG'); } });
+    }
+    withLive(preset, () => assert.deepEqual(compatibility.getLivePresetSnapshot('openai'), { temperature: 0.6 }));
+    assert.equal(reads, 0);
+});
+
+test('root getter materialization does not relax persisted document or import validation', () => {
+    let reads = 0;
+    const preset = {};
+    Object.defineProperty(preset, 'prompts', { enumerable: true, get() { reads++; return []; } });
+    assert.throws(() => canonicalizePreset(preset), /accessor/);
+    assert.throws(() => compatibility.sanitizePresetForExport(preset), /accessor/);
+    assert.throws(() => validateImportedSnapshot({ id: 'getter', timestamp: 1, preset }, 'openai'), TypeError);
+    assert.equal(reads, 0);
+});
+
+test('root accessor failures are structural and do not leak thrown prompt or secret text', () => {
+    const preset = {};
+    Object.defineProperty(preset, 'prompts', { enumerable: true, get() { throw new Error('DO_NOT_LOG'); } });
+    withLive(preset, () => assert.throws(() => compatibility.getLivePresetSnapshot('openai'), error =>
+        error.code === 'PRESET_NON_JSON' && error.path === 'prompts'
+        && error.valueType === 'accessor-read-failed' && !String(error.stack).includes('DO_NOT_LOG')
+        && error.cause === undefined));
+});
+
+test('root getter results retain JSON validation and setter-only fields fail closed', () => {
+    for (const value of [NaN, () => {}, 1n, new Date(), { get nested() { throw new Error('DO_NOT_LOG'); } }]) {
+        const preset = {};
+        Object.defineProperty(preset, 'extensions', { enumerable: true, get() { return value; } });
+        withLive(preset, () => assert.throws(() => compatibility.getLivePresetSnapshot('openai'),
+            error => error.code === 'PRESET_NON_JSON' && !error.message.includes('DO_NOT_LOG')));
+    }
+    const preset = {};
+    Object.defineProperty(preset, 'prompts', { enumerable: true, set(_) {} });
+    withLive(preset, () => assert.throws(() => compatibility.getLivePresetSnapshot('openai'),
+        error => error.valueType === 'accessor'));
+    const cycle = {};
+    Object.defineProperty(cycle, 'extensions', { enumerable: true, get() { return cycle; } });
+    withLive(cycle, () => assert.throws(() => compatibility.getLivePresetSnapshot('openai'),
+        error => error.code === 'PRESET_CIRCULAR'));
+});
+
 test('host capture omits unset object properties and preserves array positions without mutating live data', () => {
     const preset = {
         temperature: 0.7, assistant_prefill: undefined,
